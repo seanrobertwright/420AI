@@ -1,43 +1,31 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync, realpathSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { homedir, hostname as osHostname } from "node:os";
-import { join, dirname } from "node:path";
+import { hostname as osHostname } from "node:os";
 import { parseClaudeCodeSession } from "./connectors/claude-code.js";
 import { SqliteStore } from "./store/sqlite-store.js";
 import { renderSessionReport } from "./report/session-report.js";
 import { postPair, postIngest } from "./ingest-client.js";
 import {
+  CREDENTIALS_PATH,
+  QUEUE_PATH,
+  loadCredentials,
+  saveCredentials,
+  requireCredentials,
+  NotPairedError,
+  type Credentials,
+} from "./identity.js";
+import { QueueStore, type QueueStats } from "./queue/queue-store.js";
+import { runCaptureEngine } from "./capture-engine.js";
+import { syncOnce } from "./sync/sync-worker.js";
+import {
   toEventPayload,
+  toRawRecordPayload,
   type IngestBatch,
   type PairResponse,
   type IngestResponse,
 } from "@420ai/shared";
 
 const DEFAULT_DB = "./420ai.sqlite";
-
-/** Where `pair` persists the issued ingest credentials for later `push`. */
-const CREDENTIALS_PATH = join(homedir(), ".420ai", "credentials.json");
-
-interface Credentials {
-  url: string;
-  token: string;
-  machineId: string;
-}
-
-function saveCredentials(creds: Credentials): void {
-  mkdirSync(dirname(CREDENTIALS_PATH), { recursive: true });
-  // mode 0o600 (owner-only) where the platform honors it.
-  writeFileSync(CREDENTIALS_PATH, JSON.stringify(creds, null, 2) + "\n", { mode: 0o600 });
-}
-
-function loadCredentials(): Credentials | undefined {
-  if (!existsSync(CREDENTIALS_PATH)) return undefined;
-  try {
-    return JSON.parse(readFileSync(CREDENTIALS_PATH, "utf8")) as Credentials;
-  } catch {
-    return undefined;
-  }
-}
 
 export interface IngestSummary {
   records: number;
@@ -122,16 +110,83 @@ export async function runPush(opts: {
   const text = readFileSync(opts.file, "utf8");
   const parsed = parseClaudeCodeSession(text);
   const batch: IngestBatch = {
-    records: parsed.rawRecords.map((r) => ({
-      sourceConnector: r.sourceConnector,
-      sessionId: r.sessionId,
-      sourceRecordId: r.id,
-      payload: r.payload,
-      ingestedAt: r.ingestedAt,
-    })),
+    records: parsed.rawRecords.map(toRawRecordPayload),
     events: parsed.events.map(toEventPayload),
   };
   return postIngest(opts.url, opts.token, batch);
+}
+
+/** Resolve credentials from explicit overrides or the saved pairing. */
+function resolveCreds(opts: { url?: string; token?: string }): Credentials {
+  const saved = loadCredentials();
+  const url = opts.url ?? saved?.url;
+  const token = opts.token ?? saved?.token;
+  if (!url || !token) {
+    // Surface the canonical not-paired guidance.
+    return requireCredentials();
+  }
+  return { url, token, machineId: saved?.machineId ?? "unknown" };
+}
+
+/**
+ * Run the background capture agent: discover + tail Claude sessions, buffer to
+ * the durable queue, sync to the archive. Resolves when `signal` aborts (SIGINT)
+ * after a graceful final drain. Pure of process concerns except via callbacks.
+ */
+export async function runWatch(opts: {
+  url?: string;
+  token?: string;
+  intervalMs?: number;
+  queuePath?: string;
+  home?: string;
+  signal: AbortSignal;
+  logger?: (msg: string) => void;
+}): Promise<void> {
+  const creds = resolveCreds(opts);
+  await runCaptureEngine({
+    creds,
+    signal: opts.signal,
+    intervalMs: opts.intervalMs,
+    queuePath: opts.queuePath,
+    home: opts.home,
+    logger: opts.logger,
+  });
+}
+
+/**
+ * One-shot drain of the durable queue to the archive (testable / ops). Recovers
+ * any inflight items, then drains until empty or a 401 stop. Returns final stats.
+ */
+export async function runSync(opts: {
+  url?: string;
+  token?: string;
+  queuePath?: string;
+}): Promise<QueueStats> {
+  const creds = resolveCreds(opts);
+  const queue = new QueueStore(opts.queuePath ?? QUEUE_PATH);
+  try {
+    queue.recoverInflight();
+    let outcome = await syncOnce({ queue, url: creds.url, token: creds.token });
+    while (outcome === "ok" && queue.stats().pending > 0) {
+      outcome = await syncOnce({ queue, url: creds.url, token: creds.token });
+    }
+    if (outcome === "retry") {
+      // One retry pass already backed items off; leave them for the next run.
+    }
+    return queue.stats();
+  } finally {
+    queue.close();
+  }
+}
+
+/** Print queue backlog/stats. */
+export function runQueueStatus(queuePath = QUEUE_PATH): QueueStats {
+  const queue = new QueueStore(queuePath);
+  try {
+    return queue.stats();
+  } finally {
+    queue.close();
+  }
 }
 
 // --- CLI plumbing (the ONLY place allowed to log / exit / write files) ---
@@ -143,13 +198,16 @@ function getFlag(args: string[], name: string): string | undefined {
 
 function usage(dbPath: string): string {
   const lines = [
-    "collector — AI session intelligence (Milestone 2)",
+    "collector — AI session intelligence (Milestone 3)",
     "",
     "Usage:",
     "  collector ingest <file> [--db <path>]",
     "  collector report <sessionId> [--db <path>] [--out <file>]",
     "  collector pair <code> --url <baseUrl> [--name <n>] [--os <os>] [--hostname <h>]",
     "  collector push <file> [--url <baseUrl>] [--token <token>]",
+    "  collector watch [--url <baseUrl>] [--token <token>] [--interval <ms>]",
+    "  collector sync [--url <baseUrl>] [--token <token>]",
+    "  collector queue",
     "",
     `Default DB: ${dbPath}`,
     `Credentials: ${CREDENTIALS_PATH} (written by 'pair', read by 'push')`,
@@ -237,6 +295,45 @@ async function main(argv: string[]): Promise<void> {
     return;
   }
 
+  if (command === "watch") {
+    const intervalFlag = getFlag(args, "--interval");
+    const intervalMs = intervalFlag ? Number(intervalFlag) : undefined;
+    const controller = new AbortController();
+    let stopping = false;
+    process.on("SIGINT", () => {
+      if (stopping) return;
+      stopping = true;
+      process.stdout.write("\nStopping… (graceful drain)\n");
+      controller.abort();
+    });
+    process.stdout.write("watching… Ctrl-C to stop\n");
+    await runWatch({
+      url: getFlag(args, "--url"),
+      token: getFlag(args, "--token"),
+      intervalMs,
+      signal: controller.signal,
+      logger: (msg) => process.stdout.write(msg + "\n"),
+    });
+    process.exit(0);
+  }
+
+  if (command === "sync") {
+    const stats = await runSync({
+      url: getFlag(args, "--url"),
+      token: getFlag(args, "--token"),
+    });
+    process.stdout.write(
+      `Sync complete. pending=${stats.pending}, inflight=${stats.inflight}\n`,
+    );
+    return;
+  }
+
+  if (command === "queue") {
+    const stats = runQueueStatus();
+    process.stdout.write(`pending=${stats.pending}, inflight=${stats.inflight}\n`);
+    return;
+  }
+
   process.stdout.write(usage(dbPath) + "\n");
 }
 
@@ -252,7 +349,11 @@ function isMain(): boolean {
 
 if (isMain()) {
   main(process.argv).catch((error) => {
-    process.stderr.write(`Error: ${(error as Error).message}\n`);
+    if (error instanceof NotPairedError) {
+      process.stderr.write(`${error.message}\n`);
+    } else {
+      process.stderr.write(`Error: ${(error as Error).message}\n`);
+    }
     process.exit(1);
   });
 }

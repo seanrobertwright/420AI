@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import {
   eventFingerprint,
   computeCost,
@@ -8,6 +9,7 @@ import {
   type NormalizedTokens,
   type RawSourceRecord,
 } from "@420ai/shared";
+import type { Connector } from "./connector.js";
 
 /** Connector source id — used in fingerprints and stamped on every record/event. */
 export const CLAUDE_CODE_CONNECTOR = "claude-code";
@@ -207,3 +209,27 @@ export function parseClaudeCodeSession(
 
   return { rawRecords, events, skippedLines, sessionId };
 }
+
+/**
+ * The Claude Code connector — wraps the unchanged whole-file parser above in the
+ * M3 `Connector` contract. Session files live at
+ * `~/.claude/projects/<cwd-slug>/<uuid>.jsonl` (append-only JSONL, one per
+ * session) — verified in docs/research/connector-capture-spike.md.
+ */
+export const claudeCodeConnector: Connector = {
+  id: CLAUDE_CODE_CONNECTOR,
+  fidelity: {
+    status: "stable",
+    captureMethod: "tail-jsonl",
+    liveness: "streaming",
+    tokens: "exact",
+    cost: "computed",
+    knownGaps: [
+      "tool.call completion not yet correlated (M4)",
+      "session.ended ts settles only when the file stops growing",
+    ],
+    testedVersions: [],
+  },
+  watchGlobs: (home) => [join(home, ".claude", "projects", "*", "*.jsonl")],
+  parse: (text) => parseClaudeCodeSession(text),
+};

@@ -1,4 +1,4 @@
-import type { EventType, NormalizedEvent } from "./events.js";
+import type { EventType, NormalizedEvent, RawSourceRecord } from "./events.js";
 import type { NormalizedTokens } from "./tokens.js";
 import type { CostResult } from "./cost.js";
 
@@ -59,6 +59,21 @@ export interface PairResponse {
 export interface IngestResponse {
   recordsInserted: number;
   eventsUpserted: number;
+}
+
+/**
+ * Map an internal RawSourceRecord onto the wire RawRecordPayload. The machine-
+ * local record `id` becomes the wire `sourceRecordId`. Symmetric with
+ * `toEventPayload` — keeps the collector's wire boundary in one place.
+ */
+export function toRawRecordPayload(r: RawSourceRecord): RawRecordPayload {
+  return {
+    sourceConnector: r.sourceConnector,
+    sessionId: r.sessionId,
+    sourceRecordId: r.id,
+    payload: r.payload,
+    ingestedAt: r.ingestedAt,
+  };
 }
 
 /**
