@@ -2,6 +2,8 @@
   "files": [],
   "references": [
     { "path": "./packages/shared" },
-    { "path": "./apps/collector" }
+    { "path": "./packages/db" },
+    { "path": "./apps/collector" },
+    { "path": "./apps/ingest" }
   ]
 }

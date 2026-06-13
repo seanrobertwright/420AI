@@ -1,0 +1,27 @@
+# Milestone 2 — local Central Archive (PRD §8.2).
+# A single postgres:17 container holds BOTH the dev database (420ai) and the
+# test database (420ai_test). The test DB is created at first boot by the init
+# script mounted into /docker-entrypoint-initdb.d/ (runs only on an empty volume).
+services:
+  archive:
+    image: postgres:17
+    container_name: 420ai-archive
+    environment:
+      POSTGRES_USER: 420ai
+      POSTGRES_PASSWORD: 420ai
+      POSTGRES_DB: 420ai
+    ports:
+      # Host 5433 (not 5432) — another local Postgres already owns 5432 on this
+      # machine. Container still listens on 5432 internally.
+      - "5433:5432"
+    volumes:
+      - archive-data:/var/lib/postgresql/data
+      - ./docker/init-test-db.sql:/docker-entrypoint-initdb.d/init-test-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U 420ai -d 420ai"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  archive-data:

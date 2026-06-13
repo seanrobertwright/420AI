@@ -13,7 +13,12 @@
   "scripts": {
     "typecheck": "tsc -b",
     "build": "tsc -b",
-    "test": "vitest run"
+    "test": "vitest run",
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down",
+    "db:generate": "npm run -w @420ai/db db:generate",
+    "db:migrate": "npm run -w @420ai/db db:migrate",
+    "ingest:dev": "npm run -w @420ai/ingest dev"
   },
   "devDependencies": {
     "@types/node": "^24",

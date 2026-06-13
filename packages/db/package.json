@@ -1,0 +1,29 @@
+{
+  "name": "@420ai/db",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@420ai/shared": "*",
+    "drizzle-orm": "^0.45.2",
+    "pg": "^8.21.0",
+    "dotenv": "^17.4.2"
+  },
+  "devDependencies": {
+    "drizzle-kit": "^0.31.10",
+    "@types/pg": "^8.20.0"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx src/migrate-cli.ts"
+  }
+}
