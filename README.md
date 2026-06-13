@@ -163,8 +163,8 @@ V1 is viable when **one Windows machine** can:
 
 ## Documentation
 
-- [`PRD.md`](./PRD.md) — full product requirements document.
-- [`CONTEXT.md`](./CONTEXT.md) — domain glossary and shared terminology.
+- [`PRD.md`](./docs/PRD.md) — full product requirements document.
+- [`CONTEXT.md`](./docs/CONTEXT.md) — domain glossary and shared terminology.
 
 ## Status
 
