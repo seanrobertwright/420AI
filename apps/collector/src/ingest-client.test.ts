@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { postPair, postIngest } from "./ingest-client.js";
+import { postPair, postIngest, IngestHttpError, isUnauthorized } from "./ingest-client.js";
 import type { IngestBatch } from "@420ai/shared";
 
 afterEach(() => {
@@ -45,6 +45,28 @@ describe("ingest-client", () => {
     await expect(postIngest("http://localhost:8420", "bad", { records: [], events: [] })).rejects.toThrow(
       /ingest failed: HTTP 401/,
     );
+  });
+
+  it("postIngest throws an IngestHttpError carrying the status (401)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonResponse(401, { error: "invalid or revoked token" })),
+    );
+    const err = await postIngest("http://localhost:8420", "bad", { records: [], events: [] }).catch(
+      (e) => e,
+    );
+    expect(err).toBeInstanceOf(IngestHttpError);
+    expect((err as IngestHttpError).status).toBe(401);
+    expect(isUnauthorized(err)).toBe(true);
+  });
+
+  it("isUnauthorized is false for a 503", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(503, { error: "down" })));
+    const err = await postIngest("http://localhost:8420", "tok", { records: [], events: [] }).catch(
+      (e) => e,
+    );
+    expect((err as IngestHttpError).status).toBe(503);
+    expect(isUnauthorized(err)).toBe(false);
   });
 
   it("postPair posts the pairing body (no auth header)", async () => {

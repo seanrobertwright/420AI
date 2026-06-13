@@ -2,9 +2,25 @@ import type { PairRequest, PairResponse, IngestBatch, IngestResponse } from "@42
 
 /**
  * Thin ingest API client over Node 24's global fetch (no runtime dependency).
- * No durable queue yet (M3) — these are direct requests that fail loudly on a
- * non-2xx response. Library file: throws, never logs.
+ * Direct requests that fail loudly on a non-2xx response. Library file: throws,
+ * never logs. The M3 sync worker buffers + retries on top of this client.
  */
+
+/** A non-2xx HTTP error carrying the status code so callers can branch on it. */
+export class IngestHttpError extends Error {
+  constructor(
+    public readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "IngestHttpError";
+  }
+}
+
+/** True when the error is an HTTP 401 (revoked/invalid token — stop, re-pair). */
+export function isUnauthorized(err: unknown): boolean {
+  return err instanceof IngestHttpError && err.status === 401;
+}
 
 function trimUrl(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, "");
@@ -13,7 +29,10 @@ function trimUrl(baseUrl: string): string {
 async function expectOk(res: Response, what: string): Promise<void> {
   if (!res.ok) {
     const body = await res.text().catch(() => "");
-    throw new Error(`${what} failed: HTTP ${res.status} ${res.statusText} — ${body}`);
+    throw new IngestHttpError(
+      res.status,
+      `${what} failed: HTTP ${res.status} ${res.statusText} — ${body}`,
+    );
   }
 }
 

@@ -282,11 +282,80 @@ docker compose exec archive psql -U 420ai -d 420ai \
   -c "SELECT event_type, tokens->>'total', cost->>'usd' FROM events WHERE tokens IS NOT NULL LIMIT 3;"   # readable
 ```
 
+## Development (Milestone 3)
+
+Milestone 3 turns the collector from a manual one-shot `push` into a **continuously-running
+background capture agent**. It discovers and tails each Claude Code session file, captures new
+activity as it is written, buffers it to a **durable on-disk queue** (offline-safe, crash-safe),
+and **syncs** it to the M2 Ingest API whenever the archive is reachable — resuming exactly where it
+left off after a restart and never losing or duplicating data. It adds **no server code and no new
+Postgres tables**: it feeds the existing M2 Ingest API through the existing ingest client.
+
+Five new internal pieces (all in `apps/collector`): a typed **machine identity** module over
+`~/.420ai/credentials.json`; a **durable queue + per-file cursor store** (`~/.420ai/queue.sqlite`,
+`node:sqlite`) with content-hash dedup and a claim/ack/retry-backoff state machine; a pure
+**byte-offset tailer** that reads only complete lines (a partial trailing line is never captured) and
+detects truncation; a typed **connector framework** (`id` + PRD §10.3 fidelity fields + `watchGlobs`
++ `parse`) with Claude Code as the one stable connector; a **poll-based file watcher**; and a
+**retrying sync worker** (capped exponential backoff on network/5xx, stop-and-surface on 401).
+
+The M3 connector is **Claude Code only** — its liveness label is **"Streaming (tail)"**. Codex CLI and
+Gemini CLI land in M4 by implementing the `Connector` interface (no framework change).
+
+### Prerequisites
+
+- **Node ≥ 24** and (for sync) a paired archive — complete the M2 onboarding flow first.
+
+### New CLI commands
+
+```bash
+# Run the background capture agent (Ctrl-C stops it with a graceful final drain)
+npx tsx apps/collector/src/cli.ts watch [--interval <ms>] [--url <baseUrl>] [--token <token>]
+
+# One-shot: drain the durable queue to the archive (testable / ops)
+npx tsx apps/collector/src/cli.ts sync [--url <baseUrl>] [--token <token>]
+
+# Print the queue backlog/stats
+npx tsx apps/collector/src/cli.ts queue
+```
+
+`watch` resolves credentials from the saved pairing (`~/.420ai/credentials.json`) unless overridden;
+if the machine is unpaired it prints "run `collector pair`…" and exits. The M1 `ingest`/`report` and
+M2 `pair`/`push` commands are unchanged.
+
+### Local state (`~/.420ai/`)
+
+`~/.420ai/` is the collector home and holds `credentials.json` (the M2 pairing) plus `queue.sqlite`
+(the durable queue + per-file byte-offset cursors). It is **local state**, lives outside the repo, and
+is never committed (`*.sqlite` is gitignored; the directory is outside the tree entirely).
+
+### Behavior guarantees
+
+- **Restart-resume:** per-file byte-offset cursors mean a restart re-sends nothing already captured;
+  only newly appended, newline-terminated lines flow.
+- **Offline capture:** if the archive is unreachable the queue buffers and retries with backoff;
+  nothing is lost. A revoked token (401) stops the sync loop with a clear "re-pair needed" — no spin.
+- **Idempotent:** local dedup (raw by `connector:sourceRecordId`, events by fingerprint) mirrors the
+  server's idempotency, so a re-send is a no-op at both layers (PRD §23).
+
+### Testing
+
+```bash
+npm test                       # unit suites run with NO database; *.int.test.ts self-skip
+npm run db:up && npm run db:migrate && npm test   # full suite incl. the Postgres integration test
+```
+
+`capture-engine.int.test.ts` drives the watcher → queue → in-process M2 ingest app → Postgres path
+and self-skips without `DATABASE_URL_TEST` (Docker + a filled `.env`).
+
 ## Status
 
-Milestones 1–2 implemented. M1 (walking skeleton): `packages/shared` (token shape, event taxonomy,
+Milestones 1–3 implemented. M1 (walking skeleton): `packages/shared` (token shape, event taxonomy,
 fingerprint, pricing catalog, cost ladder) and `apps/collector` (Claude Code parser, SQLite store,
 Markdown report, CLI). M2 (archive deployment): `packages/db` (Drizzle Postgres schema + migrations,
 AES-256-GCM field encryption, ingest token + pairing repositories), `apps/ingest` (Fastify Ingest API
 — pairing, bearer-authed idempotent ingest, health), and `apps/collector` `pair`/`push` commands.
-Milestones 3–10 above thicken this skeleton.
+M3 (collector foundation): `apps/collector` machine identity, durable queue + per-file cursors,
+connector framework, poll-based file watcher, retrying sync worker, and the `watch`/`sync`/`queue`
+commands — a continuous, offline-safe, restart-resuming Claude Code capture agent. Milestones 4–10
+above thicken this skeleton.
