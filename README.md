@@ -166,7 +166,48 @@ V1 is viable when **one Windows machine** can:
 - [`PRD.md`](./docs/PRD.md) — full product requirements document.
 - [`CONTEXT.md`](./docs/CONTEXT.md) — domain glossary and shared terminology.
 
+## Development (Milestone 1)
+
+Milestone 1 is the **walking skeleton**: read one Claude Code session JSONL file, normalize it into
+raw records + events, store both in SQLite, compute cost from tokens × catalog pricing, and render a
+Markdown session report.
+
+### Prerequisites
+
+- **Node ≥ 24** (the store uses the built-in `node:sqlite` — no Docker, no native build). See `.nvmrc`.
+
+### Setup & checks
+
+```bash
+npm install        # wires the npm workspaces (packages/shared, apps/collector)
+npm run typecheck  # tsc -b across both workspaces, strict mode, zero errors
+npm test           # vitest: unit + integration suites
+```
+
+### CLI
+
+The collector exposes two commands. Run them with `tsx` (no build needed):
+
+```bash
+# Ingest one Claude Code session file into the local SQLite store
+npx tsx apps/collector/src/cli.ts ingest \
+  "$HOME/.claude/projects/<cwd-slug>/<session-uuid>.jsonl" --db ./420ai.sqlite
+
+# Render a Markdown report for a stored session
+npx tsx apps/collector/src/cli.ts report <session-uuid> --db ./420ai.sqlite
+```
+
+Re-ingesting the same file is **idempotent** (events upsert by deterministic fingerprint), so it is
+safe to run repeatedly.
+
+### Notes
+
+- The SQLite DB file (`*.sqlite`/`*.db`) is **gitignored** — it is local state, never committed.
+- `node:sqlite` is experimental in Node 24 and prints an `ExperimentalWarning` on import **by design**;
+  it does not affect correctness and tests pass with it present.
+
 ## Status
 
-Pre-implementation. This repository currently holds the product requirements and domain
-context; scaffolding begins at milestone 1 above.
+Milestone 1 (walking skeleton) implemented: `packages/shared` (token shape, event taxonomy,
+fingerprint, pricing catalog, cost ladder) and `apps/collector` (Claude Code parser, SQLite store,
+Markdown report, CLI). Milestones 2–10 above thicken this skeleton.

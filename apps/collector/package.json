@@ -1,0 +1,16 @@
+{
+  "name": "@420ai/collector",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "collector": "./dist/cli.js"
+  },
+  "dependencies": {
+    "@420ai/shared": "*"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "start": "tsx src/cli.ts"
+  }
+}
