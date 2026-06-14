@@ -367,9 +367,40 @@ npm run db:up && npm run db:migrate && npm test   # full suite incl. the Postgre
 `capture-engine.int.test.ts` drives the watcher → queue → in-process M2 ingest app → Postgres path
 and self-skips without `DATABASE_URL_TEST` (Docker + a filled `.env`).
 
+### Milestone 5 — project / workspace mapping
+
+M5 gives the flat event stream **structure and attribution** — headless (no dashboard; the mapping UI
+is deferred to a dedicated dashboard milestone that consumes this exact API):
+
+- **Data model:** three new archive tables (`projects`, `workspaces`, `workspace_keys`) via a single
+  generated Drizzle migration. The `events` table is **unchanged** — attribution is a JOIN
+  (`events.project_path` → `workspace_keys.project_key` → `workspaces.project_id`), never a column.
+- **Repo discovery (collector):** each connector enumerates the distinct project roots in its own
+  store; a shared, pure git-metadata reader parses `.git/config` + `.git/HEAD` (no `git` subprocess),
+  and Gemini's opaque `projectHash` is reverse-mapped to a real path via its `.project_root` sidecar
+  (legacy hash-only sessions are reported as an unattributed gap, not an error).
+- **Project creation + mapping:** `POST /v1/workspaces/discover` (machine-authed) upserts workspaces
+  and **auto-creates one project per workspace**, unifying across machines by git remote. Admin
+  endpoints list/create/rename projects and remap a workspace — the auto-mapping is an editable
+  default, and re-discovery preserves a manual remap.
+- **Attribution resolver:** `resolveWorkspaceId` + a per-project `/summary` join prove the wiring
+  end-to-end (the building block M6 materializes at scale).
+
+```bash
+# Enumerate roots from all three connectors, enrich with git + Gemini reverse-map, POST them
+npx tsx apps/collector/src/cli.ts discover [--url <baseUrl>] [--token <token>]
+
+# List the archive's projects (admin-authed — pass --token <adminToken>)
+npx tsx apps/collector/src/cli.ts projects [--url <baseUrl>] [--token <adminToken>]
+```
+
+`discover` is a one-shot ops command (the `watch` daemon is unchanged) and is idempotent: re-running
+upserts workspaces with no duplicate projects or keys. No change to the M1 fingerprint, the M2 event
+wire types/encryption split, or any connector's `parse`.
+
 ## Status
 
-Milestones 1–3 implemented. M1 (walking skeleton): `packages/shared` (token shape, event taxonomy,
+Milestones 1–5 implemented. M1 (walking skeleton): `packages/shared` (token shape, event taxonomy,
 fingerprint, pricing catalog, cost ladder) and `apps/collector` (Claude Code parser, SQLite store,
 Markdown report, CLI). M2 (archive deployment): `packages/db` (Drizzle Postgres schema + migrations,
 AES-256-GCM field encryption, ingest token + pairing repositories), `apps/ingest` (Fastify Ingest API
@@ -379,5 +410,11 @@ connector framework, poll-based file watcher, retrying sync worker, and the `wat
 commands — a continuous, offline-safe, restart-resuming Claude Code capture agent. M4 (connectors to
 full fidelity): Claude Code thickened to the full tool/file/context taxonomy, plus the **Codex CLI**
 (append-only tail) and **Gemini CLI** (whole-file `snapshot` capture mode) connectors — all at exact
-token/computed-cost fidelity, with no server or schema change. Milestones 5–10 above thicken this
+token/computed-cost fidelity, with no server or schema change. M5 (project / workspace mapping):
+`packages/db` (`projects`/`workspaces`/`workspace_keys` tables + migration, find-or-create-by-remote
+and the `resolveWorkspaceId`/`projectEventSummary` attribution join), `apps/ingest` (machine-authed
+`/v1/workspaces/discover` + admin project/workspace CRUD + `/summary`), and `apps/collector` (pure
+git-metadata + Gemini `.project_root` readers, per-connector `discoverRoots`, the discover engine, and
+the `discover`/`projects` commands) — headless; the mapping UI is deferred. Milestones 6–10 above
+thicken this
 skeleton.

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { postPair, postIngest, IngestHttpError, isUnauthorized } from "./ingest-client.js";
-import type { IngestBatch } from "@420ai/shared";
+import { postPair, postIngest, postDiscover, IngestHttpError, isUnauthorized } from "./ingest-client.js";
+import type { IngestBatch, DiscoverRequest } from "@420ai/shared";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -67,6 +67,34 @@ describe("ingest-client", () => {
     );
     expect((err as IngestHttpError).status).toBe(503);
     expect(isUnauthorized(err)).toBe(false);
+  });
+
+  it("postDiscover sends the bearer header + workspaces body to /v1/workspaces/discover", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, { workspacesUpserted: 1, projectsCreated: 1, mappings: [] }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const req: DiscoverRequest = {
+      workspaces: [
+        { sourceConnector: "claude-code", projectKey: "/repo", rootPath: "/repo", gitRemote: "r" },
+      ],
+    };
+    const result = await postDiscover("http://localhost:8420/", "tok123", req);
+
+    expect(result).toEqual({ workspacesUpserted: 1, projectsCreated: 1, mappings: [] });
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe("http://localhost:8420/v1/workspaces/discover");
+    expect(init.method).toBe("POST");
+    expect(init.headers.authorization).toBe("Bearer tok123");
+    expect(JSON.parse(init.body)).toEqual(req);
+  });
+
+  it("postDiscover throws an IngestHttpError on a 401", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(401, { error: "nope" })));
+    const err = await postDiscover("http://localhost:8420", "bad", { workspaces: [] }).catch((e) => e);
+    expect(err).toBeInstanceOf(IngestHttpError);
+    expect((err as IngestHttpError).status).toBe(401);
   });
 
   it("postPair posts the pairing body (no auth header)", async () => {

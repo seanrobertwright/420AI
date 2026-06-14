@@ -85,3 +85,56 @@ export const ingestBodySchema = {
     events: { type: "array", items: eventSchema },
   },
 } as const;
+
+// --- M5 discovery / project mapping bodies ---
+
+const discoveredWorkspaceSchema = {
+  type: "object",
+  required: ["sourceConnector", "projectKey", "rootPath"],
+  additionalProperties: false,
+  properties: {
+    sourceConnector: { type: "string", minLength: 1 },
+    projectKey: { type: "string", minLength: 1 },
+    rootPath: { type: "string", minLength: 1 },
+    gitRemote: { type: "string" },
+    gitBranch: { type: "string" },
+    sessionCount: { type: "integer" },
+  },
+} as const;
+
+export const discoverBodySchema = {
+  type: "object",
+  required: ["workspaces"],
+  additionalProperties: false,
+  properties: {
+    workspaces: { type: "array", items: discoveredWorkspaceSchema },
+  },
+} as const;
+
+export const createProjectBodySchema = {
+  type: "object",
+  required: ["name"],
+  additionalProperties: false,
+  properties: {
+    name: { type: "string", minLength: 1 },
+    gitRemote: { type: "string" },
+  },
+} as const;
+
+export const patchProjectBodySchema = {
+  type: "object",
+  required: ["name"],
+  additionalProperties: false,
+  properties: {
+    name: { type: "string", minLength: 1 },
+  },
+} as const;
+
+export const patchWorkspaceBodySchema = {
+  type: "object",
+  required: ["projectId"],
+  additionalProperties: false,
+  properties: {
+    projectId: { type: "string", minLength: 1 },
+  },
+} as const;

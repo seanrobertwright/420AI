@@ -1,4 +1,4 @@
-import type { NormalizedEvent, RawSourceRecord } from "@420ai/shared";
+import type { NormalizedEvent, RawSourceRecord, RootHint } from "@420ai/shared";
 import { claudeCodeConnector } from "./claude-code.js";
 import { codexCliConnector } from "./codex-cli.js";
 import { geminiCliConnector } from "./gemini-cli.js";
@@ -58,6 +58,15 @@ export interface Connector {
   watchGlobs(home: string): string[];
   /** Parse a complete-line file prefix (tail) or whole file (snapshot) into raw records + normalized events. */
   parse(fileText: string): ParseResult;
+  /**
+   * Enumerate the distinct project roots in this connector's on-disk store (M5
+   * discovery, PRD §11.2). OPTIONAL + additive (absent is fine — mirrors
+   * `captureMode`). Each connector owns its store layout, so it owns this sweep.
+   * A hint's `projectKey` MUST equal what `parse` emits as `event.project_path`
+   * byte-for-byte; `rootPath` is the resolved real path (absent ⇒ unresolved,
+   * e.g. a Gemini hash-only dir → counted as a discovery gap, not emitted).
+   */
+  discoverRoots?(home: string): Promise<RootHint[]>;
 }
 
 /** The active connector registry. M3: Claude only; M4 appends Codex/Gemini. */

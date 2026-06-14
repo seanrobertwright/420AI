@@ -119,5 +119,92 @@ export const events = pgTable(
     payloadIv: text("payload_iv"),
     payloadTag: text("payload_tag"),
   },
-  (t) => [index("events_by_session").on(t.sessionId, t.ts)],
+  (t) => [
+    index("events_by_session").on(t.sessionId, t.ts),
+    // M5 attribution join: projectEventSummary joins events.project_path →
+    // workspace_keys.project_key. Indexed so per-project summaries don't seq-scan
+    // events. Additive (no column/shape change — the fingerprint is untouched).
+    index("events_by_project_path").on(t.projectPath),
+  ],
+);
+
+/**
+ * M5 project / workspace mapping (PRD §6, §19). These three tables give the flat
+ * event stream structure WITHOUT touching `events`: attribution is a JOIN
+ * (events.project_path → workspace_keys.project_key → workspaces.project_id),
+ * never a column on events (event-sourcing discipline — re-derivable projections).
+ */
+
+/**
+ * A software effort. Cross-machine identity is by `git_remote` (nullable): the
+ * same repo on two machines (two different absolute paths) unifies to ONE
+ * project. NOTE: Postgres treats NULLs as distinct in a UNIQUE index, so two
+ * remote-less (folder-named) projects are intentionally NOT unified.
+ */
+export const projects = pgTable(
+  "projects",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
+    name: text("name").notNull(),
+    gitRemote: text("git_remote"), // natural key for unify-by-remote (nullable)
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
+  },
+  (t) => [uniqueIndex("projects_user_remote").on(t.userId, t.gitRemote)],
+);
+
+/**
+ * A local dev context where sessions occurred (PRD §6). One per (user, root_path).
+ * `project_id` is nullable until mapped (auto-mapped on discover); `root_path` is
+ * the resolved real path (Claude/Codex cwd, or the Gemini `.project_root` value).
+ */
+export const workspaces = pgTable(
+  "workspaces",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
+    projectId: uuid("project_id").references(() => projects.id),
+    machineId: uuid("machine_id").references(() => machines.id),
+    rootPath: text("root_path").notNull(),
+    gitRemote: text("git_remote"),
+    gitBranch: text("git_branch"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("workspaces_user_root").on(t.userId, t.rootPath),
+    index("workspaces_by_project").on(t.projectId),
+  ],
+);
+
+/**
+ * Maps the RAW `events.project_path` string (real path for Claude/Codex, the
+ * Gemini `projectHash` for Gemini) to a workspace. This alias table is what
+ * bridges the path/hash mismatch at attribution time. The join key is global per
+ * user (an event row has no user_id), so `project_key` is unique per (user, key)
+ * — `user_id` is carried HERE so the uniqueness + scoping are both correct.
+ */
+export const workspaceKeys = pgTable(
+  "workspace_keys",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id),
+    sourceConnector: text("source_connector").notNull(),
+    projectKey: text("project_key").notNull(), // == events.project_path as emitted by the connector
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("workspace_keys_user_key").on(t.userId, t.projectKey),
+    index("workspace_keys_by_workspace").on(t.workspaceId),
+  ],
 );

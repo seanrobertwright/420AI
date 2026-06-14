@@ -1,23 +1,13 @@
-import { timingSafeEqual } from "node:crypto";
-import type { FastifyInstance, FastifyRequest } from "fastify";
+import type { FastifyInstance } from "fastify";
 import { createPairingCode, users } from "@420ai/db";
 import { pairingCodeBodySchema } from "../schemas.js";
+import { adminAuthorized } from "../auth.js";
 
 const DEFAULT_EMAIL = "seanrobertwright@gmail.com";
 
 interface PairingCodeBody {
   email?: string;
   userId?: string;
-}
-
-/** Constant-time bearer comparison against the configured admin token. */
-function adminAuthorized(app: FastifyInstance, request: FastifyRequest): boolean {
-  const header = request.headers.authorization;
-  const match = header ? /^Bearer (.+)$/.exec(header) : null;
-  if (!match) return false;
-  const presented = Buffer.from(match[1]!);
-  const expected = Buffer.from(app.adminToken);
-  return presented.length === expected.length && timingSafeEqual(presented, expected);
 }
 
 /**

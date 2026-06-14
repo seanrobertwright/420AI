@@ -1,10 +1,19 @@
 import { readFileSync, writeFileSync, existsSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { hostname as osHostname } from "node:os";
+import { hostname as osHostname, homedir } from "node:os";
 import { parseClaudeCodeSession } from "./connectors/claude-code.js";
+import { connectors } from "./connectors/connector.js";
+import { discoverWorkspaces } from "./discovery/discover-engine.js";
 import { SqliteStore } from "./store/sqlite-store.js";
 import { renderSessionReport } from "./report/session-report.js";
-import { postPair, postIngest } from "./ingest-client.js";
+import {
+  postPair,
+  postIngest,
+  postDiscover,
+  getProjects,
+  isUnauthorized,
+  type ProjectListItem,
+} from "./ingest-client.js";
 import {
   CREDENTIALS_PATH,
   QUEUE_PATH,
@@ -23,6 +32,7 @@ import {
   type IngestBatch,
   type PairResponse,
   type IngestResponse,
+  type DiscoverResponse,
 } from "@420ai/shared";
 
 const DEFAULT_DB = "./420ai.sqlite";
@@ -189,6 +199,45 @@ export function runQueueStatus(queuePath = QUEUE_PATH): QueueStats {
   }
 }
 
+export interface DiscoverSummary {
+  response: DiscoverResponse;
+  /** Roots found but not resolvable to a real path (e.g. Gemini hash-only). */
+  unresolved: number;
+}
+
+/**
+ * One-shot discovery (M5): enumerate every connector's project roots, enrich with
+ * git metadata + the Gemini reverse-map, and POST them to the archive. Uses the
+ * MACHINE token (discovery is machine-scoped, like ingest). Pure of process
+ * concerns — `main()` prints the summary.
+ */
+export async function runDiscover(opts: {
+  url?: string;
+  token?: string;
+  home?: string;
+}): Promise<DiscoverSummary> {
+  const creds = resolveCreds(opts);
+  const { workspaces, unresolved } = await discoverWorkspaces({
+    connectors,
+    home: opts.home ?? homedir(),
+  });
+  const response = await postDiscover(creds.url, creds.token, { workspaces });
+  return { response, unresolved };
+}
+
+/**
+ * List the archive's projects (M5). ADMIN-authed — pass `--token <adminToken>`
+ * (discovery uses the machine token; this CRUD surface is admin-gated).
+ */
+export async function runProjects(opts: {
+  url?: string;
+  token?: string;
+}): Promise<ProjectListItem[]> {
+  const creds = resolveCreds(opts);
+  const { projects } = await getProjects(creds.url, creds.token);
+  return projects;
+}
+
 // --- CLI plumbing (the ONLY place allowed to log / exit / write files) ---
 
 function getFlag(args: string[], name: string): string | undefined {
@@ -208,6 +257,8 @@ function usage(dbPath: string): string {
     "  collector watch [--url <baseUrl>] [--token <token>] [--interval <ms>]",
     "  collector sync [--url <baseUrl>] [--token <token>]",
     "  collector queue",
+    "  collector discover [--url <baseUrl>] [--token <token>]",
+    "  collector projects [--url <baseUrl>] [--token <adminToken>]",
     "",
     `Default DB: ${dbPath}`,
     `Credentials: ${CREDENTIALS_PATH} (written by 'pair', read by 'push')`,
@@ -331,6 +382,48 @@ async function main(argv: string[]): Promise<void> {
   if (command === "queue") {
     const stats = runQueueStatus();
     process.stdout.write(`pending=${stats.pending}, inflight=${stats.inflight}\n`);
+    return;
+  }
+
+  if (command === "discover") {
+    const { response, unresolved } = await runDiscover({
+      url: getFlag(args, "--url"),
+      token: getFlag(args, "--token"),
+    });
+    process.stdout.write(
+      `Discovered ${response.workspacesUpserted} workspaces, created ${response.projectsCreated} projects` +
+        ` (${unresolved} unattributed — e.g. Gemini hash-only sessions)\n`,
+    );
+    for (const m of response.mappings) {
+      process.stdout.write(`  ${m.projectName}  ← ${m.projectKey}\n`);
+    }
+    return;
+  }
+
+  if (command === "projects") {
+    let projects: ProjectListItem[];
+    try {
+      projects = await runProjects({
+        url: getFlag(args, "--url"),
+        token: getFlag(args, "--token"),
+      });
+    } catch (err) {
+      // `projects` is admin-gated (the saved pairing is a MACHINE token); make
+      // the most common misuse actionable instead of a bare HTTP 401.
+      if (isUnauthorized(err)) {
+        throw new Error(
+          "projects is admin-gated — pass --token <adminToken> (the saved pairing is a machine token)",
+        );
+      }
+      throw err;
+    }
+    if (projects.length === 0) {
+      process.stdout.write("No projects yet — run `collector discover` first.\n");
+      return;
+    }
+    for (const p of projects) {
+      process.stdout.write(`  ${p.id}  ${p.name}  ${p.gitRemote ?? "(no remote)"}\n`);
+    }
     return;
   }
 

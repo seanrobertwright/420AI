@@ -44,7 +44,7 @@ describe.skipIf(!TEST_URL)("ingest API (HTTP e2e via inject)", () => {
 
   beforeEach(async () => {
     await dbh.db.execute(
-      sql`TRUNCATE raw_source_records, events, ingest_tokens, pairing_codes, machines, users RESTART IDENTITY CASCADE`,
+      sql`TRUNCATE workspace_keys, workspaces, projects, raw_source_records, events, ingest_tokens, pairing_codes, machines, users RESTART IDENTITY CASCADE`,
     );
   });
 
@@ -155,5 +155,264 @@ describe.skipIf(!TEST_URL)("ingest API (HTTP e2e via inject)", () => {
       payload: { records: [] }, // missing required "events"
     });
     expect(res.statusCode).toBe(400);
+  });
+
+  // --- M5 discovery → project mapping → attribution round-trip ---
+
+  const REMOTE = "https://github.com/seanrobertwright/420AI.git";
+  const GEMINI_HASH = "2025fdb554a6deadbeef";
+
+  function discoverPayload() {
+    return {
+      workspaces: [
+        // two machines, SAME remote, different cwds → must unify to ONE project
+        {
+          sourceConnector: "claude-code",
+          projectKey: "/home/a/420ai",
+          rootPath: "/home/a/420ai",
+          gitRemote: REMOTE,
+          gitBranch: "main",
+        },
+        {
+          sourceConnector: "claude-code",
+          projectKey: "C:\\Users\\seanr\\420AI",
+          rootPath: "C:\\Users\\seanr\\420AI",
+          gitRemote: REMOTE,
+          gitBranch: "m5-project-mapping",
+        },
+        // Gemini: projectKey is the HASH, rootPath is the real path, same remote
+        {
+          sourceConnector: "gemini-cli",
+          projectKey: GEMINI_HASH,
+          rootPath: "/home/a/420ai-gem",
+          gitRemote: REMOTE,
+        },
+      ],
+    };
+  }
+
+  it("discovers workspaces, auto-creates ONE project per remote, and is idempotent", async () => {
+    const { token } = await pair(await createCode());
+
+    const first = await app.inject({
+      method: "POST",
+      url: "/v1/workspaces/discover",
+      headers: { authorization: `Bearer ${token}` },
+      payload: discoverPayload(),
+    });
+    expect(first.statusCode).toBe(200);
+    const body = first.json();
+    expect(body.workspacesUpserted).toBe(3);
+    expect(body.projectsCreated).toBe(1); // all three unify by remote
+    expect(body.mappings).toHaveLength(3);
+    // every mapping points at the same project
+    const projectIds = new Set(body.mappings.map((m: { projectId: string }) => m.projectId));
+    expect(projectIds.size).toBe(1);
+    // project named from the git remote repo name
+    expect(body.mappings[0].projectName).toBe("420AI");
+
+    // idempotent re-POST: upserts, no new projects
+    const second = await app.inject({
+      method: "POST",
+      url: "/v1/workspaces/discover",
+      headers: { authorization: `Bearer ${token}` },
+      payload: discoverPayload(),
+    });
+    expect(second.statusCode).toBe(200);
+    expect(second.json().workspacesUpserted).toBe(3);
+    expect(second.json().projectsCreated).toBe(0);
+  });
+
+  it("requires machine auth for discover (401 without a token)", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/workspaces/discover",
+      payload: discoverPayload(),
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it("attributes events (path AND gemini hash) to the project via the summary join", async () => {
+    const { token } = await pair(await createCode());
+    await app.inject({
+      method: "POST",
+      url: "/v1/workspaces/discover",
+      headers: { authorization: `Bearer ${token}` },
+      payload: discoverPayload(),
+    });
+
+    // ingest events: one Claude (real path), one Gemini (the hash) — both attribute
+    const batch: IngestBatch = {
+      records: [],
+      events: [
+        {
+          fingerprint: "m5-evt-claude",
+          sourceConnector: "claude-code",
+          parserVersion: "2.0.0",
+          rawRecordId: "r1",
+          eventIndex: 0,
+          eventType: "message.user",
+          sessionId: "s1",
+          projectPath: "/home/a/420ai",
+          ts: "2026-06-14T00:00:00.000Z",
+        },
+        {
+          fingerprint: "m5-evt-gemini",
+          sourceConnector: "gemini-cli",
+          parserVersion: "1.0.0",
+          rawRecordId: "r2",
+          eventIndex: 0,
+          eventType: "message.assistant",
+          sessionId: "s2",
+          projectPath: GEMINI_HASH,
+          ts: "2026-06-14T00:05:00.000Z",
+        },
+      ],
+    };
+    const ing = await app.inject({
+      method: "POST",
+      url: "/v1/ingest",
+      headers: { authorization: `Bearer ${token}` },
+      payload: batch,
+    });
+    expect(ing.statusCode).toBe(200);
+
+    // find the project via the admin list, then assert its summary counts both
+    const list = await app.inject({
+      method: "GET",
+      url: "/v1/projects",
+      headers: { authorization: `Bearer ${ADMIN}` },
+    });
+    expect(list.statusCode).toBe(200);
+    const projects = list.json().projects as { id: string }[];
+    expect(projects).toHaveLength(1);
+
+    const summary = await app.inject({
+      method: "GET",
+      url: `/v1/projects/${projects[0]!.id}/summary`,
+      headers: { authorization: `Bearer ${ADMIN}` },
+    });
+    expect(summary.statusCode).toBe(200);
+    expect(summary.json().eventCount).toBe(2);
+    expect(summary.json().lastActivity).toContain("2026-06-14");
+  });
+
+  it("remap guards: bad projectId 400, unknown project 404, non-uuid path id 404 (not 500)", async () => {
+    const { token } = await pair(await createCode());
+    await app.inject({
+      method: "POST",
+      url: "/v1/workspaces/discover",
+      headers: { authorization: `Bearer ${token}` },
+      payload: discoverPayload(),
+    });
+    const wsList = await app.inject({
+      method: "GET",
+      url: "/v1/workspaces",
+      headers: { authorization: `Bearer ${ADMIN}` },
+    });
+    const wsId = (wsList.json().workspaces as { id: string }[])[0]!.id;
+
+    // non-uuid projectId → 400 (not a Postgres cast 500)
+    const badProject = await app.inject({
+      method: "PATCH",
+      url: `/v1/workspaces/${wsId}`,
+      headers: { authorization: `Bearer ${ADMIN}` },
+      payload: { projectId: "not-a-uuid" },
+    });
+    expect(badProject.statusCode).toBe(400);
+
+    // well-formed but unknown projectId → 404 (not a FK 500)
+    const unknownProject = await app.inject({
+      method: "PATCH",
+      url: `/v1/workspaces/${wsId}`,
+      headers: { authorization: `Bearer ${ADMIN}` },
+      payload: { projectId: "00000000-0000-4000-8000-000000000000" },
+    });
+    expect(unknownProject.statusCode).toBe(404);
+
+    // non-uuid project path id on rename → 404 (not a cast 500)
+    const badRenameId = await app.inject({
+      method: "PATCH",
+      url: "/v1/projects/not-a-uuid",
+      headers: { authorization: `Bearer ${ADMIN}` },
+      payload: { name: "x" },
+    });
+    expect(badRenameId.statusCode).toBe(404);
+
+    // non-uuid summary id → 404 (not a cast 500)
+    const badSummaryId = await app.inject({
+      method: "GET",
+      url: "/v1/projects/not-a-uuid/summary",
+      headers: { authorization: `Bearer ${ADMIN}` },
+    });
+    expect(badSummaryId.statusCode).toBe(404);
+  });
+
+  it("admin project/workspace endpoints 401 without the admin token", async () => {
+    const noProjects = await app.inject({ method: "GET", url: "/v1/projects" });
+    expect(noProjects.statusCode).toBe(401);
+    const noWorkspaces = await app.inject({ method: "GET", url: "/v1/workspaces" });
+    expect(noWorkspaces.statusCode).toBe(401);
+    const badRename = await app.inject({
+      method: "PATCH",
+      url: "/v1/projects/some-id",
+      headers: { authorization: "Bearer wrong" },
+      payload: { name: "x" },
+    });
+    expect(badRename.statusCode).toBe(401);
+  });
+
+  it("remaps a workspace to a different project (the editable mapping)", async () => {
+    const { token } = await pair(await createCode());
+    await app.inject({
+      method: "POST",
+      url: "/v1/workspaces/discover",
+      headers: { authorization: `Bearer ${token}` },
+      payload: discoverPayload(),
+    });
+
+    // a fresh manually-created project to remap onto
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/projects",
+      headers: { authorization: `Bearer ${ADMIN}` },
+      payload: { name: "manual-project" },
+    });
+    expect(created.statusCode).toBe(200);
+    const newProjectId = created.json().id as string;
+
+    const wsList = await app.inject({
+      method: "GET",
+      url: "/v1/workspaces",
+      headers: { authorization: `Bearer ${ADMIN}` },
+    });
+    const workspaces = wsList.json().workspaces as { id: string }[];
+    expect(workspaces.length).toBeGreaterThan(0);
+
+    const remap = await app.inject({
+      method: "PATCH",
+      url: `/v1/workspaces/${workspaces[0]!.id}`,
+      headers: { authorization: `Bearer ${ADMIN}` },
+      payload: { projectId: newProjectId },
+    });
+    expect(remap.statusCode).toBe(200);
+    expect(remap.json().projectId).toBe(newProjectId);
+
+    // re-discovery must NOT clobber the manual remap (project_id preserved)
+    await app.inject({
+      method: "POST",
+      url: "/v1/workspaces/discover",
+      headers: { authorization: `Bearer ${token}` },
+      payload: discoverPayload(),
+    });
+    const after = await app.inject({
+      method: "GET",
+      url: "/v1/workspaces",
+      headers: { authorization: `Bearer ${ADMIN}` },
+    });
+    const remapped = (after.json().workspaces as { id: string; projectId: string }[]).find(
+      (w) => w.id === workspaces[0]!.id,
+    );
+    expect(remapped!.projectId).toBe(newProjectId);
   });
 });

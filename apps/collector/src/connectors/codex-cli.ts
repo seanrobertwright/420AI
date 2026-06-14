@@ -1,3 +1,4 @@
+import { glob } from "node:fs/promises";
 import { join } from "node:path";
 import {
   eventFingerprint,
@@ -8,8 +9,10 @@ import {
   type NormalizedEvent,
   type NormalizedTokens,
   type RawSourceRecord,
+  type RootHint,
 } from "@420ai/shared";
 import type { Connector, ParseResult } from "./connector.js";
+import { scanLines } from "../discovery/read-head.js";
 
 /** Connector source id — used in fingerprints and stamped on every record/event. */
 export const CODEX_CLI_CONNECTOR = "codex-cli";
@@ -268,6 +271,59 @@ export function parseCodexSession(
 }
 
 /**
+ * Read the `cwd` (+ git.branch) from a Codex rollout's first `session_meta` line
+ * (M5 discovery, D2). Stops at the meta line rather than full-parsing. The `cwd`
+ * is the RAW verbatim string the parser stamps on `event.projectPath` — so the
+ * discovery key matches the capture key byte-for-byte (the join invariant).
+ */
+function firstCodexCwd(filePath: string): { cwd: string; gitBranch?: string } | undefined {
+  return scanLines(filePath, (line) => {
+    if (line.trim() === "") return undefined;
+    let record: CodexRecord;
+    try {
+      record = JSON.parse(line) as CodexRecord;
+    } catch {
+      return undefined;
+    }
+    if (record.type === "session_meta" && record.payload?.cwd) {
+      return { cwd: record.payload.cwd, gitBranch: record.payload.git?.branch };
+    }
+    return undefined;
+  });
+}
+
+/**
+ * Enumerate distinct Codex project roots from the rollout store, deduped by `cwd`
+ * (== the real path == `event.projectPath`). M5 discovery.
+ */
+export async function discoverCodexRoots(home: string): Promise<RootHint[]> {
+  const byCwd = new Map<string, RootHint>();
+  for (const pattern of codexWatchGlobs(home)) {
+    for await (const match of glob(pattern.replace(/\\/g, "/"))) {
+      const meta = firstCodexCwd(String(match));
+      if (!meta) continue;
+      const existing = byCwd.get(meta.cwd);
+      if (existing) {
+        existing.sessionCount = (existing.sessionCount ?? 0) + 1;
+      } else {
+        byCwd.set(meta.cwd, {
+          projectKey: meta.cwd,
+          rootPath: meta.cwd,
+          gitBranch: meta.gitBranch,
+          sessionCount: 1,
+        });
+      }
+    }
+  }
+  return [...byCwd.values()];
+}
+
+/** Glob patterns for Codex rollout files (shared by watch + discovery). */
+function codexWatchGlobs(home: string): string[] {
+  return [join(home, ".codex", "sessions", "*", "*", "*", "rollout-*.jsonl")];
+}
+
+/**
  * The OpenAI Codex CLI connector. Session files are append-only JSONL rollouts at
  * `~/.codex/sessions/<YYYY>/<MM>/<DD>/rollout-*.jsonl` — same `tail` capture path
  * as Claude (M4 D3, VERIFIED against cli 0.137.x).
@@ -286,8 +342,7 @@ export const codexCliConnector: Connector = {
     ],
     testedVersions: ["0.137.x"],
   },
-  watchGlobs: (home) => [
-    join(home, ".codex", "sessions", "*", "*", "*", "rollout-*.jsonl"),
-  ],
+  watchGlobs: (home) => codexWatchGlobs(home),
   parse: (text) => parseCodexSession(text),
+  discoverRoots: (home) => discoverCodexRoots(home),
 };
