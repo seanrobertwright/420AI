@@ -58,9 +58,11 @@ export interface DiscoverResponse {
  * project name when there is no git remote to name the project after.
  */
 export function basenameFromRoot(rootPath: string): string {
-  const trimmed = rootPath.replace(/[\\/]+$/, "");
+  let end = rootPath.length - 1;
+  while (end > 0 && (rootPath[end] === "/" || rootPath[end] === "\\")) end--;
+  const trimmed = rootPath.slice(0, end + 1);
   const parts = trimmed.split(/[\\/]/);
-  return parts[parts.length - 1] || trimmed;
+  return parts[parts.length - 1] || rootPath;
 }
 
 /**

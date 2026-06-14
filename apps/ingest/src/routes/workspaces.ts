@@ -80,7 +80,7 @@ export default async function workspaceRoutes(app: FastifyInstance): Promise<voi
               projectId = proj.id;
               projectsCreated += 1;
             }
-            await remapWorkspace(tx, ws.id, projectId);
+            await remapWorkspace(tx, userId, ws.id, projectId);
           } else {
             projectName = (await getProjectName(tx, projectId)) ?? "";
           }
@@ -137,7 +137,9 @@ export default async function workspaceRoutes(app: FastifyInstance): Promise<voi
       if (!(await getProjectName(app.db, projectId))) {
         return reply.code(404).send({ error: "project not found" });
       }
-      const row = await remapWorkspace(app.db, id, projectId);
+      const userId = await findUserIdByEmail(app.db, DEFAULT_EMAIL);
+      if (!userId) return reply.code(404).send({ error: "workspace not found" });
+      const row = await remapWorkspace(app.db, userId, id, projectId);
       if (!row) return reply.code(404).send({ error: "workspace not found" });
       return reply.code(200).send({ id: row.id, projectId: row.projectId });
     },

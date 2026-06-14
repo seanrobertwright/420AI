@@ -67,7 +67,7 @@ describe.skipIf(!TEST_URL)("workspaces + projects repositories (integration)", (
   it("addWorkspaceKey is idempotent; resolveWorkspaceId returns the workspace+project, or undefined", async () => {
     const ws = await upsertWorkspace(dbh.db, { userId, machineId, rootPath: "/repo", gitRemote: REMOTE });
     const { id: projectId } = await findOrCreateProjectByRemote(dbh.db, userId, REMOTE, "420AI");
-    await remapWorkspace(dbh.db, ws.id, projectId);
+    await remapWorkspace(dbh.db, userId, ws.id, projectId);
 
     await addWorkspaceKey(dbh.db, {
       userId,
@@ -112,10 +112,10 @@ describe.skipIf(!TEST_URL)("workspaces + projects repositories (integration)", (
     const ws = await upsertWorkspace(dbh.db, { userId, machineId, rootPath: "/r2" });
     const p1 = await createProject(dbh.db, userId, "proj-one");
     const p2 = await createProject(dbh.db, userId, "proj-two");
-    await remapWorkspace(dbh.db, ws.id, p1.id);
+    await remapWorkspace(dbh.db, userId, ws.id, p1.id);
     const after1 = await listWorkspaces(dbh.db, userId);
     expect(after1[0]!.projectId).toBe(p1.id);
-    await remapWorkspace(dbh.db, ws.id, p2.id);
+    await remapWorkspace(dbh.db, userId, ws.id, p2.id);
     const after2 = await listWorkspaces(dbh.db, userId);
     expect(after2[0]!.projectId).toBe(p2.id);
   });
@@ -125,7 +125,7 @@ describe.skipIf(!TEST_URL)("workspaces + projects repositories (integration)", (
     const realPath = "c:\\users\\seanr\\onedrive\\documents\\420ai";
     const ws = await upsertWorkspace(dbh.db, { userId, machineId, rootPath: realPath, gitRemote: REMOTE });
     const { id: projectId } = await findOrCreateProjectByRemote(dbh.db, userId, REMOTE, "420AI");
-    await remapWorkspace(dbh.db, ws.id, projectId);
+    await remapWorkspace(dbh.db, userId, ws.id, projectId);
     // Gemini's project_key is the HASH (== events.project_path), NOT the real path.
     await addWorkspaceKey(dbh.db, {
       userId,
@@ -165,7 +165,7 @@ describe.skipIf(!TEST_URL)("workspaces + projects repositories (integration)", (
 
     const summary = await projectEventSummary(dbh.db, projectId);
     expect(summary.eventCount).toBe(2);
-    expect(summary.lastActivity).toContain("2026-06-14");
+    expect(summary.lastActivity?.toISOString()).toContain("2026-06-14");
   });
 
   it("a remote-less workspace's project is NOT unified with another folder", async () => {

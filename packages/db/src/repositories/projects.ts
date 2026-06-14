@@ -1,4 +1,4 @@
-import { and, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 import type { DbClient } from "../client.js";
 import { projects } from "../schema.js";
 
@@ -67,7 +67,8 @@ export async function listProjects(db: DbClient, userId: string): Promise<Projec
   return db
     .select()
     .from(projects)
-    .where(and(eq(projects.userId, userId), isNull(projects.archivedAt)));
+    .where(and(eq(projects.userId, userId), isNull(projects.archivedAt)))
+    .orderBy(desc(projects.createdAt));
 }
 
 /** Rename a project (the editable mapping, D4). Returns the updated row, if any. */

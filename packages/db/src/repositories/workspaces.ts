@@ -91,13 +91,14 @@ export async function addWorkspaceKey(
 /** Repoint a workspace at a different project (the editable mapping, D4). */
 export async function remapWorkspace(
   db: DbClient,
+  userId: string,
   workspaceId: string,
   projectId: string,
 ): Promise<WorkspaceRow | undefined> {
   const [row] = await db
     .update(workspaces)
     .set({ projectId })
-    .where(eq(workspaces.id, workspaceId))
+    .where(and(eq(workspaces.id, workspaceId), eq(workspaces.userId, userId)))
     .returning();
   return row;
 }
@@ -135,11 +136,11 @@ export async function resolveWorkspaceId(
 export async function projectEventSummary(
   db: DbClient,
   projectId: string,
-): Promise<{ eventCount: number; lastActivity: string | null }> {
+): Promise<{ eventCount: number; lastActivity: Date | null }> {
   const [row] = await db
     .select({
       eventCount: sql<number>`count(${events.fingerprint})::int`,
-      lastActivity: sql<string | null>`max(${events.ts})`,
+      lastActivity: sql<Date | null>`max(${events.ts})`,
     })
     .from(events)
     .innerJoin(workspaceKeys, eq(events.projectPath, workspaceKeys.projectKey))

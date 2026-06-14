@@ -96,9 +96,9 @@ const discoveredWorkspaceSchema = {
     sourceConnector: { type: "string", minLength: 1 },
     projectKey: { type: "string", minLength: 1 },
     rootPath: { type: "string", minLength: 1 },
-    gitRemote: { type: "string" },
-    gitBranch: { type: "string" },
-    sessionCount: { type: "integer" },
+    gitRemote: { type: "string", minLength: 1 },
+    gitBranch: { type: "string", minLength: 1 },
+    sessionCount: { type: "integer", minimum: 0 },
   },
 } as const;
 
@@ -117,7 +117,7 @@ export const createProjectBodySchema = {
   additionalProperties: false,
   properties: {
     name: { type: "string", minLength: 1 },
-    gitRemote: { type: "string" },
+    gitRemote: { type: "string", minLength: 1 },
   },
 } as const;
 
