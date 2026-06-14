@@ -299,8 +299,27 @@ detects truncation; a typed **connector framework** (`id` + PRD §10.3 fidelity 
 + `parse`) with Claude Code as the one stable connector; a **poll-based file watcher**; and a
 **retrying sync worker** (capped exponential backoff on network/5xx, stop-and-surface on 401).
 
-The M3 connector is **Claude Code only** — its liveness label is **"Streaming (tail)"**. Codex CLI and
-Gemini CLI land in M4 by implementing the `Connector` interface (no framework change).
+The M3 connector was **Claude Code only**. **M4 fills out the connector layer to three at full
+fidelity** (see below) — still no server code and no new Postgres tables.
+
+### Milestone 4 — connectors to full fidelity
+
+M4 takes the capture layer from one partial connector to **three full-fidelity** ones:
+
+- **Claude Code (thickened):** the tool-call lifecycle is now correlated
+  (`tool.call.completed`/`tool.call.failed` by `tool_use_id`), plus `file.read`/`file.modified`
+  (from `Read`/`Edit`/`Write`/…) and `context.loaded` (from attachment records). `PARSER_VERSION`
+  bumped to `2.0.0`; re-derived events upsert in place.
+- **OpenAI Codex CLI (new):** tails the append-only rollout JSONL
+  (`~/.codex/sessions/…/rollout-*.jsonl`), emits per-turn token usage from the `last_token_usage`
+  **delta** (never the cumulative snapshot), carries the model forward from `turn_context`.
+- **Gemini CLI (new):** a single JSON file **rewritten** per turn, captured by a new additive
+  `captureMode: "snapshot"` (whole-file re-read on size/mtime change) that coexists with the proven
+  byte-offset `tail` path. Thought tokens fold into `output` so the normalized `total` reproduces the
+  vendor total.
+
+All three normalize onto the frozen token shape (`computeTotal`/`computeCost` unchanged); whole-file
+re-parse stays idempotent via the queue's content-hash dedup and the server's fingerprint upsert.
 
 ### Prerequisites
 
@@ -357,5 +376,8 @@ AES-256-GCM field encryption, ingest token + pairing repositories), `apps/ingest
 — pairing, bearer-authed idempotent ingest, health), and `apps/collector` `pair`/`push` commands.
 M3 (collector foundation): `apps/collector` machine identity, durable queue + per-file cursors,
 connector framework, poll-based file watcher, retrying sync worker, and the `watch`/`sync`/`queue`
-commands — a continuous, offline-safe, restart-resuming Claude Code capture agent. Milestones 4–10
-above thicken this skeleton.
+commands — a continuous, offline-safe, restart-resuming Claude Code capture agent. M4 (connectors to
+full fidelity): Claude Code thickened to the full tool/file/context taxonomy, plus the **Codex CLI**
+(append-only tail) and **Gemini CLI** (whole-file `snapshot` capture mode) connectors — all at exact
+token/computed-cost fidelity, with no server or schema change. Milestones 5–10 above thicken this
+skeleton.

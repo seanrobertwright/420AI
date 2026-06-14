@@ -1,0 +1,11 @@
+{"timestamp":"2026-06-13T12:00:00.000Z","type":"session_meta","payload":{"id":"codex-sess-1","cwd":"/home/dev/project","cli_version":"0.137.0","git":{"branch":"m4-connectors"},"timestamp":"2026-06-13T12:00:00.000Z"}}
+{"timestamp":"2026-06-13T12:00:01.000Z","type":"turn_context","payload":{"type":"turn_context","model":"gpt-5.5","cwd":"/home/dev/project"}}
+{"timestamp":"2026-06-13T12:00:02.000Z","type":"event_msg","payload":{"type":"user_message","message":"Refactor the parser"}}
+{"timestamp":"2026-06-13T12:00:05.000Z","type":"event_msg","payload":{"type":"agent_message","message":"Refactoring now."}}
+{"timestamp":"2026-06-13T12:00:06.000Z","type":"response_item","payload":{"type":"function_call","name":"shell","arguments":"{\"command\":[\"ls\"]}","call_id":"call-1"}}
+{"timestamp":"2026-06-13T12:00:07.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call-1","output":"Exit code: 0\nWall time: 0.5 seconds\nOutput:\nfile.ts"}}
+{"timestamp":"2026-06-13T12:00:08.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":19806,"cached_input_tokens":4992,"output_tokens":215,"reasoning_output_tokens":92,"total_tokens":20021},"last_token_usage":{"input_tokens":19806,"cached_input_tokens":4992,"output_tokens":215,"reasoning_output_tokens":92,"total_tokens":20021}}}}
+{"timestamp":"2026-06-13T12:00:10.000Z","type":"response_item","payload":{"type":"function_call","name":"apply_patch","arguments":"{}","call_id":"call-2"}}
+{"timestamp":"2026-06-13T12:00:11.000Z","type":"event_msg","payload":{"type":"patch_apply_end","success":true}}
+{ this line is not valid json and must be skipped }
+{"timestamp":"2026-06-13T12:00:12.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":20806,"cached_input_tokens":5192,"output_tokens":265,"reasoning_output_tokens":102,"total_tokens":21071},"last_token_usage":{"input_tokens":1000,"cached_input_tokens":200,"output_tokens":50,"reasoning_output_tokens":10,"total_tokens":1050}}}}

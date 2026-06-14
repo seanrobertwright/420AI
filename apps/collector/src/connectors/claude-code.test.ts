@@ -7,6 +7,11 @@ const fixture = readFileSync(
   "utf8",
 );
 
+const toolsFixture = readFileSync(
+  new URL("../fixtures/sample-session-tools.jsonl", import.meta.url),
+  "utf8",
+);
+
 describe("parseClaudeCodeSession", () => {
   it("tolerantly skips the malformed line and counts it", () => {
     const { skippedLines } = parseClaudeCodeSession(fixture, { ingestedAt: "2026-06-13T00:00:00Z" });
@@ -64,5 +69,48 @@ describe("parseClaudeCodeSession", () => {
     const a = parseClaudeCodeSession(fixture, { ingestedAt: "2026-06-13T00:00:00Z" });
     const b = parseClaudeCodeSession(fixture, { ingestedAt: "2099-01-01T00:00:00Z" });
     expect(a.events.map((e) => e.fingerprint)).toEqual(b.events.map((e) => e.fingerprint));
+  });
+});
+
+describe("parseClaudeCodeSession — M4 full fidelity (tool lifecycle / file / context)", () => {
+  it("correlates tool.call.completed and tool.call.failed by tool_use_id", () => {
+    const { events } = parseClaudeCodeSession(toolsFixture, { ingestedAt: "2026-06-13T00:00:00Z" });
+    const completed = events.filter((e) => e.eventType === "tool.call.completed");
+    const failed = events.filter((e) => e.eventType === "tool.call.failed");
+    expect(completed).toHaveLength(1);
+    expect(failed).toHaveLength(1);
+    // is_error:false → completed for the Read call; is_error:true → failed for Edit.
+    expect(completed[0]!.payload).toMatchObject({ tool_use_id: "tu-read", name: "Read" });
+    expect(failed[0]!.payload).toMatchObject({ tool_use_id: "tu-edit", name: "Edit" });
+  });
+
+  it("still emits tool.call.started for each tool_use block", () => {
+    const { events } = parseClaudeCodeSession(toolsFixture, { ingestedAt: "2026-06-13T00:00:00Z" });
+    const started = events.filter((e) => e.eventType === "tool.call.started");
+    expect(started).toHaveLength(2);
+  });
+
+  it("emits file.read and file.modified carrying the file_path", () => {
+    const { events } = parseClaudeCodeSession(toolsFixture, { ingestedAt: "2026-06-13T00:00:00Z" });
+    const read = events.find((e) => e.eventType === "file.read");
+    const modified = events.find((e) => e.eventType === "file.modified");
+    expect(read!.payload).toEqual({ path: "/home/dev/project/a.ts" });
+    expect(modified!.payload).toEqual({ path: "/home/dev/project/b.ts" });
+  });
+
+  it("emits context.loaded for an attachment record", () => {
+    const { events } = parseClaudeCodeSession(toolsFixture, { ingestedAt: "2026-06-13T00:00:00Z" });
+    const ctx = events.filter((e) => e.eventType === "context.loaded");
+    expect(ctx).toHaveLength(1);
+    expect(ctx[0]!.payload).toEqual({ attachmentType: "deferred_tools_delta" });
+  });
+
+  it("keeps fingerprints stable across two parses (new event types included)", () => {
+    const a = parseClaudeCodeSession(toolsFixture, { ingestedAt: "2026-06-13T00:00:00Z" });
+    const b = parseClaudeCodeSession(toolsFixture, { ingestedAt: "2099-01-01T00:00:00Z" });
+    expect(a.events.map((e) => e.fingerprint)).toEqual(b.events.map((e) => e.fingerprint));
+    // No two events collide on the same fingerprint.
+    const fps = a.events.map((e) => e.fingerprint);
+    expect(new Set(fps).size).toBe(fps.length);
   });
 });

@@ -2,6 +2,7 @@ import { glob } from "node:fs/promises";
 import type { Connector } from "../connectors/connector.js";
 import type { QueueStore } from "../queue/queue-store.js";
 import { readGrownPrefix } from "./tailer.js";
+import { readSnapshot } from "./snapshot.js";
 
 /**
  * Poll-based session-file watcher (V1 — see plan Decisions).
@@ -57,6 +58,24 @@ export class FileWatcher {
     const files = await this.discover();
     for (const { connector, path } of files) {
       const cursor = this.deps.queue.getCursor(connector.id, path);
+
+      if ((connector.captureMode ?? "tail") === "snapshot") {
+        // Whole-file-rewrite source (e.g. Gemini): re-read on a size/mtime
+        // change. The cursor columns are repurposed — `byteOffset := sizeBytes`,
+        // `size := mtimeMs` (see snapshot.ts). Commit-point ordering preserved:
+        // saveCursor runs only AFTER onChange succeeds.
+        const prev =
+          cursor !== undefined
+            ? { sizeBytes: cursor.byteOffset, mtimeMs: cursor.size }
+            : undefined;
+        const snap = readSnapshot(path, prev);
+        if (!snap.changed) continue;
+        await this.deps.onChange(connector, snap.text);
+        this.deps.queue.saveCursor(connector.id, path, snap.sizeBytes, snap.mtimeMs);
+        continue;
+      }
+
+      // Default: append-only tail by byte offset.
       const fromOffset = cursor?.byteOffset ?? 0;
       const result = readGrownPrefix(path, fromOffset);
       // `reset` (truncation) restarts from 0 inside the tailer; both reset and

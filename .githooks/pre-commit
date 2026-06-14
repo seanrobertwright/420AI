@@ -1,0 +1,14 @@
+#!/bin/sh
+# Enforced pre-commit gate (system review M1-3). Runs the FAST repo-health
+# subset (NUL scan + stray-artifact scan + root typecheck); the full test suite
+# stays in `npm run repo-health` / CI to keep commits snappy.
+#
+# Enabled via `git config core.hooksPath .githooks` (run automatically by the
+# npm `prepare` script on install). Bypass in a genuine emergency with
+# `git commit --no-verify`.
+echo "pre-commit: running repo-health --fast…"
+node scripts/repo-health.mjs --fast || {
+  echo ""
+  echo "pre-commit: BLOCKED — fix the failures above or re-run with --no-verify to bypass."
+  exit 1
+}

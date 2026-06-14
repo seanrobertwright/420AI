@@ -1,0 +1,28 @@
+# Normalize line endings and enforce text classification.
+# Forcing source files to `text` means git stores them as text and a file that
+# is accidentally written with embedded NUL bytes (see the M3 file-watcher.ts
+# corruption — system review M1-3) shows up as a real textual diff instead of
+# silently being stored as a binary blob.
+
+# Default: let git decide, normalizing CRLF -> LF on commit.
+* text=auto eol=lf
+
+# Source + config are always text with LF (Windows checkouts included).
+*.ts   text eol=lf
+*.tsx  text eol=lf
+*.js   text eol=lf
+*.mjs  text eol=lf
+*.cjs  text eol=lf
+*.json text eol=lf
+*.md   text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.sql  text eol=lf
+*.sh   text eol=lf
+
+# Generated/locked: keep diffs out of review noise but still text.
+package-lock.json linguist-generated=true text eol=lf
+
+# Truly binary local state (never committed, but be explicit).
+*.sqlite binary
+*.db     binary

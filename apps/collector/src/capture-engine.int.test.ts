@@ -145,6 +145,46 @@ describe.skipIf(!TEST_URL)("capture-engine end-to-end (watcher -> queue -> M2 in
     }
   });
 
+  it("captures a snapshot (Gemini-shaped) file and re-ticks idempotently", async () => {
+    const chatsDir = join(home, ".gemini", "tmp", "proj", "chats");
+    mkdirSync(chatsDir, { recursive: true });
+    const geminiFile = join(chatsDir, "session-int.json");
+    const v1 = JSON.stringify({
+      sessionId: "g-int-1",
+      projectHash: "hint",
+      startTime: "2026-06-13T10:00:00.000Z",
+      lastUpdated: "2026-06-13T10:00:01.000Z",
+      messages: [
+        { id: "gm1", type: "user", content: "build it" },
+        {
+          id: "gm2",
+          type: "gemini",
+          model: "gemini-3-flash-preview",
+          content: "done",
+          tokens: { input: 100, output: 10, cached: 20, thoughts: 5, tool: 0, total: 115 },
+          toolCalls: [{ name: "read_file", status: "success" }],
+        },
+      ],
+    });
+    writeFileSync(geminiFile, v1, "utf8");
+
+    const queue = new QueueStore(queuePath);
+    try {
+      const watcher = new FileWatcher({ connectors, home, queue, onChange: makeOnChange(queue) });
+      await watcher.tickOnce();
+      await syncOnce({ queue, url: creds.url, token: creds.token });
+      const afterFirst = await rawCount(dbh);
+      expect(afterFirst).toBeGreaterThan(0); // includes the 2 Gemini messages + Claude fixture
+
+      // An unchanged re-tick captures nothing new (size+mtime gate + content dedup).
+      await watcher.tickOnce();
+      await syncOnce({ queue, url: creds.url, token: creds.token });
+      expect(await rawCount(dbh)).toBe(afterFirst);
+    } finally {
+      queue.close();
+    }
+  });
+
   it("resumes (re-sends nothing) when restarted on the same queue with no file growth", async () => {
     const queue1 = new QueueStore(queuePath);
     try {
