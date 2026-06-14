@@ -49,7 +49,6 @@ export interface AnalysisProviderConfig {
   apiKey: string;
   model: string;
   baseUrl?: string;
-  maxOutputTokens: number;
   timeoutMs: number;
 }
 
@@ -57,7 +56,7 @@ export interface AnalysisProviderConfig {
  * interpretation endpoints with a 503 (D9). */
 function notConfigured(): AnalysisProvider {
   return {
-    async interpret(): Promise<AnalysisResult> {
+    async interpret(_req: AnalysisRequest): Promise<AnalysisResult> {
       throw new AnalysisProviderError(
         "analysis provider not configured (set ANALYSIS_PROVIDER and ANALYSIS_API_KEY)",
         "not_configured",

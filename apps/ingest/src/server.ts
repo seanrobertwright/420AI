@@ -12,12 +12,21 @@ const adminToken = process.env.ADMIN_TOKEN;
 if (!databaseUrl) throw new Error("DATABASE_URL is not set (copy .env.example to .env)");
 if (!adminToken) throw new Error("ADMIN_TOKEN is not set (copy .env.example to .env)");
 
+function parsePositiveInt(raw: string | undefined, name: string, defaultValue: number): number {
+  if (raw === undefined) return defaultValue;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n <= 0) {
+    throw new Error(`${name} must be a positive integer (got "${raw}")`);
+  }
+  return n;
+}
+
 // Build the real analysis provider from env. If ANALYSIS_PROVIDER/ANALYSIS_API_KEY
 // are unset, pass null → a notConfigured provider: the server still boots and all
 // M1–M7 endpoints work; only POST …/interpretations returns 503 (D9).
 const analysisProviderName = process.env.ANALYSIS_PROVIDER;
 const analysisApiKey = process.env.ANALYSIS_API_KEY;
-const analysisMaxOutputTokens = Number(process.env.ANALYSIS_MAX_OUTPUT_TOKENS ?? 4096);
+const analysisMaxOutputTokens = parsePositiveInt(process.env.ANALYSIS_MAX_OUTPUT_TOKENS, "ANALYSIS_MAX_OUTPUT_TOKENS", 4096);
 let analysisConfig: AnalysisProviderConfig | null = null;
 if (analysisProviderName && analysisApiKey) {
   if (analysisProviderName !== "anthropic" && analysisProviderName !== "openai") {
@@ -28,8 +37,7 @@ if (analysisProviderName && analysisApiKey) {
     apiKey: analysisApiKey,
     model: process.env.ANALYSIS_MODEL ?? "claude-sonnet-4-6",
     baseUrl: process.env.ANALYSIS_BASE_URL || undefined,
-    maxOutputTokens: analysisMaxOutputTokens,
-    timeoutMs: Number(process.env.ANALYSIS_TIMEOUT_MS ?? 60000),
+    timeoutMs: parsePositiveInt(process.env.ANALYSIS_TIMEOUT_MS, "ANALYSIS_TIMEOUT_MS", 60000),
   };
 }
 

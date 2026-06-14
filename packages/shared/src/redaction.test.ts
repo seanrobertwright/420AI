@@ -73,6 +73,13 @@ describe("redact — known-pattern rules", () => {
     expect(redacted).toBe("[REDACTED:bearer_auth]");
   });
 
+  it("masks the full token in header-style 'Authorization: ******'", () => {
+    const token = "eyJsomeLongTokenValue12345";
+    const { redacted } = redact("Authorization: Bearer " + token);
+    expect(redacted).toBe("[REDACTED:bearer_auth]");
+    expect(redacted).not.toContain(token);
+  });
+
   it("masks a generic secret assignment", () => {
     const { redacted } = redact("password: hunter2longpass");
     expect(redacted).toContain("[REDACTED:generic_secret_assignment]");

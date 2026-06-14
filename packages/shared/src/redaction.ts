@@ -124,7 +124,10 @@ const RULES: Rule[] = [
   {
     ruleId: "bearer_auth",
     kind: "bearer_auth",
-    build: () => /(?:authorization|bearer)\s*[:=]\s*\S+/gi,
+    // Handle both assignment style ("authorization=token") and HTTP header style
+    // ("Authorization: ******") — the optional `(?:bearer\s+)?` consumes
+    // the scheme word so `\S+` always lands on the actual token value.
+    build: () => /(?:authorization|bearer)\s*[:=]\s*(?:bearer\s+)?\S+/gi,
     mask: PLACEHOLDER_MASK,
   },
   {

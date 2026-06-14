@@ -89,7 +89,7 @@ export async function generateSessionInterpretation(
     scopeKind: "session",
     scopeId: sessionId,
     reportVersion: AI_REPORT_VERSION,
-    params: { provider: result.model, maxOutputTokens },
+    params: { model: result.model, maxOutputTokens },
     metrics: {
       kind: "session",
       metrics,
@@ -143,7 +143,7 @@ export async function generateProjectInterpretation(
     scopeKind: "project",
     scopeId: projectId,
     reportVersion: AI_REPORT_VERSION,
-    params: { provider: result.model, maxOutputTokens },
+    params: { model: result.model, maxOutputTokens },
     metrics: {
       kind: "project",
       metrics: { totals, byModel, overTime, sessions },
