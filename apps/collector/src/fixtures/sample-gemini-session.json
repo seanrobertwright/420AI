@@ -1,0 +1,36 @@
+{
+  "sessionId": "gemini-sess-1",
+  "projectHash": "a1b2c3d4e5f6",
+  "startTime": "2026-06-13T13:00:00.000Z",
+  "lastUpdated": "2026-06-13T13:00:30.000Z",
+  "messages": [
+    {
+      "id": "msg-0",
+      "type": "info",
+      "text": "Session started"
+    },
+    {
+      "id": "msg-1",
+      "type": "user",
+      "content": "Read config.ts and write summary.md"
+    },
+    {
+      "id": "msg-2",
+      "type": "gemini",
+      "model": "gemini-3-flash-preview",
+      "content": "Done.",
+      "tokens": {
+        "input": 28118,
+        "output": 198,
+        "cached": 20241,
+        "thoughts": 42,
+        "tool": 0,
+        "total": 28358
+      },
+      "toolCalls": [
+        { "name": "read_file", "status": "success" },
+        { "name": "write_file", "status": "error" }
+      ]
+    }
+  ]
+}

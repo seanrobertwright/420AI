@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { QueueStore } from "../queue/queue-store.js";
 import { connectors } from "../connectors/connector.js";
 import { claudeCodeConnector } from "../connectors/claude-code.js";
+import { geminiCliConnector } from "../connectors/gemini-cli.js";
 import { toRawRecordPayload, toEventPayload } from "@420ai/shared";
 import { FileWatcher } from "./file-watcher.js";
 
@@ -81,6 +82,59 @@ describe("FileWatcher.tickOnce (poll-based discovery + capture)", () => {
     const before = calls.length;
     await watcher.tickOnce();
     expect(calls).toHaveLength(before);
+
+    queue.close();
+  });
+
+  it("captures a snapshot connector on rewrite and skips an unchanged tick", async () => {
+    dir = mkdtempSync(join(tmpdir(), "m4-watcher-snap-"));
+    const home = join(dir, "home");
+    const chatsDir = join(home, ".gemini", "tmp", "proj", "chats");
+    mkdirSync(chatsDir, { recursive: true });
+    const queue = new QueueStore(join(dir, "queue.sqlite"));
+
+    const captured: string[] = [];
+    const watcher = new FileWatcher({
+      connectors: [geminiCliConnector],
+      home,
+      queue,
+      onChange: (_c, text) => {
+        captured.push(text);
+      },
+    });
+
+    const file = join(chatsDir, "session-1.json");
+    const v1 = JSON.stringify({
+      sessionId: "g1",
+      projectHash: "h1",
+      startTime: "2026-06-13T10:00:00.000Z",
+      lastUpdated: "2026-06-13T10:00:01.000Z",
+      messages: [{ id: "m1", type: "user", content: "hi" }],
+    });
+    writeFileSync(file, v1, "utf8");
+
+    await watcher.tickOnce();
+    expect(captured).toHaveLength(1);
+
+    // An unchanged tick is a no-op (size+mtime gate).
+    await watcher.tickOnce();
+    expect(captured).toHaveLength(1);
+
+    // A whole-file rewrite (different length) is re-read.
+    const v2 = JSON.stringify({
+      sessionId: "g1",
+      projectHash: "h1",
+      startTime: "2026-06-13T10:00:00.000Z",
+      lastUpdated: "2026-06-13T10:00:05.000Z",
+      messages: [
+        { id: "m1", type: "user", content: "hi" },
+        { id: "m2", type: "user", content: "again, with more bytes" },
+      ],
+    });
+    writeFileSync(file, v2, "utf8");
+    await watcher.tickOnce();
+    expect(captured).toHaveLength(2);
+    expect(captured[1]).toContain("m2");
 
     queue.close();
   });

@@ -2,7 +2,14 @@ import type { NormalizedTokens } from "./tokens.js";
 import type { CostResult } from "./cost.js";
 
 /**
- * Normalized event taxonomy (subset of PRD §12 sufficient for Milestone 1).
+ * Normalized event taxonomy (subset of PRD §12).
+ *
+ * M1 shipped the session/message/usage/cost core plus `tool.call.started`. M4
+ * correlates the tool-call lifecycle (`tool.call.completed`/`tool.call.failed`)
+ * and adds the file-interaction + context-load events
+ * (`file.read`/`file.modified`/`file.referenced`/`context.loaded`). These are
+ * client-only additions — the server stores `event_type` as free text, so no
+ * server change or migration is required.
  *
  * Full taxonomy lands in later milestones. Omitted-for-now event types include:
  *   "session.resumed", "message.system", "tool.result.received",
@@ -17,6 +24,10 @@ export type EventType =
   | "tool.call.started"
   | "tool.call.completed"
   | "tool.call.failed"
+  | "file.read"
+  | "file.modified"
+  | "file.referenced"
+  | "context.loaded"
   | "usage.reported"
   | "cost.estimated";
 

@@ -9,7 +9,7 @@ import {
   type NormalizedTokens,
   type RawSourceRecord,
 } from "@420ai/shared";
-import type { Connector } from "./connector.js";
+import type { Connector, ParseResult } from "./connector.js";
 
 /** Connector source id — used in fingerprints and stamped on every record/event. */
 export const CLAUDE_CODE_CONNECTOR = "claude-code";
@@ -18,15 +18,7 @@ export const CLAUDE_CODE_CONNECTOR = "claude-code";
  * Parser version. Bumping this re-derives events on replay; because fingerprints
  * are independent of parser version, re-ingest upserts in place (PRD §23).
  */
-export const PARSER_VERSION = "1.0.0";
-
-export interface ParseResult {
-  rawRecords: RawSourceRecord[];
-  events: NormalizedEvent[];
-  /** Count of JSONL lines that failed to parse (tolerant parsing). */
-  skippedLines: number;
-  sessionId?: string;
-}
+export const PARSER_VERSION = "2.0.0";
 
 /** The Claude `usage` block (only the fields we map; the rest stays in raw). */
 interface ClaudeUsage {
@@ -38,7 +30,16 @@ interface ClaudeUsage {
 
 interface ClaudeContentBlock {
   type?: string;
+  /** tool_use: tool name (e.g. "Read", "Edit"). */
   name?: string;
+  /** tool_use: the tool-call id correlated to a later tool_result. */
+  id?: string;
+  /** tool_use: arguments; `file_path` drives file.read/file.modified (D6). */
+  input?: { file_path?: string };
+  /** tool_result: the tool_use id this result completes. */
+  tool_use_id?: string;
+  /** tool_result: present + boolean — true ⇒ tool.call.failed (D6). */
+  is_error?: boolean;
 }
 
 interface ClaudeMessage {
@@ -46,6 +47,11 @@ interface ClaudeMessage {
   model?: string;
   content?: string | ClaudeContentBlock[];
   usage?: ClaudeUsage;
+}
+
+/** A `deferred_tools_delta`/context attachment payload (drives context.loaded). */
+interface ClaudeAttachment {
+  type?: string;
 }
 
 interface ClaudeRecord {
@@ -56,7 +62,13 @@ interface ClaudeRecord {
   gitBranch?: string;
   timestamp?: string;
   message?: ClaudeMessage;
+  /** Present on `attachment` records (PRD §10.3 context loads). */
+  attachment?: ClaudeAttachment;
 }
+
+/** Tool names that read a file vs. modify one (D6 — VERIFIED input key `file_path`). */
+const FILE_READ_TOOLS = new Set(["Read"]);
+const FILE_MODIFY_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 
 /** Map a Claude `usage` block onto the normalized token shape (PRD §10.3). */
 function mapTokens(usage: ClaudeUsage): NormalizedTokens {
@@ -117,6 +129,23 @@ export function parseClaudeCodeSession(
 
   const resolvedSession = sessionId ?? "unknown-session";
 
+  // Correlate the tool-call lifecycle (D6): assistant `tool_use` blocks carry
+  // the tool name keyed by id; the NEXT user record carries matching
+  // `tool_result` blocks (`tool_use_id` + boolean `is_error`). We emit
+  // completion/failure ON THE RESULT record (its rawId) so the fingerprint is
+  // stable, and look the tool name back up from this map.
+  const toolNameById = new Map<string, string>();
+  for (const { record } of parsed) {
+    if (record.type !== "assistant") continue;
+    const content = record.message?.content;
+    if (!Array.isArray(content)) continue;
+    for (const block of content) {
+      if (block?.type === "tool_use" && block.id) {
+        toolNameById.set(block.id, block.name ?? "unknown");
+      }
+    }
+  }
+
   // Helper to build a normalized event with a deterministic fingerprint.
   const makeEvent = (
     rawRecordId: string,
@@ -159,6 +188,30 @@ export function parseClaudeCodeSession(
   for (const { record, rawId } of parsed) {
     if (record.type === "user") {
       events.push(makeEvent(rawId, 0, "message.user", record));
+
+      // Tool lifecycle completion: a user record's `tool_result` blocks close
+      // out earlier tool_use calls. Emit completed/failed by `is_error` (D6).
+      // eventIndex `1 + resultIdx` is unique per result block within this record.
+      const content = record.message?.content;
+      if (Array.isArray(content)) {
+        let resultIdx = 0;
+        for (const block of content) {
+          if (block?.type === "tool_result" && block.tool_use_id) {
+            const eventType: EventType = block.is_error
+              ? "tool.call.failed"
+              : "tool.call.completed";
+            events.push(
+              makeEvent(rawId, 1 + resultIdx, eventType, record, {
+                payload: {
+                  name: toolNameById.get(block.tool_use_id),
+                  tool_use_id: block.tool_use_id,
+                },
+              }),
+            );
+            resultIdx += 1;
+          }
+        }
+      }
       continue;
     }
 
@@ -175,22 +228,53 @@ export function parseClaudeCodeSession(
         );
       }
 
-      // Tool calls: one tool.call.started per tool_use block. No completion
-      // correlation in this slice (full lifecycle is a later milestone).
+      // Tool calls + file events: one per tool_use block. `tool.call.started`
+      // keeps its M1 index (`3 + toolIdx`) so its fingerprint is unchanged and
+      // upserts in place across the PARSER_VERSION bump (D5). A Read/Edit/Write
+      // block ALSO emits a file event; it reuses the SAME `3 + toolIdx` index —
+      // safe because the eventType differs, so the fingerprint differs (the
+      // fingerprint hashes connector|rawId|index|eventType).
       const content = record.message?.content;
       if (Array.isArray(content)) {
         let toolIdx = 0;
         for (const block of content) {
           if (block?.type === "tool_use") {
+            const idx = 3 + toolIdx;
             events.push(
-              makeEvent(rawId, 3 + toolIdx, "tool.call.started", record, {
+              makeEvent(rawId, idx, "tool.call.started", record, {
                 payload: { name: block.name },
               }),
             );
+            const name = block.name ?? "";
+            if (FILE_READ_TOOLS.has(name)) {
+              events.push(
+                makeEvent(rawId, idx, "file.read", record, {
+                  payload: { path: block.input?.file_path },
+                }),
+              );
+            } else if (FILE_MODIFY_TOOLS.has(name)) {
+              events.push(
+                makeEvent(rawId, idx, "file.modified", record, {
+                  payload: { path: block.input?.file_path },
+                }),
+              );
+            }
             toolIdx += 1;
           }
         }
       }
+      continue;
+    }
+
+    if (record.type === "attachment") {
+      // Context loads: each attachment record (e.g. deferred_tools_delta) is a
+      // context.loaded event (D6). `system` compaction markers are deferred.
+      events.push(
+        makeEvent(rawId, 0, "context.loaded", record, {
+          payload: { attachmentType: record.attachment?.type },
+        }),
+      );
+      continue;
     }
     // Other record types (mode, permission-mode, system, etc.) carry no
     // normalized events in V1 — but their raw records are still preserved.
@@ -218,6 +302,7 @@ export function parseClaudeCodeSession(
  */
 export const claudeCodeConnector: Connector = {
   id: CLAUDE_CODE_CONNECTOR,
+  captureMode: "tail",
   fidelity: {
     status: "stable",
     captureMethod: "tail-jsonl",
@@ -225,7 +310,7 @@ export const claudeCodeConnector: Connector = {
     tokens: "exact",
     cost: "computed",
     knownGaps: [
-      "tool.call completion not yet correlated (M4)",
+      "file.referenced not emitted — no single reliable structured signal in the store (M5+)",
       "session.ended ts settles only when the file stops growing",
     ],
     testedVersions: [],

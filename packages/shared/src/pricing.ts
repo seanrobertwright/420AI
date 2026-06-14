@@ -26,6 +26,8 @@ export interface ModelPricing {
 }
 
 const ANTHROPIC_SOURCE = "https://www.anthropic.com/pricing";
+const OPENAI_SOURCE = "https://openai.com/api/pricing/";
+const GEMINI_SOURCE = "https://ai.google.dev/gemini-api/docs/pricing";
 const AS_OF = "2026-06-13";
 
 export const PRICING_CATALOG: Record<string, ModelPricing> = {
@@ -54,6 +56,37 @@ export const PRICING_CATALOG: Record<string, ModelPricing> = {
     cache_read: 0.1e-6,
     cache_write: 1.25e-6,
     sourceUrl: ANTHROPIC_SOURCE,
+    asOf: AS_OF,
+  },
+  // Codex CLI — OpenAI GPT-5.5: $5 / $30 per MTok; cached input $0.50/MTok.
+  // No separate cache-write tier — Codex maps cache_write to 0 tokens (M4 D1),
+  // so the cache_write rate (= input) is never actually multiplied by tokens.
+  "gpt-5.5": {
+    input: 5e-6,
+    output: 30e-6,
+    cache_read: 0.5e-6,
+    cache_write: 5e-6,
+    sourceUrl: OPENAI_SOURCE,
+    asOf: AS_OF,
+  },
+  // Codex CLI — OpenAI GPT-5.4 (older on-disk sessions): $2.50 / $15 per MTok;
+  // cached input $0.25/MTok (10% of input).
+  "gpt-5.4": {
+    input: 2.5e-6,
+    output: 15e-6,
+    cache_read: 0.25e-6,
+    cache_write: 2.5e-6,
+    sourceUrl: OPENAI_SOURCE,
+    asOf: AS_OF,
+  },
+  // Gemini CLI — Gemini 3 Flash (preview): $0.50 / $3.00 per MTok; cached $0.05/MTok.
+  // Gemini maps cache_write to 0 tokens (M4 D1) — cache_write rate (= input) unused.
+  "gemini-3-flash-preview": {
+    input: 0.5e-6,
+    output: 3e-6,
+    cache_read: 0.05e-6,
+    cache_write: 0.5e-6,
+    sourceUrl: GEMINI_SOURCE,
     asOf: AS_OF,
   },
 };
