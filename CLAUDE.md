@@ -66,6 +66,14 @@ Before any commit, `npm run repo-health` must pass. It is the enforced gate and 
 A pre-commit hook (`.githooks/pre-commit`, enabled via `git config core.hooksPath .githooks`) runs
 the fast subset (typecheck + NUL + artifact scans) automatically.
 
+**Integration tests self-skip without `DATABASE_URL_TEST` (which lives in gitignored `.env`), and a
+skipped layer still reports green — `skipped ≠ passed`.** A plain `repo-health` PASS does NOT prove the
+DB-backed layer ran. Before signing off ANY milestone that touches `@420ai/db` or `apps/ingest`, run
+`npm run db:up && npm run db:migrate` and then **`npm run repo-health -- --require-db`**, which FAILS if
+`DATABASE_URL_TEST` is unconfigured or if any `*.int.test.ts` self-skipped (it asserts the int tests
+actually ran, 0 skipped). This is the gap that hid the M5 `lastActivity` type bug through M5 sign-off —
+the int test asserting it could never have passed against a real DB, so the layer was never exercised.
+
 ## Tooling gotchas (Windows)
 
 - The **Bash tool is Git Bash (POSIX sh)**. For multi-line commit messages / PR bodies use a
@@ -77,3 +85,18 @@ the fast subset (typecheck + NUL + artifact scans) automatically.
   ever on your own unmerged feature branch).
 - `node:sqlite` is experimental in Node 24 and prints an `ExperimentalWarning` on import **by
   design** — do not suppress it in a way that breaks tests.
+
+## Drizzle / SQL gotchas (M6)
+
+- In a raw `sql` template a column's **`mode:"string"` parser does NOT apply** — `max(ts)` / `min(ts)` /
+  `date_trunc(...)` over a `mode:"string"` timestamptz come back as **strings**, not `Date`. Type the
+  `sql<...>` result as `string` (this exact mismatch was the latent M5 `projectEventSummary.lastActivity`
+  bug). node-postgres also returns `numeric` as a **string** (wrap in `Number(...)`) but `::int` as a JS
+  number — cast token/count sums `::int`, money `::numeric` + `Number()`.
+- **Inline closed-set SQL keywords** (e.g. `date_trunc` granularity `'day'|'week'`) as raw literals via
+  `sql.raw` from a guarded union — **never as a bound parameter**. A bound param makes Postgres treat the
+  SELECT and GROUP BY/ORDER BY expressions as distinct and reject the query
+  (`column ... must appear in the GROUP BY clause`).
+- A `GROUP BY <col>` over the full event stream collapses rows with a NULL `<col>` into a phantom group;
+  restrict the WHERE to the relevant `event_type`s when a null-keyed all-zero row would be noise (e.g.
+  `usageByModel` filters to `usage.reported`/`cost.estimated`).

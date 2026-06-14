@@ -415,4 +415,204 @@ describe.skipIf(!TEST_URL)("ingest API (HTTP e2e via inject)", () => {
     );
     expect(remapped!.projectId).toBe(newProjectId);
   });
+
+  // --- M6 deterministic projection endpoints ---
+
+  const CLAUDE_KEY = "/home/a/420ai";
+
+  /** A batch of attributable events (tokens/cost/varied types) for CLAUDE_KEY. */
+  function projectionBatch(): IngestBatch {
+    const base = {
+      sourceConnector: "claude-code",
+      parserVersion: "2.0.0",
+      sessionId: "ms1",
+      projectPath: CLAUDE_KEY,
+      gitBranch: "main",
+    };
+    return {
+      records: [],
+      events: [
+        {
+          ...base,
+          fingerprint: "m6-u1",
+          rawRecordId: "r1",
+          eventIndex: 0,
+          eventType: "usage.reported",
+          model: "claude-opus-4-8",
+          ts: "2026-06-14T00:00:00.000Z",
+          tokens: { input: 100, output: 50, cache_read: 30, cache_write: 20, reasoning: 0, tool: 0, total: 200 },
+        },
+        {
+          ...base,
+          fingerprint: "m6-c1",
+          rawRecordId: "r2",
+          eventIndex: 1,
+          eventType: "cost.estimated",
+          model: "claude-opus-4-8",
+          ts: "2026-06-14T00:01:00.000Z",
+          cost: { usd: 0.5, confidence: "estimated-model-known" },
+        },
+        {
+          ...base,
+          fingerprint: "m6-msg",
+          rawRecordId: "r3",
+          eventIndex: 2,
+          eventType: "message.user",
+          ts: "2026-06-14T00:02:00.000Z",
+        },
+        {
+          ...base,
+          fingerprint: "m6-tf",
+          rawRecordId: "r4",
+          eventIndex: 3,
+          eventType: "tool.call.failed",
+          ts: "2026-06-14T00:03:00.000Z",
+        },
+      ],
+    };
+  }
+
+  async function discoverIngestAndGetProject(): Promise<{ token: string; projectId: string }> {
+    const { token } = await pair(await createCode());
+    await app.inject({
+      method: "POST",
+      url: "/v1/workspaces/discover",
+      headers: { authorization: `Bearer ${token}` },
+      payload: discoverPayload(),
+    });
+    const ing = await app.inject({
+      method: "POST",
+      url: "/v1/ingest",
+      headers: { authorization: `Bearer ${token}` },
+      payload: projectionBatch(),
+    });
+    expect(ing.statusCode).toBe(200);
+    const list = await app.inject({
+      method: "GET",
+      url: "/v1/projects",
+      headers: { authorization: `Bearer ${ADMIN}` },
+    });
+    const projectId = (list.json().projects as { id: string }[])[0]!.id;
+    return { token, projectId };
+  }
+
+  it("projects usage, sessions, session detail, and connector health", async () => {
+    const { projectId } = await discoverIngestAndGetProject();
+
+    const usage = await app.inject({
+      method: "GET",
+      url: `/v1/projects/${projectId}/usage`,
+      headers: { authorization: `Bearer ${ADMIN}` },
+    });
+    expect(usage.statusCode).toBe(200);
+    expect(usage.json().tokens.total).toBe(200);
+    expect(usage.json().costUsd).toBeCloseTo(0.5, 10);
+    expect(usage.json().costConfidence).toBe("estimated-model-known");
+
+    const sessions = await app.inject({
+      method: "GET",
+      url: `/v1/projects/${projectId}/sessions`,
+      headers: { authorization: `Bearer ${ADMIN}` },
+    });
+    expect(sessions.statusCode).toBe(200);
+    const sessionRows = sessions.json() as { sessionId: string; userMessages: number; toolsFailed: number }[];
+    expect(sessionRows).toHaveLength(1);
+    expect(sessionRows[0]!.sessionId).toBe("ms1");
+    expect(sessionRows[0]!.userMessages).toBe(1);
+    expect(sessionRows[0]!.toolsFailed).toBe(1);
+
+    const detail = await app.inject({
+      method: "GET",
+      url: "/v1/sessions/ms1",
+      headers: { authorization: `Bearer ${ADMIN}` },
+    });
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json().eventCount).toBe(4);
+    expect(detail.json().tokens.total).toBe(200);
+
+    const health = await app.inject({
+      method: "GET",
+      url: "/v1/connectors/health",
+      headers: { authorization: `Bearer ${ADMIN}` },
+    });
+    expect(health.statusCode).toBe(200);
+    const conns = health.json() as { sourceConnector: string; lastEventAt: string }[];
+    const claude = conns.find((c) => c.sourceConnector === "claude-code");
+    expect(claude!.lastEventAt).toContain("2026-06-14");
+
+    const git = await app.inject({
+      method: "GET",
+      url: `/v1/projects/${projectId}/git`,
+      headers: { authorization: `Bearer ${ADMIN}` },
+    });
+    expect(git.statusCode).toBe(200);
+    expect(git.json().branches).toEqual(["main"]);
+  });
+
+  it("an unknown :sessionId returns a zeroed projection (200, not 404)", async () => {
+    await discoverIngestAndGetProject();
+    const res = await app.inject({
+      method: "GET",
+      url: "/v1/sessions/no-such-session",
+      headers: { authorization: `Bearer ${ADMIN}` },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().eventCount).toBe(0);
+    expect(res.json().costConfidence).toBe("unknown");
+  });
+
+  it("re-ingesting the same batch does NOT double the projected totals (PRD §23)", async () => {
+    const { token, projectId } = await discoverIngestAndGetProject();
+    // second identical ingest → fingerprint upsert, no new rows
+    await app.inject({
+      method: "POST",
+      url: "/v1/ingest",
+      headers: { authorization: `Bearer ${token}` },
+      payload: projectionBatch(),
+    });
+    const usage = await app.inject({
+      method: "GET",
+      url: `/v1/projects/${projectId}/usage`,
+      headers: { authorization: `Bearer ${ADMIN}` },
+    });
+    expect(usage.json().tokens.total).toBe(200); // not 400
+    expect(usage.json().eventCount).toBe(4); // not 8
+  });
+
+  it("projection endpoints 401 without the admin token; non-uuid project id → 404", async () => {
+    const endpoints = [
+      "/v1/projects/00000000-0000-4000-8000-000000000000/usage",
+      "/v1/projects/00000000-0000-4000-8000-000000000000/sessions",
+      "/v1/projects/00000000-0000-4000-8000-000000000000/usage/by-model",
+      "/v1/projects/00000000-0000-4000-8000-000000000000/git",
+      "/v1/connectors/health",
+    ];
+    for (const url of endpoints) {
+      const res = await app.inject({ method: "GET", url });
+      expect(res.statusCode).toBe(401);
+    }
+    // non-uuid project id → 404 (not a Postgres cast 500), with admin auth
+    const notUuid = await app.inject({
+      method: "GET",
+      url: "/v1/projects/not-a-uuid/usage",
+      headers: { authorization: `Bearer ${ADMIN}` },
+    });
+    expect(notUuid.statusCode).toBe(404);
+  });
+
+  it("rejects an invalid ?bucket on usage/over-time with 400", async () => {
+    const { projectId } = await discoverIngestAndGetProject();
+    const ok = await app.inject({
+      method: "GET",
+      url: `/v1/projects/${projectId}/usage/over-time?bucket=day`,
+      headers: { authorization: `Bearer ${ADMIN}` },
+    });
+    expect(ok.statusCode).toBe(200);
+    const bad = await app.inject({
+      method: "GET",
+      url: `/v1/projects/${projectId}/usage/over-time?bucket=month`,
+      headers: { authorization: `Bearer ${ADMIN}` },
+    });
+    expect(bad.statusCode).toBe(400);
+  });
 });

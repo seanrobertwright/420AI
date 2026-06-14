@@ -136,11 +136,12 @@ export async function resolveWorkspaceId(
 export async function projectEventSummary(
   db: DbClient,
   projectId: string,
-): Promise<{ eventCount: number; lastActivity: Date | null }> {
+): Promise<{ eventCount: number; lastActivity: string | null }> {
   const [row] = await db
     .select({
       eventCount: sql<number>`count(${events.fingerprint})::int`,
-      lastActivity: sql<Date | null>`max(${events.ts})`,
+      // events.ts is mode:"string" — max(ts) comes back as an ISO string, not a Date.
+      lastActivity: sql<string | null>`max(${events.ts})`,
     })
     .from(events)
     .innerJoin(workspaceKeys, eq(events.projectPath, workspaceKeys.projectKey))

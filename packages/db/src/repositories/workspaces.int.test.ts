@@ -165,7 +165,7 @@ describe.skipIf(!TEST_URL)("workspaces + projects repositories (integration)", (
 
     const summary = await projectEventSummary(dbh.db, projectId);
     expect(summary.eventCount).toBe(2);
-    expect(summary.lastActivity?.toISOString()).toContain("2026-06-14");
+    expect(summary.lastActivity).toContain("2026-06-14");
   });
 
   it("a remote-less workspace's project is NOT unified with another folder", async () => {

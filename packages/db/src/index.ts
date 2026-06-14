@@ -40,3 +40,12 @@ export {
   projectEventSummary,
 } from "./repositories/workspaces.js";
 export type { WorkspaceRow } from "./repositories/workspaces.js";
+export {
+  usageTotals,
+  usageByModel,
+  usageOverTime,
+  sessionProjections,
+  sessionDetail,
+  connectorHealth,
+  projectGitMetadata,
+} from "./repositories/projections.js";

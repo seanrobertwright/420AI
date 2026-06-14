@@ -400,7 +400,7 @@ wire types/encryption split, or any connector's `parse`.
 
 ## Status
 
-Milestones 1–5 implemented. M1 (walking skeleton): `packages/shared` (token shape, event taxonomy,
+Milestones 1–6 implemented. M1 (walking skeleton): `packages/shared` (token shape, event taxonomy,
 fingerprint, pricing catalog, cost ladder) and `apps/collector` (Claude Code parser, SQLite store,
 Markdown report, CLI). M2 (archive deployment): `packages/db` (Drizzle Postgres schema + migrations,
 AES-256-GCM field encryption, ingest token + pairing repositories), `apps/ingest` (Fastify Ingest API
@@ -415,6 +415,12 @@ token/computed-cost fidelity, with no server or schema change. M5 (project / wor
 and the `resolveWorkspaceId`/`projectEventSummary` attribution join), `apps/ingest` (machine-authed
 `/v1/workspaces/discover` + admin project/workspace CRUD + `/summary`), and `apps/collector` (pure
 git-metadata + Gemini `.project_root` readers, per-connector `discoverRoots`, the discover engine, and
-the `discover`/`projects` commands) — headless; the mapping UI is deferred. Milestones 6–10 above
+the `discover`/`projects` commands) — headless; the mapping UI is deferred. M6 (event projections):
+the **Deterministic Metrics Pipeline** (PRD §16.1) — `packages/shared` (projection result shapes +
+the promoted `lowestConfidence` ladder), `packages/db` (a read-only `projections` repository
+extending the M5 attribution join: per-project/-model/-time usage, cost with lowest-confidence-wins,
+session shape, derived connector health, and git metadata), and `apps/ingest` (admin-gated GET
+endpoints over those projections). On-demand SQL over the event log — no migration, no capture
+change, never decrypts a payload; Markdown report artifacts are deferred to M7. Milestones 7–10 above
 thicken this
 skeleton.

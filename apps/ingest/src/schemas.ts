@@ -138,3 +138,14 @@ export const patchWorkspaceBodySchema = {
     projectId: { type: "string", minLength: 1 },
   },
 } as const;
+
+// --- M6 projection querystrings ---
+
+/** ?bucket=day|week for the usage-over-time projection (defaults to day in the handler). */
+export const usageOverTimeQuerySchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    bucket: { type: "string", enum: ["day", "week"] },
+  },
+} as const;
