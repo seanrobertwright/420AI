@@ -26,3 +26,20 @@ export async function touchLastSeen(db: DbClient, machineId: string): Promise<vo
     .set({ lastSeenAt: new Date() })
     .where(eq(machines.id, machineId));
 }
+
+/**
+ * Resolve the owning user for an authenticated machine (M5 discovery is machine-
+ * authed but writes user-scoped workspaces/projects). Returns undefined for an
+ * unknown machine id.
+ */
+export async function getMachineUserId(
+  db: DbClient,
+  machineId: string,
+): Promise<string | undefined> {
+  const [row] = await db
+    .select({ userId: machines.userId })
+    .from(machines)
+    .where(eq(machines.id, machineId))
+    .limit(1);
+  return row?.userId;
+}

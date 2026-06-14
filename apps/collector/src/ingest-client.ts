@@ -1,4 +1,11 @@
-import type { PairRequest, PairResponse, IngestBatch, IngestResponse } from "@420ai/shared";
+import type {
+  PairRequest,
+  PairResponse,
+  IngestBatch,
+  IngestResponse,
+  DiscoverRequest,
+  DiscoverResponse,
+} from "@420ai/shared";
 
 /**
  * Thin ingest API client over Node 24's global fetch (no runtime dependency).
@@ -61,4 +68,49 @@ export async function postIngest(
   });
   await expectOk(res, "ingest");
   return (await res.json()) as IngestResponse;
+}
+
+/**
+ * POST discovered workspaces to the archive (M5). Machine-authed, like ingest;
+ * the server upserts workspaces + auto-creates projects and returns the mappings.
+ * Reuses the same fetch + bearer + expectOk shape as `postIngest`.
+ */
+export async function postDiscover(
+  baseUrl: string,
+  token: string,
+  req: DiscoverRequest,
+): Promise<DiscoverResponse> {
+  const res = await fetch(`${trimUrl(baseUrl)}/v1/workspaces/discover`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(req),
+  });
+  await expectOk(res, "discover");
+  return (await res.json()) as DiscoverResponse;
+}
+
+/** A project as listed by the admin `GET /v1/projects` endpoint. */
+export interface ProjectListItem {
+  id: string;
+  name: string;
+  gitRemote: string | null;
+}
+
+/**
+ * List projects from the archive (M5). ADMIN-authed (unlike discover, which uses
+ * the machine token) — pass the admin token. Reuses the bearer + expectOk shape.
+ */
+export async function getProjects(
+  baseUrl: string,
+  token: string,
+): Promise<{ projects: ProjectListItem[] }> {
+  const res = await fetch(`${trimUrl(baseUrl)}/v1/projects`, {
+    method: "GET",
+    headers: { authorization: `Bearer ${token}` },
+  });
+  await expectOk(res, "projects");
+  return (await res.json()) as { projects: ProjectListItem[] };
 }

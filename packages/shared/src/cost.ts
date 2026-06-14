@@ -26,6 +26,28 @@ export interface CostResult {
 }
 
 /**
+ * Cost-confidence ladder, best → worst. The lowest-confidence label in a mixed
+ * aggregate wins — an aggregate is only as trustworthy as its weakest component
+ * (PRD §13.3). Shared by the M1 session report and the M6 server projections so
+ * both reduce confidence identically.
+ */
+export const CONFIDENCE_ORDER: CostConfidence[] = [
+  "exact",
+  "estimated-model-known",
+  "estimated-model-unknown",
+  "subscription-amortized",
+  "unknown",
+];
+
+/** Reduce a set of confidence labels to the lowest (worst) one. Empty → "unknown". */
+export function lowestConfidence(labels: CostConfidence[]): CostConfidence {
+  if (labels.length === 0) return "unknown";
+  return labels.reduce((worst, c) =>
+    CONFIDENCE_ORDER.indexOf(c) > CONFIDENCE_ORDER.indexOf(worst) ? c : worst,
+  );
+}
+
+/**
  * Compute cost from tokens × catalog pricing (PRD §13.1).
  *
  * - model known in catalog  → usd = Σ(tokens_subtype × rate), "estimated-model-known"

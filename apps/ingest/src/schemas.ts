@@ -85,3 +85,98 @@ export const ingestBodySchema = {
     events: { type: "array", items: eventSchema },
   },
 } as const;
+
+// --- M5 discovery / project mapping bodies ---
+
+const discoveredWorkspaceSchema = {
+  type: "object",
+  required: ["sourceConnector", "projectKey", "rootPath"],
+  additionalProperties: false,
+  properties: {
+    sourceConnector: { type: "string", minLength: 1 },
+    projectKey: { type: "string", minLength: 1 },
+    rootPath: { type: "string", minLength: 1 },
+    gitRemote: { type: "string", minLength: 1 },
+    gitBranch: { type: "string", minLength: 1 },
+    sessionCount: { type: "integer", minimum: 0 },
+  },
+} as const;
+
+export const discoverBodySchema = {
+  type: "object",
+  required: ["workspaces"],
+  additionalProperties: false,
+  properties: {
+    workspaces: { type: "array", items: discoveredWorkspaceSchema },
+  },
+} as const;
+
+export const createProjectBodySchema = {
+  type: "object",
+  required: ["name"],
+  additionalProperties: false,
+  properties: {
+    name: { type: "string", minLength: 1 },
+    gitRemote: { type: "string", minLength: 1 },
+  },
+} as const;
+
+export const patchProjectBodySchema = {
+  type: "object",
+  required: ["name"],
+  additionalProperties: false,
+  properties: {
+    name: { type: "string", minLength: 1 },
+  },
+} as const;
+
+export const patchWorkspaceBodySchema = {
+  type: "object",
+  required: ["projectId"],
+  additionalProperties: false,
+  properties: {
+    projectId: { type: "string", minLength: 1 },
+  },
+} as const;
+
+// --- M6 projection querystrings ---
+
+/** ?bucket=day|week for the usage-over-time projection (defaults to day in the handler). */
+export const usageOverTimeQuerySchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    bucket: { type: "string", enum: ["day", "week"] },
+  },
+} as const;
+
+// --- M7 report generation bodies + history querystring ---
+
+/** POST body for a project cost report — `type` defaults to the only project type; `bucket` defaults day. */
+export const generateProjectReportBodySchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    type: { type: "string", enum: ["project.cost_over_time"] },
+    bucket: { type: "string", enum: ["day", "week"] },
+  },
+} as const;
+
+/** POST body for a session autopsy — `type` defaults to the only session type. */
+export const generateSessionReportBodySchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    type: { type: "string", enum: ["session.autopsy"] },
+  },
+} as const;
+
+/** ?type=&scopeId= for the report history list (both optional filters). */
+export const listReportsQuerySchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    type: { type: "string" },
+    scopeId: { type: "string" },
+  },
+} as const;

@@ -1,29 +1,10 @@
 import {
   addTokens,
+  lowestConfidence,
   zeroTokens,
   type CostConfidence,
   type NormalizedEvent,
 } from "@420ai/shared";
-
-/**
- * Cost-confidence ladder ordered best → worst. When a session mixes confidences
- * (e.g. one known model + one unknown), the lowest-confidence label wins — an
- * aggregate is only as trustworthy as its weakest component.
- */
-const CONFIDENCE_ORDER: CostConfidence[] = [
-  "exact",
-  "estimated-model-known",
-  "estimated-model-unknown",
-  "subscription-amortized",
-  "unknown",
-];
-
-function lowestConfidence(labels: CostConfidence[]): CostConfidence {
-  if (labels.length === 0) return "unknown";
-  return labels.reduce((worst, c) =>
-    CONFIDENCE_ORDER.indexOf(c) > CONFIDENCE_ORDER.indexOf(worst) ? c : worst,
-  );
-}
 
 function fmtUsd(usd: number): string {
   // 6 decimals: sessions are cheap; 2 decimals reads as "$0.00".

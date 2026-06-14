@@ -1,3 +1,4 @@
+import { glob } from "node:fs/promises";
 import { join } from "node:path";
 import {
   eventFingerprint,
@@ -8,8 +9,10 @@ import {
   type NormalizedEvent,
   type NormalizedTokens,
   type RawSourceRecord,
+  type RootHint,
 } from "@420ai/shared";
 import type { Connector, ParseResult } from "./connector.js";
+import { scanLines } from "../discovery/read-head.js";
 
 /** Connector source id — used in fingerprints and stamped on every record/event. */
 export const CLAUDE_CODE_CONNECTOR = "claude-code";
@@ -295,6 +298,60 @@ export function parseClaudeCodeSession(
 }
 
 /**
+ * Read the FIRST `cwd` (+ gitBranch) from a Claude session file (M5 discovery,
+ * D2). The cwd is on the session's opening record(s); we stop at the first hit
+ * rather than full-parsing — discovery is a cheap metadata sweep. The returned
+ * `cwd` is the RAW verbatim string the parser stamps on `event.projectPath`, so
+ * the discovery key matches the capture key byte-for-byte (the join invariant).
+ */
+function firstClaudeCwd(filePath: string): { cwd: string; gitBranch?: string } | undefined {
+  return scanLines(filePath, (line) => {
+    if (line.trim() === "") return undefined;
+    let record: ClaudeRecord;
+    try {
+      record = JSON.parse(line) as ClaudeRecord;
+    } catch {
+      return undefined;
+    }
+    if (typeof record.cwd === "string" && record.cwd !== "") {
+      return { cwd: record.cwd, gitBranch: record.gitBranch };
+    }
+    return undefined;
+  });
+}
+
+/**
+ * Enumerate distinct Claude project roots from the `~/.claude/projects` session
+ * files, deduped by `cwd` (== the real path == `event.projectPath`). M5 discovery.
+ */
+export async function discoverClaudeRoots(home: string): Promise<RootHint[]> {
+  const byCwd = new Map<string, RootHint>();
+  for (const pattern of claudeWatchGlobs(home)) {
+    for await (const match of glob(pattern.replace(/\\/g, "/"))) {
+      const meta = firstClaudeCwd(String(match));
+      if (!meta) continue;
+      const existing = byCwd.get(meta.cwd);
+      if (existing) {
+        existing.sessionCount = (existing.sessionCount ?? 0) + 1;
+      } else {
+        byCwd.set(meta.cwd, {
+          projectKey: meta.cwd,
+          rootPath: meta.cwd,
+          gitBranch: meta.gitBranch,
+          sessionCount: 1,
+        });
+      }
+    }
+  }
+  return [...byCwd.values()];
+}
+
+/** Glob patterns for Claude session files (shared by watch + discovery). */
+function claudeWatchGlobs(home: string): string[] {
+  return [join(home, ".claude", "projects", "*", "*.jsonl")];
+}
+
+/**
  * The Claude Code connector — wraps the unchanged whole-file parser above in the
  * M3 `Connector` contract. Session files live at
  * `~/.claude/projects/<cwd-slug>/<uuid>.jsonl` (append-only JSONL, one per
@@ -315,6 +372,7 @@ export const claudeCodeConnector: Connector = {
     ],
     testedVersions: [],
   },
-  watchGlobs: (home) => [join(home, ".claude", "projects", "*", "*.jsonl")],
+  watchGlobs: (home) => claudeWatchGlobs(home),
   parse: (text) => parseClaudeCodeSession(text),
+  discoverRoots: (home) => discoverClaudeRoots(home),
 };
