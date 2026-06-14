@@ -10,10 +10,18 @@ import projectRoutes from "./routes/projects.js";
 import workspaceRoutes from "./routes/workspaces.js";
 import projectionRoutes from "./routes/projections.js";
 import reportRoutes from "./routes/reports.js";
+import interpretationRoutes from "./routes/interpretations.js";
+import { AnalysisProviderError, type AnalysisProvider } from "./analysis/provider.js";
+
+const DEFAULT_ANALYSIS_MAX_OUTPUT_TOKENS = 4096;
 
 export interface BuildAppOptions {
   db: Db;
   adminToken: string;
+  /** M8 injected analysis provider (real client in server.ts; deterministic stub in tests). */
+  analysisProvider: AnalysisProvider;
+  /** M8 resolved max output tokens for an interpretation call (default 4096). */
+  analysisMaxOutputTokens?: number;
   logger?: boolean;
 }
 
@@ -30,6 +38,11 @@ export function buildApp(opts: BuildAppOptions): FastifyInstance {
 
   app.decorate("db", opts.db);
   app.decorate("adminToken", opts.adminToken);
+  app.decorate("analysisProvider", opts.analysisProvider);
+  app.decorate(
+    "analysisMaxOutputTokens",
+    opts.analysisMaxOutputTokens ?? DEFAULT_ANALYSIS_MAX_OUTPUT_TOKENS,
+  );
 
   app.register(authPlugin);
   app.register(healthRoutes);
@@ -40,11 +53,19 @@ export function buildApp(opts: BuildAppOptions): FastifyInstance {
   app.register(workspaceRoutes);
   app.register(projectionRoutes);
   app.register(reportRoutes);
+  app.register(interpretationRoutes);
 
   // Map known failures to clean status codes; never leak internals on a 500.
   app.setErrorHandler((err: FastifyError, request, reply) => {
     if (err instanceof PairingError) {
       return reply.code(410).send({ error: err.message });
+    }
+    // Provider failures (non-200/timeout/parse → 502; not-configured → 503). Placed
+    // BEFORE the status>=500 masking branch, which would otherwise hide the message.
+    if (err instanceof AnalysisProviderError) {
+      return reply
+        .code(err.kind === "not_configured" ? 503 : 502)
+        .send({ error: err.message });
     }
     if (err.validation) {
       return reply.code(400).send({ error: err.message });

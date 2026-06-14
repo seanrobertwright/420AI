@@ -171,6 +171,26 @@ export const generateSessionReportBodySchema = {
   },
 } as const;
 
+// --- M8 AI interpretation generation bodies (fetch/list reuse listReportsQuerySchema) ---
+
+/** POST body for a session AI interpretation — `type` defaults to the only session AI type. */
+export const generateSessionInterpretationBodySchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    type: { type: "string", enum: ["session.ai_interpretation"] },
+  },
+} as const;
+
+/** POST body for a project AI interpretation — `type` defaults to the only project AI type. */
+export const generateProjectInterpretationBodySchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    type: { type: "string", enum: ["project.ai_interpretation"] },
+  },
+} as const;
+
 /** ?type=&scopeId= for the report history list (both optional filters). */
 export const listReportsQuerySchema = {
   type: "object",

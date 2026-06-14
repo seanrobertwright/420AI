@@ -17,8 +17,16 @@ import type {
  * dependency-free: type-only imports, no I/O, no `new Date()`.
  */
 
-/** Dotted-lowercase per the EventType naming convention (events.ts). */
-export type ReportType = "project.cost_over_time" | "session.autopsy";
+/**
+ * Dotted-lowercase per the EventType naming convention (events.ts). The two
+ * `*.ai_interpretation` members are the M8 AI artifacts (PRD §16.2); they reuse the
+ * SAME `report_artifacts` store as the M7 deterministic reports (D2 — no migration).
+ */
+export type ReportType =
+  | "project.cost_over_time"
+  | "session.autopsy"
+  | "session.ai_interpretation"
+  | "project.ai_interpretation";
 
 /**
  * Renderer identity stamped on every artifact for replay/versioning (PRD §23).

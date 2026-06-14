@@ -4,9 +4,26 @@ import type { FastifyInstance } from "fastify";
 import { createDb } from "@420ai/db";
 import type { IngestBatch } from "@420ai/shared";
 import { buildApp } from "./app.js";
+import { AnalysisProviderError, type AnalysisProvider, type AnalysisRequest } from "./analysis/provider.js";
 
 const TEST_URL = process.env.DATABASE_URL_TEST;
 const ADMIN = "test-admin";
+
+// --- M8 deterministic stub analysis provider (the live call never touches tests) ---
+const STUB_MARKDOWN = "## Summary\nstub findings\n```mermaid\ngraph TD; A-->B;\n```";
+let providerMode: "ok" | "throw" = "ok";
+let lastReq: AnalysisRequest | null = null;
+let interpretCalls = 0;
+const stubProvider: AnalysisProvider = {
+  async interpret(req: AnalysisRequest) {
+    interpretCalls++;
+    lastReq = req;
+    if (providerMode === "throw") {
+      throw new AnalysisProviderError("provider is down", "unavailable");
+    }
+    return { markdown: STUB_MARKDOWN, model: "stub-model", usage: { inputTokens: 5, outputTokens: 7 } };
+  },
+};
 
 const BATCH: IngestBatch = {
   records: [
@@ -33,7 +50,7 @@ describe.skipIf(!TEST_URL)("ingest API (HTTP e2e via inject)", () => {
 
   beforeAll(async () => {
     dbh = createDb(TEST_URL!);
-    app = buildApp({ db: dbh.db, adminToken: ADMIN, logger: false });
+    app = buildApp({ db: dbh.db, adminToken: ADMIN, analysisProvider: stubProvider, logger: false });
     await app.ready();
   });
 
@@ -756,5 +773,195 @@ describe.skipIf(!TEST_URL)("ingest API (HTTP e2e via inject)", () => {
       payload: { type: "not.a.report" },
     });
     expect(badType.statusCode).toBe(400);
+  });
+
+  // --- M8 AI interpretation generation (with an injected stub provider) ---
+
+  const AI_SESSION = "ai-s1";
+  const AI_SECRET = "sk-ant-api03-INTEGRATIONTESTKEY0123456789";
+
+  /** A session with user/assistant message events + raw records (one carries a secret). */
+  function aiBatch(): IngestBatch {
+    return {
+      records: [
+        {
+          sourceConnector: "claude-code",
+          sessionId: AI_SESSION,
+          sourceRecordId: "ar1",
+          payload: JSON.stringify({ role: "user", text: `please use ${AI_SECRET} to call the API` }),
+        },
+        {
+          sourceConnector: "claude-code",
+          sessionId: AI_SESSION,
+          sourceRecordId: "ar2",
+          payload: JSON.stringify({ role: "assistant", text: "sure, here is a plan" }),
+        },
+      ],
+      events: [
+        {
+          fingerprint: "ai-u",
+          sourceConnector: "claude-code",
+          parserVersion: "1.0.0",
+          rawRecordId: "ar1",
+          eventIndex: 0,
+          eventType: "message.user",
+          sessionId: AI_SESSION,
+          ts: "2026-06-14T00:00:00.000Z",
+        },
+        {
+          fingerprint: "ai-a",
+          sourceConnector: "claude-code",
+          parserVersion: "1.0.0",
+          rawRecordId: "ar2",
+          eventIndex: 1,
+          eventType: "message.assistant",
+          sessionId: AI_SESSION,
+          ts: "2026-06-14T00:01:00.000Z",
+        },
+      ],
+    };
+  }
+
+  async function ingestAiSession(): Promise<void> {
+    const { token } = await pair(await createCode());
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/ingest",
+      headers: { authorization: `Bearer ${token}` },
+      payload: aiBatch(),
+    });
+    expect(res.statusCode).toBe(200);
+  }
+
+  it("generates a session interpretation: redacts before send, stores findings, bumps version", async () => {
+    providerMode = "ok";
+    lastReq = null;
+    await ingestAiSession();
+
+    const first = await app.inject({
+      method: "POST",
+      url: `/v1/sessions/${AI_SESSION}/interpretations`,
+      headers: { authorization: `Bearer ${ADMIN}`, "content-type": "application/json" },
+      payload: {},
+    });
+    expect(first.statusCode).toBe(201);
+    const row = first.json() as {
+      id: string;
+      version: number;
+      reportType: string;
+      scopeId: string;
+      markdown: string;
+      metrics: { redactionFindings: { kind: string }[]; model: string };
+    };
+    expect(row.version).toBe(1);
+    expect(row.reportType).toBe("session.ai_interpretation");
+    expect(row.scopeId).toBe(AI_SESSION);
+    expect(row.markdown).toBe(STUB_MARKDOWN);
+    expect(row.metrics.model).toBe("stub-model");
+    // The secret was masked BEFORE the provider call (§18) and recorded as metadata.
+    expect(row.metrics.redactionFindings.map((f) => f.kind)).toContain("anthropic_key");
+    expect(lastReq!.user).toContain("[REDACTED:anthropic_key]");
+    expect(lastReq!.user).not.toContain(AI_SECRET);
+
+    // Regenerate → version 2, prior retained.
+    const second = await app.inject({
+      method: "POST",
+      url: `/v1/sessions/${AI_SESSION}/interpretations`,
+      headers: { authorization: `Bearer ${ADMIN}`, "content-type": "application/json" },
+      payload: {},
+    });
+    expect((second.json() as { version: number }).version).toBe(2);
+
+    // Fetch + list reuse the M7 endpoints.
+    const fetched = await app.inject({
+      method: "GET",
+      url: `/v1/reports/${row.id}`,
+      headers: { authorization: `Bearer ${ADMIN}` },
+    });
+    expect(fetched.statusCode).toBe(200);
+    const list = await app.inject({
+      method: "GET",
+      url: `/v1/reports?type=session.ai_interpretation&scopeId=${AI_SESSION}`,
+      headers: { authorization: `Bearer ${ADMIN}` },
+    });
+    expect((list.json() as unknown[]).length).toBe(2);
+  });
+
+  it("generates a project interpretation (metrics-only, no transcript)", async () => {
+    providerMode = "ok";
+    const { projectId } = await discoverIngestAndGetProject();
+    const res = await app.inject({
+      method: "POST",
+      url: `/v1/projects/${projectId}/interpretations`,
+      headers: { authorization: `Bearer ${ADMIN}`, "content-type": "application/json" },
+      payload: {},
+    });
+    expect(res.statusCode).toBe(201);
+    const row = res.json() as { reportType: string; scopeId: string };
+    expect(row.reportType).toBe("project.ai_interpretation");
+    expect(row.scopeId).toBe(projectId);
+  });
+
+  it("empty/unknown scope → 404 and the provider is NOT called (D8)", async () => {
+    providerMode = "ok";
+    const before = interpretCalls;
+
+    // Unknown session (no events) → 404, no provider call.
+    const noSession = await app.inject({
+      method: "POST",
+      url: "/v1/sessions/no-such-session/interpretations",
+      headers: { authorization: `Bearer ${ADMIN}`, "content-type": "application/json" },
+      payload: {},
+    });
+    expect(noSession.statusCode).toBe(404);
+
+    // Non-uuid project id → 404.
+    const badProject = await app.inject({
+      method: "POST",
+      url: "/v1/projects/not-a-uuid/interpretations",
+      headers: { authorization: `Bearer ${ADMIN}`, "content-type": "application/json" },
+      payload: {},
+    });
+    expect(badProject.statusCode).toBe(404);
+
+    // Well-formed but non-existent project uuid → 404 (existence guard, no FK 500).
+    const missingProject = await app.inject({
+      method: "POST",
+      url: "/v1/projects/00000000-0000-4000-8000-000000000000/interpretations",
+      headers: { authorization: `Bearer ${ADMIN}`, "content-type": "application/json" },
+      payload: {},
+    });
+    expect(missingProject.statusCode).toBe(404);
+
+    expect(interpretCalls).toBe(before); // no billable provider call escaped
+  });
+
+  it("a provider failure maps to a clean 502 (not a leaked 500)", async () => {
+    await ingestAiSession();
+    providerMode = "throw";
+    const res = await app.inject({
+      method: "POST",
+      url: `/v1/sessions/${AI_SESSION}/interpretations`,
+      headers: { authorization: `Bearer ${ADMIN}`, "content-type": "application/json" },
+      payload: {},
+    });
+    expect(res.statusCode).toBe(502);
+    expect(res.json().error).toContain("provider is down");
+    providerMode = "ok";
+  });
+
+  it("interpretation endpoints 401 without the admin token", async () => {
+    const postSession = await app.inject({
+      method: "POST",
+      url: `/v1/sessions/${AI_SESSION}/interpretations`,
+      payload: {},
+    });
+    expect(postSession.statusCode).toBe(401);
+    const postProject = await app.inject({
+      method: "POST",
+      url: "/v1/projects/00000000-0000-4000-8000-000000000000/interpretations",
+      payload: {},
+    });
+    expect(postProject.statusCode).toBe(401);
   });
 });
