@@ -10,6 +10,7 @@ export {
   projects,
   workspaces,
   workspaceKeys,
+  reportArtifacts,
 } from "./schema.js";
 export { createDb } from "./client.js";
 export type { Db, Tx, DbClient } from "./client.js";
@@ -49,3 +50,9 @@ export {
   connectorHealth,
   projectGitMetadata,
 } from "./repositories/projections.js";
+export {
+  insertReportArtifact,
+  getReportArtifact,
+  listReportArtifacts,
+} from "./repositories/reports.js";
+export type { ReportArtifactRow } from "./repositories/reports.js";

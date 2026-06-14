@@ -208,3 +208,46 @@ export const workspaceKeys = pgTable(
     index("workspace_keys_by_workspace").on(t.workspaceId),
   ],
 );
+
+/**
+ * M7 Reporting Foundation (PRD §15, §16.1, §23). A durable, versioned Markdown
+ * report artifact rendered from the M6 deterministic projections. Regenerating a
+ * report for the same (user, report_type, scope) appends a NEW row with
+ * `version = max(version)+1` — prior artifacts are retained (the §23 history).
+ *
+ * PLAINTEXT storage (D3 / PRD §18.1): the rendered `markdown` + the `metrics`
+ * snapshot contain only derived metrics (counts/tokens/cost/model/paths/
+ * timestamps) — none of the §18.1 encrypt-list — so there are NO `payload_*`
+ * columns; both are stored as plaintext. The artifact row IS the record of a
+ * generated report (NOT a `report.generated` event — Scope Decision 2).
+ */
+export const reportArtifacts = pgTable(
+  "report_artifacts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
+    // Project-scoped reports set project_id; session-scoped reports leave it null.
+    projectId: uuid("project_id").references(() => projects.id),
+    reportType: text("report_type").notNull(), // ReportType ("project.cost_over_time" | "session.autopsy")
+    scopeKind: text("scope_kind").notNull(), // "project" | "session"
+    scopeId: text("scope_id").notNull(), // project uuid (as text) OR connector session_id (text)
+    version: integer("version").notNull(), // 1-based; bumps per (user, report_type, scope_id)
+    reportVersion: text("report_version").notNull(), // REPORT_VERSION (renderer identity, PRD §23)
+    params: jsonb("params"), // generation params, e.g. {bucket:"day"} (reproducibility)
+    metrics: jsonb("metrics").notNull(), // snapshot of the projection JSON rendered (replay/compare seam)
+    markdown: text("markdown").notNull(), // the rendered report (plaintext — derived metrics only)
+    generatedAt: timestamp("generated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // History lookup + the version-bump backstop (one row per (user, type, scope, version)).
+    uniqueIndex("report_artifacts_scope_version").on(
+      t.userId,
+      t.reportType,
+      t.scopeId,
+      t.version,
+    ),
+    index("report_artifacts_by_scope").on(t.userId, t.reportType, t.scopeId),
+  ],
+);

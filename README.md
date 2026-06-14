@@ -400,7 +400,7 @@ wire types/encryption split, or any connector's `parse`.
 
 ## Status
 
-Milestones 1–6 implemented. M1 (walking skeleton): `packages/shared` (token shape, event taxonomy,
+Milestones 1–7 implemented. M1 (walking skeleton): `packages/shared` (token shape, event taxonomy,
 fingerprint, pricing catalog, cost ladder) and `apps/collector` (Claude Code parser, SQLite store,
 Markdown report, CLI). M2 (archive deployment): `packages/db` (Drizzle Postgres schema + migrations,
 AES-256-GCM field encryption, ingest token + pairing repositories), `apps/ingest` (Fastify Ingest API
@@ -421,6 +421,11 @@ the promoted `lowestConfidence` ladder), `packages/db` (a read-only `projections
 extending the M5 attribution join: per-project/-model/-time usage, cost with lowest-confidence-wins,
 session shape, derived connector health, and git metadata), and `apps/ingest` (admin-gated GET
 endpoints over those projections). On-demand SQL over the event log — no migration, no capture
-change, never decrypts a payload; Markdown report artifacts are deferred to M7. Milestones 7–10 above
-thicken this
-skeleton.
+change, never decrypts a payload. M7 (reporting foundation): the durable, **versioned Markdown report
+artifacts** layer (PRD §15/§23) — `packages/shared` (pure `pie`/`xychart-beta` Markdown renderers for
+the two anchor report types: project cost-over-time + session metrics-autopsy), `packages/db` (the
+additive `report_artifacts` table + migration and a version-bumping CRUD repository), and `apps/ingest`
+(a generation orchestrator composing the M6 projections → renderer → store, plus admin-gated
+generate/fetch/list endpoints). Reports render from the M6 plaintext projections only — never decrypts;
+report comparison, AI interpretation, and the other five report types are deferred to M8+. Milestones
+7–10 above thicken this skeleton.

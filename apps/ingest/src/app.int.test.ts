@@ -44,7 +44,7 @@ describe.skipIf(!TEST_URL)("ingest API (HTTP e2e via inject)", () => {
 
   beforeEach(async () => {
     await dbh.db.execute(
-      sql`TRUNCATE workspace_keys, workspaces, projects, raw_source_records, events, ingest_tokens, pairing_codes, machines, users RESTART IDENTITY CASCADE`,
+      sql`TRUNCATE report_artifacts, workspace_keys, workspaces, projects, raw_source_records, events, ingest_tokens, pairing_codes, machines, users RESTART IDENTITY CASCADE`,
     );
   });
 
@@ -614,5 +614,147 @@ describe.skipIf(!TEST_URL)("ingest API (HTTP e2e via inject)", () => {
       headers: { authorization: `Bearer ${ADMIN}` },
     });
     expect(bad.statusCode).toBe(400);
+  });
+
+  // --- M7 report generation / fetch / version round-trip ---
+
+  it("generates a project cost report, bumps version on regenerate, fetches + lists", async () => {
+    const { projectId } = await discoverIngestAndGetProject();
+
+    const first = await app.inject({
+      method: "POST",
+      url: `/v1/projects/${projectId}/reports`,
+      headers: { authorization: `Bearer ${ADMIN}`, "content-type": "application/json" },
+      payload: { bucket: "day" },
+    });
+    expect(first.statusCode).toBe(201);
+    const firstRow = first.json() as {
+      id: string;
+      version: number;
+      reportType: string;
+      scopeId: string;
+      markdown: string;
+    };
+    expect(firstRow.version).toBe(1);
+    expect(firstRow.reportType).toBe("project.cost_over_time");
+    expect(firstRow.scopeId).toBe(projectId);
+    expect(firstRow.markdown).toContain("# Project Cost Report — 420AI");
+    expect(firstRow.markdown).toContain("- **Total tokens:** 200");
+    expect(firstRow.markdown).toContain("```mermaid");
+
+    // regenerate the same (type, scope) → version 2, prior retained
+    const second = await app.inject({
+      method: "POST",
+      url: `/v1/projects/${projectId}/reports`,
+      headers: { authorization: `Bearer ${ADMIN}`, "content-type": "application/json" },
+      payload: {},
+    });
+    expect(second.statusCode).toBe(201);
+    expect((second.json() as { version: number }).version).toBe(2);
+
+    // fetch the first by id → the stored row
+    const fetched = await app.inject({
+      method: "GET",
+      url: `/v1/reports/${firstRow.id}`,
+      headers: { authorization: `Bearer ${ADMIN}` },
+    });
+    expect(fetched.statusCode).toBe(200);
+    expect((fetched.json() as { id: string }).id).toBe(firstRow.id);
+
+    // history lists both, newest first
+    const list = await app.inject({
+      method: "GET",
+      url: `/v1/reports?scopeId=${projectId}`,
+      headers: { authorization: `Bearer ${ADMIN}` },
+    });
+    expect(list.statusCode).toBe(200);
+    const rows = list.json() as { version: number }[];
+    expect(rows).toHaveLength(2);
+    expect(rows[0]!.version).toBe(2); // newest first
+  });
+
+  it("generates a session autopsy report with the session counts", async () => {
+    await discoverIngestAndGetProject();
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/sessions/ms1/reports",
+      headers: { authorization: `Bearer ${ADMIN}`, "content-type": "application/json" },
+      payload: {},
+    });
+    expect(res.statusCode).toBe(201);
+    const row = res.json() as { version: number; scopeId: string; markdown: string };
+    expect(row.version).toBe(1);
+    expect(row.scopeId).toBe("ms1");
+    expect(row.markdown).toContain("# Session Autopsy — ms1");
+    expect(row.markdown).toContain("- **Events:** 4 (user: 1, assistant: 0, tool calls: 1)");
+    expect(row.markdown).toContain("- **Tool outcomes:** 0 completed, 1 failed");
+    expect(row.markdown).toContain("| 100 | 50 | 30 | 20 | 200 |");
+  });
+
+  it("report endpoints 401 without the admin token", async () => {
+    const { projectId } = await discoverIngestAndGetProject();
+    const postProject = await app.inject({
+      method: "POST",
+      url: `/v1/projects/${projectId}/reports`,
+      payload: {},
+    });
+    expect(postProject.statusCode).toBe(401);
+    const postSession = await app.inject({
+      method: "POST",
+      url: "/v1/sessions/ms1/reports",
+      payload: {},
+    });
+    expect(postSession.statusCode).toBe(401);
+    const getOne = await app.inject({ method: "GET", url: "/v1/reports/some-id" });
+    expect(getOne.statusCode).toBe(401);
+    const listAll = await app.inject({ method: "GET", url: "/v1/reports" });
+    expect(listAll.statusCode).toBe(401);
+  });
+
+  it("report guards: non-uuid project id → 404, unknown report id → 404, bad type → 400", async () => {
+    await discoverIngestAndGetProject();
+
+    // non-uuid project id on generate → 404 (not a Postgres cast 500)
+    const badProject = await app.inject({
+      method: "POST",
+      url: "/v1/projects/not-a-uuid/reports",
+      headers: { authorization: `Bearer ${ADMIN}`, "content-type": "application/json" },
+      payload: {},
+    });
+    expect(badProject.statusCode).toBe(404);
+
+    // well-formed but NON-EXISTENT project uuid → 404 (not an FK-violation 500)
+    const missingProject = await app.inject({
+      method: "POST",
+      url: "/v1/projects/00000000-0000-4000-8000-000000000000/reports",
+      headers: { authorization: `Bearer ${ADMIN}`, "content-type": "application/json" },
+      payload: {},
+    });
+    expect(missingProject.statusCode).toBe(404);
+
+    // unknown (well-formed) report id → 404
+    const unknownReport = await app.inject({
+      method: "GET",
+      url: "/v1/reports/00000000-0000-4000-8000-000000000000",
+      headers: { authorization: `Bearer ${ADMIN}` },
+    });
+    expect(unknownReport.statusCode).toBe(404);
+
+    // non-uuid report id → 404 (not a cast 500)
+    const badReportId = await app.inject({
+      method: "GET",
+      url: "/v1/reports/not-a-uuid",
+      headers: { authorization: `Bearer ${ADMIN}` },
+    });
+    expect(badReportId.statusCode).toBe(404);
+
+    // unknown report type in the body → 400 (schema enum), no row written
+    const badType = await app.inject({
+      method: "POST",
+      url: "/v1/sessions/ms1/reports",
+      headers: { authorization: `Bearer ${ADMIN}`, "content-type": "application/json" },
+      payload: { type: "not.a.report" },
+    });
+    expect(badType.statusCode).toBe(400);
   });
 });

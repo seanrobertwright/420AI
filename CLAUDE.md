@@ -50,6 +50,9 @@ prints. Daemons take an optional `logger` callback wired by the entrypoint.
 - `*.int.test.ts` import across app boundaries, so they are **excluded from `tsc -b`** (see
   `apps/collector/tsconfig.json`) and are type-stripped by vitest/esbuild instead.
 - Inject clocks/dependencies for determinism (e.g. `QueueStore(path, now)`, `syncOnce({ post })`).
+- **Workspaces have NO per-workspace `test` script** — only the root defines `test` (`vitest run`). For
+  a focused run use `npx vitest run <path>` from the repo root; `npm test -w <pkg>` fails with
+  `Missing script: "test"`.
 
 ## Validation is a GATE, not a list
 
@@ -86,7 +89,7 @@ the int test asserting it could never have passed against a real DB, so the laye
 - `node:sqlite` is experimental in Node 24 and prints an `ExperimentalWarning` on import **by
   design** — do not suppress it in a way that breaks tests.
 
-## Drizzle / SQL gotchas (M6)
+## Drizzle / SQL gotchas (M6–M7)
 
 - In a raw `sql` template a column's **`mode:"string"` parser does NOT apply** — `max(ts)` / `min(ts)` /
   `date_trunc(...)` over a `mode:"string"` timestamptz come back as **strings**, not `Date`. Type the
@@ -100,3 +103,9 @@ the int test asserting it could never have passed against a real DB, so the laye
 - A `GROUP BY <col>` over the full event stream collapses rows with a NULL `<col>` into a phantom group;
   restrict the WHERE to the relevant `event_type`s when a null-keyed all-zero row would be noise (e.g.
   `usageByModel` filters to `usage.reported`/`cost.estimated`).
+- **A guard sufficient for a READ is insufficient for a WRITE that adds an FK.** The M6 projection reads
+  return 200-zeros for an unknown project uuid (`isUuid → 404` only screens *malformed* ids, never
+  inserts). An M7-style *write* whose row carries a FK (`report_artifacts.project_id → projects.id`)
+  turns a well-formed-but-nonexistent id into an **FK-violation 500** at insert. Guard write paths with an
+  **existence check** (e.g. `getProjectName(id)` undefined → 404), not just `isUuid`, to preserve the
+  repo-wide "unknown id → 404, never a DB-constraint/cast 500" invariant.

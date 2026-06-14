@@ -9,6 +9,7 @@ import ingestRoutes from "./routes/ingest.js";
 import projectRoutes from "./routes/projects.js";
 import workspaceRoutes from "./routes/workspaces.js";
 import projectionRoutes from "./routes/projections.js";
+import reportRoutes from "./routes/reports.js";
 
 export interface BuildAppOptions {
   db: Db;
@@ -38,6 +39,7 @@ export function buildApp(opts: BuildAppOptions): FastifyInstance {
   app.register(projectRoutes);
   app.register(workspaceRoutes);
   app.register(projectionRoutes);
+  app.register(reportRoutes);
 
   // Map known failures to clean status codes; never leak internals on a 500.
   app.setErrorHandler((err: FastifyError, request, reply) => {
