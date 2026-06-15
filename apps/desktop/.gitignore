@@ -1,0 +1,12 @@
+# Webview build output
+dist/
+
+# Rust / Tauri build output
+src-tauri/target/
+src-tauri/gen/
+
+# The SEA sidecar is BUILT by build-sea.mjs, never committed (88 MB).
+src-tauri/binaries/*.exe
+
+# Generated app icons (produced locally by `cargo tauri icon`).
+src-tauri/icons/

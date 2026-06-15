@@ -8,6 +8,7 @@ export * from "./discovery.js";
 export * from "./projections.js";
 export * from "./monitor.js";
 export * from "./alerts.js";
+export * from "./control-protocol.js";
 export * from "./reports.js";
 export * from "./redaction.js";
 export * from "./analysis.js";
