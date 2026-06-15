@@ -91,8 +91,9 @@ A Windows-first collector runs on each machine and captures AI Coding Tool data.
 - Background collector process or service.
 - Control surface for configuration and health. **V1 ships a headless Node/TypeScript
   collector (single language across collector + dashboard); the Tauri desktop/tray control
-  surface is deferred to a later iteration** to keep V1 single-language and remove Rust from
-  the critical path.
+  surface is planned as Milestone 11 (post-V1)** — a Tauri sidecar shell that bundles and
+  supervises this same headless collector — keeping V1 single-language and Rust off the
+  capture critical path (see §25).
 - Local durable queue for offline capture.
 - Connector runtime for built-in and config-only custom connectors.
 - Per-connector permission scopes.
@@ -167,7 +168,8 @@ real data once the first connector runs):
 ## 9. Technology Choices
 
 - **Collector (V1)**: headless Node/TypeScript service (single language with the dashboard).
-- **Desktop app**: Tauri — **deferred** to a later iteration as the collector's tray/control surface.
+- **Desktop app**: Tauri — **planned as Milestone 11 (post-V1)**: a sidecar shell + system tray
+  over the headless collector; webview UI uses **shadcn/ui + theGridCN** (shared with the dashboard).
 - **Collector target**: Windows first.
 - **Web dashboard**: Next.js.
 - **UI system**: shadcn/ui with theGridCN as the chosen visual layer. **Fallback:** plain
@@ -676,3 +678,30 @@ Requirements:
 8. AI interpretation: redacted report bundles and configurable analysis provider.
 9. Live Monitor: collector health, active sessions, backlog, connector failures.
 10. MVP hardening: exports, catalog signing, operational alerts, replay metadata.
+
+> **Milestones 1–10 constitute V1.** Milestone 11 below is the first **post-V1** milestone.
+
+### Post-V1 milestones
+
+11. **Tauri desktop / tray collector (post-V1).** A Windows desktop + system-tray control surface
+    for the existing collector. Feasibility validated by `docs/research/m11-tauri-sidecar-spike.md`.
+    - **Architecture — sidecar (decided):** a Tauri (Rust) shell + webview that bundles the headless
+      Node/TS collector (packaged via the built-in `node:sea`) as an `externalBin` sidecar and
+      supervises its lifecycle. The proven M3 capture core (queue, watchers, tailer, sync worker,
+      connector framework) is **reused unchanged**; Rust stays off the capture path. The **CLI
+      coexists** (headless/server/automation use).
+    - **UI:** webview built with **shadcn/ui + theGridCN** (the same visual layer as the dashboard).
+    - **Control-surface scope (first cut):**
+      (a) **Tray** — status indicator (running/paused/error) + start / pause / resume capture;
+      (b) **Connector management** — enable/disable, edit config, review/grant per-connector permission scopes;
+      (c) **Sync & health** — sync status, queue backlog, connector health, surfaced operational alerts;
+      (d) **Pairing & autostart** — GUI pairing (enter dashboard URL + pairing code, replacing the CLI `pair`) + run-on-login;
+      (e) **Settings** — manage **both** collector config **and** archive/ingest server config (env vars),
+      with secrets stored in the **OS keychain (Windows Credential Manager)**, never plaintext on disk.
+    - **Packaging:** local `tauri build` artifact only for this milestone; a signed installer +
+      auto-update are deferred (**revisit distribution later** — code-signing cert required then).
+    - **Design points to resolve in planning:** (1) the UI↔sidecar **control protocol** — bidirectional
+      control + live status, likely JSON-lines over the sidecar's stdio relayed to the webview via Rust
+      events (may warrant a small control-protocol spike); (2) whether the app also **supervises the
+      local server-stack lifecycle** (Docker archive + ingest API up/down) or only writes its
+      configuration. Both are open until the M11 plan.
