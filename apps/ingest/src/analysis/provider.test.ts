@@ -12,7 +12,6 @@ const anthropicCfg: AnalysisProviderConfig = {
   provider: "anthropic",
   apiKey: "test-key",
   model: "claude-sonnet-4-6",
-  maxOutputTokens: 100,
   timeoutMs: 1000,
 };
 
@@ -21,7 +20,6 @@ const openaiCfg: AnalysisProviderConfig = {
   apiKey: "test-key",
   model: "local-model",
   baseUrl: "http://localhost:11434/v1",
-  maxOutputTokens: 100,
   timeoutMs: 1000,
 };
 
