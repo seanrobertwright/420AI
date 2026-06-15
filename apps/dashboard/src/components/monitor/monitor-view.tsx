@@ -11,6 +11,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
+import { AlertsPanel } from "@/components/monitor/alerts-panel";
 
 /** Honest relative time (PRD §10.1.1) — computed from an ISO ts + an injected now (ms). */
 function formatAgo(iso: string | null, nowMs: number): string {
@@ -52,6 +53,9 @@ export function MonitorView({
 
   return (
     <div className="space-y-8">
+      {/* Operational alerts (M10) — the most urgent surface, ranked critical-first, at the top. */}
+      <AlertsPanel alerts={snapshot.alerts} nowMs={nowMs} />
+
       {/* Fleet summary — theGridCN DataCard widgets (self-contained 2D, build-verified, D10) */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <DataCard

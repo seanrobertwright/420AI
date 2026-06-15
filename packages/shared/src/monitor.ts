@@ -1,4 +1,5 @@
 import type { ConnectorHealthRow } from "./projections.js";
+import type { OperationalAlert } from "./alerts.js";
 
 /**
  * M9 Live Monitor view types + pure status derivation (PRD §8.4, §10.1.1, §20).
@@ -19,7 +20,7 @@ import type { ConnectorHealthRow } from "./projections.js";
 export type MonitorStatus = "online" | "stale" | "offline";
 
 /** Stamps the snapshot shape so a future dashboard can detect a derivation change (D11, PRD §23). */
-export const MONITOR_VERSION = "m9-monitor-v1";
+export const MONITOR_VERSION = "m10-monitor-v1";
 
 /** Tuned to the default 30 s heartbeat cadence (HEARTBEAT_INTERVAL_MS). */
 export const MONITOR_THRESHOLDS = {
@@ -60,6 +61,7 @@ export interface LiveMonitorSnapshot {
   machines: (MachineStatusRow & { status: MonitorStatus; backlogHigh: boolean })[];
   connectors: ConnectorHealthRow[]; // reused verbatim from projections.ts
   activeSessions: ActiveSessionRow[];
+  alerts: OperationalAlert[]; // M10 — derived from the above by deriveAlerts (alerts.ts)
 }
 
 /**
@@ -93,5 +95,5 @@ export const isBacklogHigh = (pending: number | null): boolean =>
  * empty shape is defined ONCE.
  */
 export function emptyMonitorSnapshot(generatedAt: string): LiveMonitorSnapshot {
-  return { monitorVersion: MONITOR_VERSION, generatedAt, machines: [], connectors: [], activeSessions: [] };
+  return { monitorVersion: MONITOR_VERSION, generatedAt, machines: [], connectors: [], activeSessions: [], alerts: [] };
 }

@@ -265,6 +265,10 @@ export async function connectorHealth(
       sourceConnector: events.sourceConnector,
       lastEventAt: sql<string | null>`max(${events.ts})`,
       eventCount: sql<number>`count(${events.fingerprint})::int`,
+      // Terminal calls only (completed+failed) — NOT `tool.call.%`, which would also count the
+      // `tool.call.started` every connector emits per call, ~doubling the denominator and halving
+      // the failure ratio that drives the M10 `connector.failing` alert (deriveAlerts in @420ai/shared).
+      toolCalls: sql<number>`count(*) filter (where ${events.eventType} in ('tool.call.completed', 'tool.call.failed'))::int`,
       toolsFailed: sql<number>`count(*) filter (where ${events.eventType} = 'tool.call.failed')::int`,
       parserVersions: sql<string[]>`coalesce(array_agg(distinct ${events.parserVersion}), '{}')`,
       models: sql<string[]>`coalesce(array_agg(distinct ${events.model}) filter (where ${events.model} is not null), '{}')`,
@@ -278,6 +282,7 @@ export async function connectorHealth(
     sourceConnector: r.sourceConnector,
     lastEventAt: r.lastEventAt ?? null,
     eventCount: r.eventCount,
+    toolCalls: r.toolCalls,
     toolsFailed: r.toolsFailed,
     parserVersions: r.parserVersions ?? [],
     models: r.models ?? [],

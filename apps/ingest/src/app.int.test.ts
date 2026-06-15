@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from "vitest";
 import { sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
-import { createDb } from "@420ai/db";
+import { createDb, recordHeartbeat } from "@420ai/db";
 import type { IngestBatch, LiveMonitorSnapshot } from "@420ai/shared";
 import { buildApp } from "./app.js";
 import { AnalysisProviderError, type AnalysisProvider, type AnalysisRequest } from "./analysis/provider.js";
@@ -1020,7 +1020,7 @@ describe.skipIf(!TEST_URL)("ingest API (HTTP e2e via inject)", () => {
     });
     expect(snap.statusCode).toBe(200);
     const body = snap.json() as LiveMonitorSnapshot;
-    expect(body.monitorVersion).toBe("m9-monitor-v1");
+    expect(body.monitorVersion).toBe("m10-monitor-v1");
     expect(body.machines).toHaveLength(1);
     const m = body.machines[0]!;
     expect(m.id).toBe(machineId);
@@ -1032,6 +1032,34 @@ describe.skipIf(!TEST_URL)("ingest API (HTTP e2e via inject)", () => {
     // the just-ingested session is active; connectors reuse connectorHealth
     expect(body.activeSessions.map((s) => s.sessionId)).toContain("m9-sess");
     expect(body.connectors.map((c) => c.sourceConnector)).toContain("claude-code");
+    // M10: alerts ride the snapshot — a fresh-heartbeat machine raises no liveness alert.
+    expect(Array.isArray(body.alerts)).toBe(true);
+    expect(body.alerts.some((a) => a.code === "collector.offline" && a.machineId === machineId)).toBe(false);
+  });
+
+  it("GET /v1/monitor: a machine with an old heartbeat raises a critical collector.offline alert (M10)", async () => {
+    const { machineId } = await pair(await createCode());
+    // Seed a heartbeat comfortably older than MONITOR_THRESHOLDS.offlineMs (5 min) via the injectable
+    // clock — deterministic, no sleeping. The route reads the real wall clock (D6), so this is offline.
+    const old = new Date(Date.now() - 10 * 60 * 1000);
+    await recordHeartbeat(dbh.db, machineId, {
+      queuePending: 0,
+      queueInflight: 0,
+      collectorVersion: "0.9.1",
+      now: old,
+    });
+
+    const snap = await app.inject({
+      method: "GET",
+      url: "/v1/monitor",
+      headers: { authorization: `Bearer ${ADMIN}` },
+    });
+    expect(snap.statusCode).toBe(200);
+    const body = snap.json() as LiveMonitorSnapshot;
+    expect(body.machines[0]!.status).toBe("offline");
+    const offline = body.alerts.find((a) => a.code === "collector.offline" && a.machineId === machineId);
+    expect(offline).toBeDefined();
+    expect(offline!.severity).toBe("critical");
   });
 
   it("GET /v1/monitor and POST /v1/heartbeat enforce their auth (401)", async () => {
@@ -1083,7 +1111,7 @@ describe.skipIf(!TEST_URL)("ingest API (HTTP e2e via inject)", () => {
     // each frame is a real LiveMonitorSnapshot
     const firstFrame = buf.split("\n\n").find((b) => b.startsWith("data: "))!;
     const parsed = JSON.parse(firstFrame.slice("data: ".length)) as LiveMonitorSnapshot;
-    expect(parsed.monitorVersion).toBe("m9-monitor-v1");
+    expect(parsed.monitorVersion).toBe("m10-monitor-v1");
 
     // disconnect → the server's `request.raw.on("close")` clears the interval (no leak).
     await reader.cancel();

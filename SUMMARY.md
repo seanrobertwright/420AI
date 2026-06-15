@@ -8,9 +8,15 @@
 
 ## 0. Status — 2026-06-15
 
-**V1 is ~80% built.** Milestones **1–8 are implemented and on `main`**; **M9 (Live Monitor) is
-in progress**; **M10 (hardening)** remains. **M11 (Tauri desktop/tray collector)** is the first
-*post-V1* milestone — planned and added to the PRD (§25) with a feasibility spike
+**V1 is ~90% built.** Milestones **1–9 are implemented and on `main`** (M9 Live Monitor merged via
+PR #12). **M10 (hardening)** is a *bundle* and is being built in slices: the **operational-alerts slice
+is done** — a **stateless derived projection** (`deriveAlerts` in `@420ai/shared`) folded into the M9
+Live Monitor snapshot (no new table, no migration, no long-lived dispatcher), surfaced as an Alerts
+panel on `/monitor`; the snapshot stamp bumped `m9-monitor-v1` → `m10-monitor-v1`. The remaining M10
+bundle items — **exports (§22), catalog signing (§10.4/§18), replay metadata (§23)**, and the richer
+**persisted alert engine** (firing history/ack + heartbeat time-series for "backlog growing") — still
+remain. **M11 (Tauri desktop/tray collector)** is the first *post-V1* milestone — planned and added to
+the PRD (§25) with a feasibility spike
 ([`docs/research/m11-tauri-sidecar-spike.md`](./docs/research/m11-tauri-sidecar-spike.md)) — not yet built.
 
 **CI gate:** a `repo-health` GitHub Actions check (repo-root `tsc -b` + NUL/stray scans + the full
@@ -93,7 +99,7 @@ flowchart TD
 6. ✅ Event projections: sessions, usage, cost, connector health, Git metadata.
 7. ✅ Reporting: deterministic metrics + durable, versioned Markdown report artifacts.
 8. ✅ AI interpretation: redaction engine + decrypt-for-render + configurable provider (Anthropic + OpenAI-compatible).
-9. 🔄 **Live Monitor** — in progress.
+9. ✅ Live Monitor: collector heartbeat → real-time monitor API + SSE → first Next.js dashboard (shadcn/theGridCN).
 10. ⬜ Hardening: exports, catalog signing, alerts, replay metadata.
 
 **Post-V1:**
@@ -177,8 +183,10 @@ tokens × catalog pricing).
 
 ## 6. Immediate next steps
 
-- [ ] **Finish M9 (Live Monitor)** — in progress.
 - [ ] **M10 (hardening)** — exports, catalog signing, operational alerts, replay metadata → completes V1.
+      It's a *bundle*, not one feature; scope the slice up front (operational alerts is the natural first
+      cut — M9 ships the `online`/`stale`/`offline` + `backlogHigh` states as its inputs). See the M10
+      forward-guidance in [`.agents/system-reviews/m7-m9-review.md`](./.agents/system-reviews/m7-m9-review.md).
 - [ ] **Resolve CI enforcement:** branch protection needs **GitHub Pro** (private repo). Until then, treat the
       `repo-health` check as advisory — **don't merge red**. (Alternative: make repo public, or gate the
       automated-merge step on the check.)

@@ -247,13 +247,33 @@ describe.skipIf(!TEST_URL)("projections repository (integration)", () => {
       projectPath: "unmapped-hash",
       ts: "2026-06-16T00:00:00.000Z",
     });
+    // A real connector emits a `tool.call.started` for EVERY call alongside its terminal event.
+    // toolCalls must EXCLUDE it (terminal-only denominator) so the failure ratio is honest — this
+    // started event must NOT bump toolCalls past the 2 terminal calls seeded above.
+    await dbh.db.insert(events).values({
+      fingerprint: "cc-started",
+      sourceConnector: "claude-code",
+      parserVersion: "2.0.0",
+      rawRecordId: "rstart",
+      eventIndex: 99,
+      eventType: "tool.call.started",
+      sessionId: SESSION,
+      machineId,
+      projectPath: PROJECT_KEY,
+      ts: "2026-06-14T00:09:00.000Z",
+    });
     const health = await connectorHealth(dbh.db, userId);
     const byConn = new Map(health.map((h) => [h.sourceConnector, h]));
     expect(byConn.get("claude-code")!.lastEventAt).toContain("2026-06-15");
+    // toolCalls is the count of TERMINAL tool calls (completed + failed) — the M10 failure-ratio
+    // denominator. The seeded tool.call.started above is deliberately excluded; toolsFailed is the
+    // failed subset (the numerator).
+    expect(byConn.get("claude-code")!.toolCalls).toBe(2); // completed + failed, NOT the started
     expect(byConn.get("claude-code")!.toolsFailed).toBe(1);
     expect(byConn.get("claude-code")!.parserVersions).toEqual(["2.0.0"]);
     // unattributed gemini event is still counted in health
     expect(byConn.get("gemini-cli")!.eventCount).toBe(1);
+    expect(byConn.get("gemini-cli")!.toolCalls).toBe(0); // a message.user event is not a tool call
     expect(byConn.get("gemini-cli")!.lastEventAt).toContain("2026-06-16");
   });
 
