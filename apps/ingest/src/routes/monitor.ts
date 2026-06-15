@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import {
   deriveMachineStatus,
+  deriveAlerts,
   isBacklogHigh,
   MONITOR_VERSION,
   emptyMonitorSnapshot,
@@ -37,7 +38,9 @@ async function buildSnapshot(db: DbClient, userId: string, now: Date): Promise<L
     connectorHealth(db, userId),
     activeSessions(db, userId, sinceIso),
   ]);
-  return {
+  // Assemble the derived-state snapshot first, then fold in alerts — deriveAlerts reads the
+  // already-derived machine status/backlogHigh + connector rows (no clock, no re-derivation, D3).
+  const built: LiveMonitorSnapshot = {
     monitorVersion: MONITOR_VERSION,
     generatedAt: now.toISOString(),
     machines: machines.map((m) => ({
@@ -47,7 +50,9 @@ async function buildSnapshot(db: DbClient, userId: string, now: Date): Promise<L
     })),
     connectors,
     activeSessions: sessions,
+    alerts: [],
   };
+  return { ...built, alerts: deriveAlerts(built) };
 }
 
 /**

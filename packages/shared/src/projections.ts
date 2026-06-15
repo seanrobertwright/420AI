@@ -61,6 +61,7 @@ export interface ConnectorHealthRow {
   sourceConnector: string;
   lastEventAt: string | null; // max(ts); "N seconds ago" is computed by the consumer
   eventCount: number;
+  toolCalls: number; // terminal tool calls (completed+failed) — the failure-ratio denominator (M10)
   toolsFailed: number;
   parserVersions: string[];
   models: string[];

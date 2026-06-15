@@ -7,6 +7,7 @@ export * from "./ingest.js";
 export * from "./discovery.js";
 export * from "./projections.js";
 export * from "./monitor.js";
+export * from "./alerts.js";
 export * from "./reports.js";
 export * from "./redaction.js";
 export * from "./analysis.js";
