@@ -6,6 +6,22 @@
 
 ---
 
+## 0. Status — 2026-06-15
+
+**V1 is ~80% built.** Milestones **1–8 are implemented and on `main`**; **M9 (Live Monitor) is
+in progress**; **M10 (hardening)** remains. **M11 (Tauri desktop/tray collector)** is the first
+*post-V1* milestone — planned and added to the PRD (§25) with a feasibility spike
+([`docs/research/m11-tauri-sidecar-spike.md`](./docs/research/m11-tauri-sidecar-spike.md)) — not yet built.
+
+**CI gate:** a `repo-health` GitHub Actions check (repo-root `tsc -b` + NUL/stray scans + the full
+vitest suite **including the Postgres integration layer**) runs on every PR to `main`
+(`.github/workflows/repo-health.yml`).
+⚠️ It is **not yet a hard *blocking* required check** — branch protection on a **private** repo needs
+**GitHub Pro**. Until that's resolved: **never merge a PR whose `repo-health` check is red.** (One red
+merge already slipped through — M8 / PR #7 merged with a typecheck error — and needed hotfix PR #8.)
+
+---
+
 ## 1. What we're building (one breath)
 
 A **self-hosted AI Coding Session Intelligence Platform**: it captures every AI coding-tool
@@ -68,16 +84,22 @@ flowchart TD
 
 ## 3. Build ORDER (PRD §25 milestones)
 
-1. Walking skeleton: **one connector (Claude Code) → ingest → store → one report.** No Tauri, no queue, no AI, no redaction.
-2. Archive deployment: Docker Supabase, migrations, ingest API, pairing flow.
-3. Collector foundation: durable queue, machine identity, ingest sync, connector framework.
-4. Thicken first connector to full fidelity, then add Codex + Gemini.
-5. Project/workspace mapping (repo discovery + mapping UI).
-6. Event projections: sessions, usage, cost, connector health, Git metadata.
-7. Reporting: deterministic metrics + Markdown report artifacts.
-8. AI interpretation: redacted report bundle + configurable provider.
-9. Live Monitor.
-10. Hardening: exports, catalog signing, alerts, replay metadata.
+**V1 (M1–M10):**
+1. ✅ Walking skeleton: **one connector (Claude Code) → ingest → store → one report.**
+2. ✅ Archive deployment: Docker Postgres, migrations, ingest API, pairing flow, field encryption.
+3. ✅ Collector foundation: durable queue, machine identity, ingest sync, connector framework, per-file cursors.
+4. ✅ Connectors to full fidelity: Claude Code lifecycle/file/context, then Codex + Gemini.
+5. ✅ Project/workspace mapping (repo discovery + attribution resolver).
+6. ✅ Event projections: sessions, usage, cost, connector health, Git metadata.
+7. ✅ Reporting: deterministic metrics + durable, versioned Markdown report artifacts.
+8. ✅ AI interpretation: redaction engine + decrypt-for-render + configurable provider (Anthropic + OpenAI-compatible).
+9. 🔄 **Live Monitor** — in progress.
+10. ⬜ Hardening: exports, catalog signing, alerts, replay metadata.
+
+**Post-V1:**
+11. ⬜ **Tauri desktop/tray collector** — sidecar shell over the headless collector (node:sea), theGridCN UI,
+    tray + connector mgmt + sync/health + pairing/autostart + settings (collector & server config, secrets in
+    OS keychain). Planned & in the PRD; ready for `/lril:plan-feature`.
 
 > **Principle:** nothing shows value until the pipe is whole — so make the *thinnest* end-to-end
 > pipe first (milestone 1), then thicken each stage.
@@ -91,12 +113,13 @@ flowchart TD
 |---|---|---|---|
 | **Claude Code** (required) | `~/.claude/projects/<slug>/<uuid>.jsonl` | JSONL, append | Streaming (tail) |
 | **Codex CLI** (required) | `~/.codex/sessions/YYYY/MM/...` + `history.jsonl` | JSONL | Streaming |
-| **Gemini CLI** (required) | `~/.gemini/antigravity-cli/history.jsonl` + `brain/<uuid>/.../transcript.jsonl` | JSONL | Streaming |
-| **Antigravity** (stretch) | `~/.gemini/antigravity-ide/...` | JSONL + protobuf | Partial — gated |
-| **Cursor** (stretch) | `~/.cursor/ai-tracking/ai-code-tracking.db` | SQLite | Snapshot/poll |
+| **Gemini CLI** (required) | `~/.gemini/tmp/<projectHash>/chats/session-*.json` | JSON | Near-real-time |
+| **Antigravity** (stretch) | `~/.gemini/antigravity-*` | JSONL + protobuf | Partial — gated (no token/cost) |
+| **Cursor** (stretch) | `~/.cursor/...` (chat store actually in `%APPDATA%\Cursor`) | SQLite | Snapshot/poll |
 
-**Next action:** full read-only spike → `docs/research/connector-capture-spike.md` (per-connector
-feasibility matrix filling PRD §10.3 fidelity fields; key unknown = *does each tool record tokens/cost?*).
+**Done:** spike completed → [`docs/research/connector-capture-spike.md`](./docs/research/connector-capture-spike.md).
+All three required connectors record **exact tokens + model + tool calls**; none report cost (computed from
+tokens × catalog pricing).
 
 ### Liveness (Q2) — "as live as the format allows, labeled honestly"
 - Watch files, read only **newly appended lines**, push to queue, flush every few seconds.
@@ -133,11 +156,11 @@ feasibility matrix filling PRD §10.3 fidelity fields; key unknown = *does each 
   **Resolution:** search a **redacted plaintext projection** (secrets masked); keep originals encrypted.
 
 ### Smaller decisions — all accepted
-- ✅ **Defer Tauri** — Node/TS collector first (single language), tray app later.
-- ✅ **theGridCN** with plain shadcn/ui as fallback.
+- ✅ **Defer Tauri** — Node/TS collector first (single language); the tray/desktop app is now **M11** (post-V1), sidecar architecture, theGridCN UI.
+- ✅ **theGridCN** with plain shadcn/ui as fallback (dashboard **and** the M11 desktop app).
 - ✅ **Defer Parquet** — V1 exports = Markdown / JSON / JSONL / CSV.
 - ✅ Add rough **volume/retention** numbers to the PRD.
-- ✅ Name a simple **regex/entropy redaction engine** for V1.
+- ✅ Name a simple **regex/entropy redaction engine** for V1 (shipped in M8).
 
 ---
 
@@ -154,6 +177,10 @@ feasibility matrix filling PRD §10.3 fidelity fields; key unknown = *does each 
 
 ## 6. Immediate next steps
 
-- [ ] Run the read-only **connector spike** → `docs/research/connector-capture-spike.md`.
-- [ ] Fold all decisions above into **`docs/PRD.md`** (success criteria, liveness labels, attribution split, replay principle, pricing ladder, field-encryption + searchable projection, deferrals).
-- [ ] Then begin **milestone 1** (walking skeleton) via the build loop.
+- [ ] **Finish M9 (Live Monitor)** — in progress.
+- [ ] **M10 (hardening)** — exports, catalog signing, operational alerts, replay metadata → completes V1.
+- [ ] **Resolve CI enforcement:** branch protection needs **GitHub Pro** (private repo). Until then, treat the
+      `repo-health` check as advisory — **don't merge red**. (Alternative: make repo public, or gate the
+      automated-merge step on the check.)
+- [ ] **Plan M11 (Tauri)** via `/lril:plan-feature` — resolve the two open design points: the UI↔sidecar
+      control protocol, and whether the app supervises the local server-stack lifecycle.
