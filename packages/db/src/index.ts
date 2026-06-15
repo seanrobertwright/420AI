@@ -56,3 +56,8 @@ export {
   listReportArtifacts,
 } from "./repositories/reports.js";
 export type { ReportArtifactRow } from "./repositories/reports.js";
+export {
+  sessionTranscript,
+  DEFAULT_TRANSCRIPT_CAPS,
+} from "./repositories/transcript.js";
+export type { TranscriptEntry, TranscriptCaps } from "./repositories/transcript.js";

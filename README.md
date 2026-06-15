@@ -400,7 +400,7 @@ wire types/encryption split, or any connector's `parse`.
 
 ## Status
 
-Milestones 1–7 implemented. M1 (walking skeleton): `packages/shared` (token shape, event taxonomy,
+Milestones 1–8 implemented. M1 (walking skeleton): `packages/shared` (token shape, event taxonomy,
 fingerprint, pricing catalog, cost ladder) and `apps/collector` (Claude Code parser, SQLite store,
 Markdown report, CLI). M2 (archive deployment): `packages/db` (Drizzle Postgres schema + migrations,
 AES-256-GCM field encryption, ingest token + pairing repositories), `apps/ingest` (Fastify Ingest API
@@ -427,5 +427,14 @@ the two anchor report types: project cost-over-time + session metrics-autopsy), 
 additive `report_artifacts` table + migration and a version-bumping CRUD repository), and `apps/ingest`
 (a generation orchestrator composing the M6 projections → renderer → store, plus admin-gated
 generate/fetch/list endpoints). Reports render from the M6 plaintext projections only — never decrypts;
-report comparison, AI interpretation, and the other five report types are deferred to M8+. Milestones
-7–10 above thicken this skeleton.
+report comparison and the other five report types are deferred to M8+. M8 (AI interpretation): the
+**AI Interpretation Pipeline** (PRD §16.2/§18) — `packages/shared` (a pure regex + entropy
+**Redaction Pipeline** that masks secrets/credentials/PII before anything leaves the archive, plus a
+provider-agnostic bundle/prompt builder), `packages/db` (`sessionTranscript`, the first
+decrypt-for-render read — message events → raw records → decrypt → order → dedupe → cap; no schema
+change), and `apps/ingest` (an injected, configurable **Analysis Provider** with first-class Anthropic
+and OpenAI-compatible `fetch` clients, a generation orchestrator that redacts before sending/storing,
+and admin-gated session/project interpretation endpoints). AI findings are stored as a new
+`report_artifacts` `reportType` reusing the M7 store — no migration, no new dependency. The §21
+redacted search projection, scheduled analysis, and report comparison remain deferred. Milestones
+9–10 above thicken this skeleton.

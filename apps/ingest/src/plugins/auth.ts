@@ -2,6 +2,7 @@ import fp from "fastify-plugin";
 import type { FastifyReply, FastifyRequest, preHandlerHookHandler } from "fastify";
 import type { Db } from "@420ai/db";
 import { findMachineIdByToken, touchLastSeen } from "@420ai/db";
+import type { AnalysisProvider } from "../analysis/provider.js";
 
 // Module augmentation: make the injected deps + per-request machineId typed
 // everywhere in the app. Declared once here; visible across the compilation.
@@ -9,6 +10,10 @@ declare module "fastify" {
   interface FastifyInstance {
     db: Db;
     adminToken: string;
+    /** M8 injected analysis provider (real client in server.ts; stub in tests). */
+    analysisProvider: AnalysisProvider;
+    /** M8 resolved max output tokens for an interpretation call. */
+    analysisMaxOutputTokens: number;
     /** preHandler that 401s unless a valid bearer token resolves to a machine. */
     authenticate: preHandlerHookHandler;
   }
