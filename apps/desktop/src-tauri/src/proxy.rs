@@ -12,7 +12,10 @@
 //! If `ADMIN_TOKEN` is unset the command returns `Err`, and the panel degrades to
 //! local-status-only. The token is NEVER logged and NEVER returned to the webview.
 
+use std::time::Duration;
+
 const DEFAULT_INGEST_URL: &str = "http://localhost:8420";
+const MONITOR_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Build the monitor URL from a base (pure + unit-testable; no env, no I/O).
 fn monitor_url(base: &str) -> String {
@@ -26,7 +29,12 @@ fn monitor_url(base: &str) -> String {
 pub async fn get_monitor_snapshot() -> Result<serde_json::Value, String> {
     let token = std::env::var("ADMIN_TOKEN").map_err(|_| "admin token not configured".to_string())?;
     let base = std::env::var("INGEST_URL").unwrap_or_else(|_| DEFAULT_INGEST_URL.to_string());
-    let res = reqwest::Client::new()
+    let client = reqwest::Client::builder()
+        .timeout(MONITOR_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| format!("http client init failed: {e}"))?;
+    let res = client
         .get(monitor_url(&base))
         .bearer_auth(token) // token never crosses to the webview
         .send()
