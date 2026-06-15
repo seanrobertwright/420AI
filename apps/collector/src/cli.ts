@@ -251,6 +251,12 @@ function getFlag(args: string[], name: string): string | undefined {
   return i >= 0 ? args[i + 1] : undefined;
 }
 
+export function parseHeartbeatIntervalMs(value: string | undefined): number | undefined {
+  if (!value) return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
 /**
  * The collector's own version, read from its package.json at the entrypoint (M9 heartbeat).
  * Libraries stay silent/pure — the version is resolved HERE and passed into runWatch.
@@ -387,7 +393,7 @@ async function main(argv: string[]): Promise<void> {
       signal: controller.signal,
       logger: (msg) => process.stdout.write(msg + "\n"),
       collectorVersion: readCollectorVersion(),
-      heartbeatIntervalMs: heartbeatFlag ? Number(heartbeatFlag) : undefined,
+      heartbeatIntervalMs: parseHeartbeatIntervalMs(heartbeatFlag),
     });
     process.exit(0);
   }

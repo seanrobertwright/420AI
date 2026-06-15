@@ -1,4 +1,4 @@
-import { postIngest, isUnauthorized, type postHeartbeat } from "../ingest-client.js";
+import { postIngest, isUnauthorized } from "../ingest-client.js";
 import type { QueueStore, SyncOutcome } from "../queue/queue-store.js";
 import { maybeSendHeartbeat, newHeartbeatState } from "../heartbeat.js";
 import type {
@@ -92,7 +92,7 @@ export interface SyncLoopDeps extends SyncDeps {
   /** Injectable clock for the heartbeat throttle (tests); defaults to wall-clock. */
   now?: () => Date;
   /** Injectable heartbeat client (tests); defaults to the real fetch-based client. */
-  postHeartbeat?: typeof postHeartbeat;
+  postHeartbeat?: typeof import("../ingest-client.js").postHeartbeat;
 }
 
 /**

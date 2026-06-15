@@ -86,9 +86,9 @@ export function DataCard({
 
       {/* Fields */}
       <div className="space-y-3 p-4">
-        {fields.map((field, index) => (
+        {fields.map((field) => (
           <DataField
-            key={index}
+            key={field.label}
             label={field.label}
             value={field.value}
             highlight={field.highlight}
