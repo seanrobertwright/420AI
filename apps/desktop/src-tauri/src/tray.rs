@@ -2,7 +2,7 @@ use serde_json::json;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
-    AppHandle, Runtime,
+    AppHandle, Emitter, Runtime,
 };
 
 use crate::sidecar;
@@ -22,20 +22,25 @@ pub fn build_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         .icon(app.default_window_icon().expect("a default window icon").clone())
         .tooltip("420AI Collector")
         .menu(&menu)
-        .on_menu_event(|app, event| match event.id.as_ref() {
-            "start" => {
-                let _ = sidecar::write_command(app, json!({ "cmd": "start" }));
+        .on_menu_event(|app, event| {
+            let cmd = match event.id.as_ref() {
+                "start" => Some(json!({ "cmd": "start" })),
+                "pause" => Some(json!({ "cmd": "pause" })),
+                "resume" => Some(json!({ "cmd": "resume" })),
+                "quit" => {
+                    app.exit(0);
+                    None
+                }
+                _ => None,
+            };
+            if let Some(cmd) = cmd {
+                if let Err(e) = sidecar::write_command(app, cmd) {
+                    let _ = app.emit(
+                        "control-event",
+                        json!({ "type": "error", "message": format!("tray command failed: {e}") }),
+                    );
+                }
             }
-            "pause" => {
-                let _ = sidecar::write_command(app, json!({ "cmd": "pause" }));
-            }
-            "resume" => {
-                let _ = sidecar::write_command(app, json!({ "cmd": "resume" }));
-            }
-            "quit" => {
-                app.exit(0);
-            }
-            _ => {}
         })
         .build(app)?;
 

@@ -86,14 +86,19 @@ async fn spawn_and_relay<R: Runtime>(app: &AppHandle<R>) {
         Ok(command) => match command.args(["serve"]).spawn() {
             Ok((mut rx, child)) => {
                 store_child(app, child);
+                let mut stdout_buf: Vec<u8> = Vec::new();
                 while let Some(event) = rx.recv().await {
                     match event {
                         CommandEvent::Stdout(bytes) => {
-                            let line = String::from_utf8_lossy(&bytes);
-                            if line.trim().is_empty() {
-                                continue;
+                            stdout_buf.extend_from_slice(&bytes);
+                            while let Some(pos) = stdout_buf.iter().position(|&b| b == b'\n') {
+                                let line_bytes: Vec<u8> = stdout_buf.drain(..=pos).collect();
+                                let line = String::from_utf8_lossy(&line_bytes);
+                                let trimmed = line.trim();
+                                if !trimmed.is_empty() {
+                                    let _ = app.emit(EVENT_NAME, parse_event_line(trimmed));
+                                }
                             }
-                            let _ = app.emit(EVENT_NAME, parse_event_line(&line));
                         }
                         CommandEvent::Stderr(bytes) => {
                             let msg = String::from_utf8_lossy(&bytes).trim().to_string();
@@ -105,14 +110,21 @@ async fn spawn_and_relay<R: Runtime>(app: &AppHandle<R>) {
                             }
                         }
                         CommandEvent::Terminated(payload) => {
-                            let _ = app.emit(
-                                EVENT_NAME,
-                                json!({
-                                    "type": "log",
-                                    "level": "error",
-                                    "message": format!("sidecar exited (code {:?})", payload.code)
-                                }),
-                            );
+                            let shutting_down = app
+                                .state::<SidecarState>()
+                                .shutting_down
+                                .load(Ordering::Relaxed);
+                            if !shutting_down {
+                                let level = if payload.code == Some(0) { "info" } else { "error" };
+                                let _ = app.emit(
+                                    EVENT_NAME,
+                                    json!({
+                                        "type": "log",
+                                        "level": level,
+                                        "message": format!("sidecar exited (code {:?})", payload.code)
+                                    }),
+                                );
+                            }
                             break;
                         }
                         CommandEvent::Error(err) => {
@@ -176,13 +188,17 @@ pub fn send_command(app: AppHandle, cmd: Value) -> Result<(), String> {
     write_command(&app, cmd)
 }
 
-/// On app exit: best-effort graceful stop (drain) then kill, so no zombie sidecar
-/// survives. Latches `shutting_down` so the restart loop does not respawn.
+/// On app exit: graceful stop (drain) then kill, so no zombie sidecar
+/// survives. Sends the stop command, waits briefly for the sidecar to drain,
+/// then kills if still alive. Latches `shutting_down` so the restart loop does
+/// not respawn.
 pub fn shutdown<R: Runtime>(app: &AppHandle<R>) {
     app.state::<SidecarState>()
         .shutting_down
         .store(true, Ordering::Relaxed);
     let _ = write_command(app, json!({ "cmd": "stop" }));
+    // Give the sidecar a moment to read the stop command and drain before we kill it.
+    std::thread::sleep(Duration::from_millis(200));
     if let Ok(mut guard) = app.state::<SidecarState>().child.lock() {
         if let Some(child) = guard.take() {
             let _ = child.kill();
