@@ -3,7 +3,7 @@ import { rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { runIngest, runReport } from "./cli.js";
+import { parseHeartbeatIntervalMs, runIngest, runReport } from "./cli.js";
 
 const fixturePath = fileURLToPath(
   new URL("./fixtures/sample-session.jsonl", import.meta.url),
@@ -53,5 +53,19 @@ describe("cli end-to-end (parse → store → report)", () => {
     dbPath = join(tmpdir(), `m1-cli-${process.pid}-missing.sqlite`);
     runIngest(fixturePath, dbPath);
     expect(() => runReport("does-not-exist", dbPath)).toThrow(/No events for session/);
+  });
+});
+
+describe("parseHeartbeatIntervalMs", () => {
+  it("returns undefined for missing or invalid values so watch falls back to the default", () => {
+    expect(parseHeartbeatIntervalMs(undefined)).toBeUndefined();
+    expect(parseHeartbeatIntervalMs("abc")).toBeUndefined();
+    expect(parseHeartbeatIntervalMs("0")).toBeUndefined();
+    expect(parseHeartbeatIntervalMs("-1")).toBeUndefined();
+    expect(parseHeartbeatIntervalMs("Infinity")).toBeUndefined();
+  });
+
+  it("returns a positive finite interval override", () => {
+    expect(parseHeartbeatIntervalMs("15000")).toBe(15000);
   });
 });

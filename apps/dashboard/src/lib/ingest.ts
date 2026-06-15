@@ -14,5 +14,6 @@ export function ingestUrl(): string {
 
 /** The admin Authorization header for the server→ingest hop (token from server env only). */
 export function adminHeaders(): Record<string, string> {
-  return { authorization: `Bearer ${process.env.ADMIN_TOKEN ?? ""}` };
+  const token = process.env.ADMIN_TOKEN;
+  return token ? { authorization: "Bearer " + token } : {};
 }
