@@ -1,0 +1,73 @@
+name: repo-health
+
+# Required status check for `main`: runs the project's full health gate on every
+# PR (and on pushes to main). Mirrors `npm run repo-health -- --require-db` locally:
+# NUL-byte scan, stray-artifact scan, repo-root typecheck (`tsc -b`), and the FULL
+# vitest suite INCLUDING the Postgres-gated integration layer (asserts the int tests
+# actually ran, 0 skipped). This is what prevents red merges to main.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# Cancel superseded runs on the same ref to save CI minutes.
+concurrency:
+  group: repo-health-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repo-health:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: "420ai"
+          POSTGRES_PASSWORD: "420ai"
+          POSTGRES_DB: "420ai"
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U 420ai -d 420ai"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Create test database
+        env:
+          PGPASSWORD: "420ai"
+        # The local docker-compose creates 420ai_test via an init script; in CI the
+        # service container can't mount it, so create it here. Idempotent guard in case
+        # of re-runs against a warm service.
+        run: |
+          psql -h localhost -p 5432 -U 420ai -d 420ai -tc "SELECT 1 FROM pg_database WHERE datname = '420ai_test'" \
+            | grep -q 1 || psql -h localhost -p 5432 -U 420ai -d 420ai -c 'CREATE DATABASE "420ai_test";'
+
+      - name: Write CI .env
+        # Both repo-health and vitest read .env; provide DB URLs + a throwaway 32-byte
+        # base64 encryption key (test data only — never a real secret).
+        run: |
+          {
+            echo "DATABASE_URL=postgres://420ai:420ai@localhost:5432/420ai"
+            echo "DATABASE_URL_TEST=postgres://420ai:420ai@localhost:5432/420ai_test"
+            echo "ARCHIVE_ENCRYPTION_KEY=$(openssl rand -base64 32)"
+          } > .env
+
+      - name: repo-health (full, --require-db)
+        run: npm run repo-health -- --require-db
