@@ -28,6 +28,29 @@ export async function touchLastSeen(db: DbClient, machineId: string): Promise<vo
 }
 
 /**
+ * Persist a collector heartbeat (M9, PRD §20) — the latest sync-backlog sample +
+ * collector version, plus the purpose-built `lastHeartbeatAt` liveness stamp that
+ * (unlike `lastSeenAt`) distinguishes idle-but-alive from offline (D5). Stores only
+ * the CURRENT sample (no history — backlog-trend is M10, D4). `now` is injectable
+ * for deterministic tests; defaults to wall-clock.
+ */
+export async function recordHeartbeat(
+  db: DbClient,
+  machineId: string,
+  hb: { queuePending: number; queueInflight: number; collectorVersion: string; now?: Date },
+): Promise<void> {
+  await db
+    .update(machines)
+    .set({
+      lastHeartbeatAt: hb.now ?? new Date(),
+      queuePending: hb.queuePending,
+      queueInflight: hb.queueInflight,
+      collectorVersion: hb.collectorVersion,
+    })
+    .where(eq(machines.id, machineId));
+}
+
+/**
  * Resolve the owning user for an authenticated machine (M5 discovery is machine-
  * authed but writes user-scoped workspaces/projects). Returns undefined for an
  * unknown machine id.

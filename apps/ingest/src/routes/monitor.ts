@@ -1,0 +1,123 @@
+import type { FastifyInstance } from "fastify";
+import {
+  deriveMachineStatus,
+  isBacklogHigh,
+  MONITOR_VERSION,
+  emptyMonitorSnapshot,
+  type LiveMonitorSnapshot,
+} from "@420ai/shared";
+import {
+  machineStatuses,
+  activeSessions,
+  connectorHealth,
+  findUserIdByEmail,
+  type DbClient,
+} from "@420ai/db";
+import { adminAuthorized } from "../auth.js";
+
+const DEFAULT_EMAIL = "seanrobertwright@gmail.com";
+
+/**
+ * The "active now" window: a session whose last event is within this lookback is
+ * shown as active. M9 stores only the LATEST heartbeat sample, so this is current
+ * recency — NOT a rate-of-change ("backlog growing" / trend is M10, D4).
+ */
+const ACTIVE_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
+
+/**
+ * Compose the LiveMonitorSnapshot from the clock-free projections. The ONLY wall-clock
+ * read is `now`, passed in by the route (D6 — route owns the clock, like routes/reports.ts
+ * owns `generatedAt`). `deriveMachineStatus`/`isBacklogHigh` are applied per machine here.
+ */
+async function buildSnapshot(db: DbClient, userId: string, now: Date): Promise<LiveMonitorSnapshot> {
+  const nowMs = now.getTime();
+  const sinceIso = new Date(nowMs - ACTIVE_WINDOW_MS).toISOString();
+  const [machines, connectors, sessions] = await Promise.all([
+    machineStatuses(db, userId),
+    connectorHealth(db, userId),
+    activeSessions(db, userId, sinceIso),
+  ]);
+  return {
+    monitorVersion: MONITOR_VERSION,
+    generatedAt: now.toISOString(),
+    machines: machines.map((m) => ({
+      ...m,
+      status: deriveMachineStatus(m, nowMs),
+      backlogHigh: isBacklogHigh(m.queuePending),
+    })),
+    connectors,
+    activeSessions: sessions,
+  };
+}
+
+/**
+ * M9 Live Monitor read API (PRD §8.4). Admin-gated (mirrors routes/projections.ts) —
+ * dashboard reads, served via the server-side proxy that holds the admin token (D8).
+ *
+ * GET /v1/monitor          — one composed snapshot (route owns the clock).
+ * GET /v1/monitor/stream   — SSE: a fresh snapshot every `monitorStreamIntervalMs`.
+ *
+ * D7: the SSE route runs ALL guards (auth + user resolution + the 200 head) BEFORE
+ * `reply.hijack()`, because hijack removes the response from Fastify's lifecycle and the
+ * global setErrorHandler no longer applies. After hijack, each snapshot build is wrapped
+ * in try/catch and a failure is emitted as an SSE `event: error` frame (the connection
+ * survives and recovers on the next tick). The interval is ALWAYS cleared on disconnect.
+ */
+export default async function monitorRoutes(app: FastifyInstance): Promise<void> {
+  app.get("/v1/monitor", async (request, reply) => {
+    if (!adminAuthorized(app, request)) {
+      return reply.code(401).send({ error: "admin authorization required" });
+    }
+    const userId = await findUserIdByEmail(app.db, DEFAULT_EMAIL);
+    const now = new Date();
+    if (!userId) return reply.code(200).send(emptyMonitorSnapshot(now.toISOString()));
+    return reply.code(200).send(await buildSnapshot(app.db, userId, now));
+  });
+
+  app.get("/v1/monitor/stream", async (request, reply) => {
+    // --- ALL guards BEFORE hijack (D7) ---
+    if (!adminAuthorized(app, request)) {
+      return reply.code(401).send({ error: "admin authorization required" });
+    }
+    const userId = await findUserIdByEmail(app.db, DEFAULT_EMAIL);
+
+    reply.raw.writeHead(200, {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      connection: "keep-alive",
+    });
+    reply.hijack(); // take over the socket; the error handler no longer applies past here
+
+    // Register the disconnect handler BEFORE the first (awaited) snapshot build: if the
+    // client drops during that DB query, the socket's "close" fires before any later
+    // listener would exist — attaching it here (and guarding `push` on `closed`) ensures
+    // the interval is always cleared and we never write to a dead socket (no leak).
+    let timer: NodeJS.Timeout | undefined;
+    let closed = false;
+    request.raw.on("close", () => {
+      closed = true;
+      if (timer) clearInterval(timer);
+    });
+
+    const push = async (): Promise<void> => {
+      if (closed) return;
+      try {
+        const now = new Date();
+        const snap = userId
+          ? await buildSnapshot(app.db, userId, now)
+          : emptyMonitorSnapshot(now.toISOString());
+        if (!closed) reply.raw.write(`data: ${JSON.stringify(snap)}\n\n`);
+      } catch (err) {
+        // The error handler is bypassed post-hijack — emit + keep the stream alive.
+        if (!closed) {
+          reply.raw.write(`event: error\ndata: ${JSON.stringify({ error: "snapshot failed" })}\n\n`);
+        }
+        request.log.error(err);
+      }
+    };
+
+    await push(); // initial snapshot immediately on connect
+    // LOAD-BEARING: only arm the interval if the client is still connected.
+    if (!closed) timer = setInterval(() => void push(), app.monitorStreamIntervalMs);
+  });
+}

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, beforeEach, afterAll } from "vitest";
 import { sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { createDb } from "@420ai/db";
-import type { IngestBatch } from "@420ai/shared";
+import type { IngestBatch, LiveMonitorSnapshot } from "@420ai/shared";
 import { buildApp } from "./app.js";
 import { AnalysisProviderError, type AnalysisProvider, type AnalysisRequest } from "./analysis/provider.js";
 
@@ -50,7 +50,14 @@ describe.skipIf(!TEST_URL)("ingest API (HTTP e2e via inject)", () => {
 
   beforeAll(async () => {
     dbh = createDb(TEST_URL!);
-    app = buildApp({ db: dbh.db, adminToken: ADMIN, analysisProvider: stubProvider, logger: false });
+    app = buildApp({
+      db: dbh.db,
+      adminToken: ADMIN,
+      analysisProvider: stubProvider,
+      // M9: a fast SSE cadence so the stream test sees ≥2 snapshots quickly + deterministically.
+      monitorStreamIntervalMs: 50,
+      logger: false,
+    });
     await app.ready();
   });
 
@@ -963,5 +970,122 @@ describe.skipIf(!TEST_URL)("ingest API (HTTP e2e via inject)", () => {
       payload: {},
     });
     expect(postProject.statusCode).toBe(401);
+  });
+
+  // --- M9 Live Monitor: heartbeat round-trip + snapshot + SSE stream ---
+
+  it("POST /v1/heartbeat persists backlog+version; GET /v1/monitor shows an online machine + active session", async () => {
+    const { token, machineId } = await pair(await createCode());
+
+    const hb = await app.inject({
+      method: "POST",
+      url: "/v1/heartbeat",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { queuePending: 7, queueInflight: 2, collectorVersion: "0.9.1" },
+    });
+    expect(hb.statusCode).toBe(200);
+    expect(hb.json()).toEqual({ ok: true });
+
+    // Timestamp the event ~now so it lands inside the route's 15-min active window
+    // (GET /v1/monitor reads the REAL wall clock, D6 — fixed past dates would be excluded).
+    const nowIso = new Date().toISOString();
+    const ing = await app.inject({
+      method: "POST",
+      url: "/v1/ingest",
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        records: [],
+        events: [
+          {
+            fingerprint: "m9-active",
+            sourceConnector: "claude-code",
+            parserVersion: "2.0.0",
+            rawRecordId: "r1",
+            eventIndex: 0,
+            eventType: "message.user",
+            sessionId: "m9-sess",
+            projectPath: "/home/a/420ai",
+            gitBranch: "main",
+            ts: nowIso,
+          },
+        ],
+      } satisfies IngestBatch,
+    });
+    expect(ing.statusCode).toBe(200);
+
+    const snap = await app.inject({
+      method: "GET",
+      url: "/v1/monitor",
+      headers: { authorization: `Bearer ${ADMIN}` },
+    });
+    expect(snap.statusCode).toBe(200);
+    const body = snap.json() as LiveMonitorSnapshot;
+    expect(body.monitorVersion).toBe("m9-monitor-v1");
+    expect(body.machines).toHaveLength(1);
+    const m = body.machines[0]!;
+    expect(m.id).toBe(machineId);
+    expect(m.status).toBe("online"); // fresh heartbeat
+    expect(m.queuePending).toBe(7);
+    expect(m.queueInflight).toBe(2);
+    expect(m.collectorVersion).toBe("0.9.1");
+    expect(m.backlogHigh).toBe(false); // 7 < 100 threshold
+    // the just-ingested session is active; connectors reuse connectorHealth
+    expect(body.activeSessions.map((s) => s.sessionId)).toContain("m9-sess");
+    expect(body.connectors.map((c) => c.sourceConnector)).toContain("claude-code");
+  });
+
+  it("GET /v1/monitor and POST /v1/heartbeat enforce their auth (401)", async () => {
+    const noAdmin = await app.inject({ method: "GET", url: "/v1/monitor" });
+    expect(noAdmin.statusCode).toBe(401);
+    const wrongAdmin = await app.inject({
+      method: "GET",
+      url: "/v1/monitor",
+      headers: { authorization: "Bearer wrong-admin" },
+    });
+    expect(wrongAdmin.statusCode).toBe(401);
+    // SSE guard runs BEFORE hijack, so a missing admin token is a clean 401 (D7).
+    const noAdminStream = await app.inject({ method: "GET", url: "/v1/monitor/stream" });
+    expect(noAdminStream.statusCode).toBe(401);
+    // heartbeat is machine-authed — no machine token → 401.
+    const noMachine = await app.inject({
+      method: "POST",
+      url: "/v1/heartbeat",
+      payload: { queuePending: 0, queueInflight: 0, collectorVersion: "x" },
+    });
+    expect(noMachine.statusCode).toBe(401);
+  });
+
+  it("GET /v1/monitor/stream pushes ≥2 SSE snapshots over a real socket (recipe B); cancel cleans up", async () => {
+    await pair(await createCode()); // ensure the default user/machine exist
+
+    // Recipe B (spike §6): a real port + fetch ReadableStream — inject() cannot test an
+    // infinite stream. The 50 ms injected interval makes ≥2 frames arrive quickly.
+    const address = await app.listen({ port: 0, host: "127.0.0.1" });
+    const res = await fetch(`${address}/v1/monitor/stream`, {
+      headers: { authorization: `Bearer ${ADMIN}` },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/event-stream");
+
+    const reader = res.body!.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    let frames = 0;
+    // Read until we've seen at least two `data:` frames (then stop — the stream is infinite).
+    while (frames < 2) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      frames = buf.split("\n\n").filter((b) => b.startsWith("data: ")).length;
+    }
+    expect(frames).toBeGreaterThanOrEqual(2);
+
+    // each frame is a real LiveMonitorSnapshot
+    const firstFrame = buf.split("\n\n").find((b) => b.startsWith("data: "))!;
+    const parsed = JSON.parse(firstFrame.slice("data: ".length)) as LiveMonitorSnapshot;
+    expect(parsed.monitorVersion).toBe("m9-monitor-v1");
+
+    // disconnect → the server's `request.raw.on("close")` clears the interval (no leak).
+    await reader.cancel();
   });
 });

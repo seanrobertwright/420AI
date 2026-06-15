@@ -14,6 +14,8 @@ declare module "fastify" {
     analysisProvider: AnalysisProvider;
     /** M8 resolved max output tokens for an interpretation call. */
     analysisMaxOutputTokens: number;
+    /** M9 SSE push cadence for GET /v1/monitor/stream (default 3000; tests inject 50). */
+    monitorStreamIntervalMs: number;
     /** preHandler that 401s unless a valid bearer token resolves to a machine. */
     authenticate: preHandlerHookHandler;
   }

@@ -41,12 +41,20 @@ if (analysisProviderName && analysisApiKey) {
   };
 }
 
+// M9 SSE push cadence for GET /v1/monitor/stream (default 3000 in buildApp).
+const monitorStreamIntervalMs = parsePositiveInt(
+  process.env.MONITOR_STREAM_INTERVAL_MS,
+  "MONITOR_STREAM_INTERVAL_MS",
+  3000,
+);
+
 const { db } = createDb(databaseUrl);
 const app = buildApp({
   db,
   adminToken,
   analysisProvider: createAnalysisProvider(analysisConfig),
   analysisMaxOutputTokens,
+  monitorStreamIntervalMs,
 });
 
 await app.listen({ port: Number(process.env.INGEST_PORT ?? 8420), host: "0.0.0.0" });

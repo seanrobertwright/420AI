@@ -23,6 +23,10 @@ export interface CaptureEngineOptions {
   intervalMs?: number;
   connectors?: Connector[];
   logger?: (msg: string) => void;
+  /** M9: collector version (read from package.json by cli.ts) — enables heartbeats. */
+  collectorVersion?: string;
+  /** M9: heartbeat cadence; default 30 s in the sync loop. */
+  heartbeatIntervalMs?: number;
 }
 
 export async function runCaptureEngine(opts: CaptureEngineOptions): Promise<void> {
@@ -64,6 +68,9 @@ export async function runCaptureEngine(opts: CaptureEngineOptions): Promise<void
         queue,
         url: opts.creds.url,
         token: opts.creds.token,
+        // M9: pass the version through so the sync loop sends heartbeats (best-effort).
+        collectorVersion: opts.collectorVersion,
+        heartbeatIntervalMs: opts.heartbeatIntervalMs,
         onStop: () => {
           log("ingest returned 401 — token revoked. Re-pair needed: `collector pair <code>`. Stopping sync.");
           internal.abort();

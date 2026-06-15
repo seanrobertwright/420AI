@@ -22,6 +22,13 @@
       "when": 1781457330481,
       "tag": "0002_certain_stark_industries",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1781486774561,
+      "tag": "0003_great_nemesis",
+      "breakpoints": true
     }
   ]
 }

@@ -44,6 +44,15 @@ export const machines = pgTable("machines", {
   status: text("status").notNull().default("active"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
+  // M9 Live Monitor heartbeat (PRD §20, D2). All NULLABLE — pre-M9 machines simply
+  // have nulls and deriveMachineStatus falls back to lastSeenAt (D5). The collector's
+  // heartbeat sets them; we store only the LATEST sample (current depth, not a trend —
+  // backlog-GROWING / heartbeat history is M10, D4). No default-now: a null heartbeat
+  // means "never sent one", which is distinct from "sent one at row-creation time".
+  lastHeartbeatAt: timestamp("last_heartbeat_at", { withTimezone: true }),
+  queuePending: integer("queue_pending"),
+  queueInflight: integer("queue_inflight"),
+  collectorVersion: text("collector_version"),
 });
 
 export const pairingCodes = pgTable("pairing_codes", {

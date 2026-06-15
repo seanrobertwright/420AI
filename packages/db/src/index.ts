@@ -19,7 +19,13 @@ export type { EncryptedField } from "./crypto.js";
 export { generateToken, hashToken } from "./tokens.js";
 export { runMigrations } from "./migrate.js";
 export { createPairingCode, redeemPairingCode, PairingError } from "./repositories/pairing.js";
-export { createMachine, touchLastSeen, getMachineUserId } from "./repositories/machines.js";
+export {
+  createMachine,
+  touchLastSeen,
+  getMachineUserId,
+  recordHeartbeat,
+} from "./repositories/machines.js";
+export { machineStatuses, activeSessions } from "./repositories/monitor.js";
 export { findUserIdByEmail, ensureUserByEmail } from "./repositories/users.js";
 export { issueIngestToken, findMachineIdByToken } from "./repositories/tokens.js";
 export { ingestBatch } from "./repositories/ingest.js";
