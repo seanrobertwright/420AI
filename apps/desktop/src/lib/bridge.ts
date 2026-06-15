@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { ControlCommand, ControlEvent } from "@420ai/shared";
+import type { ControlCommand, ControlEvent, LiveMonitorSnapshot } from "@420ai/shared";
 
 /**
  * The webview↔Rust bridge (M11). The webview NEVER spawns or talks to the sidecar
@@ -25,4 +25,24 @@ export function sendCommand(cmd: ControlCommand): Promise<void> {
  */
 export function onControlEvent(cb: (ev: ControlEvent) => void): Promise<UnlistenFn> {
   return listen<ControlEvent>("control-event", (event) => cb(event.payload));
+}
+
+/**
+ * Fetch the server `LiveMonitorSnapshot` via the Rust `get_monitor_snapshot` proxy
+ * (Slice 2). Rust holds the admin token + makes the request, returning opaque JSON;
+ * we cast it to the shared type. Rejects ("admin token not configured" / "ingest
+ * unreachable: …") so the panel can degrade gracefully (mirrors the dashboard proxy).
+ */
+export function getMonitorSnapshot(): Promise<LiveMonitorSnapshot> {
+  return invoke<LiveMonitorSnapshot>("get_monitor_snapshot");
+}
+
+/** Ask the sidecar to emit a `connectors` event (registry + persisted enablement). */
+export function listConnectors(): Promise<void> {
+  return sendCommand({ cmd: "connectors.list" });
+}
+
+/** Persist a per-connector enable/disable; the sidecar re-emits the `connectors` event. */
+export function setConnector(id: string, enabled: boolean): Promise<void> {
+  return sendCommand({ cmd: "connectors.set", id, enabled });
 }

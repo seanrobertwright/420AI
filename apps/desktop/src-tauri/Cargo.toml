@@ -21,3 +21,6 @@ tauri-plugin-shell = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["time"] }
+# rustls-tls (not the default native-tls) avoids an OpenSSL/SChannel native build on
+# Windows; `json` enables `.json::<Value>()`. The async client runs on Tauri's tokio runtime.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

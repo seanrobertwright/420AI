@@ -3,6 +3,7 @@ import {
   CONTROL_PROTOCOL_VERSION,
   type ControlCommand,
   type ControlEvent,
+  type ConnectorInfo,
 } from "./control-protocol.js";
 
 /**
@@ -14,7 +15,7 @@ import {
  */
 describe("control-protocol", () => {
   it("pins CONTROL_PROTOCOL_VERSION (bump deliberately + move the Rust mirror)", () => {
-    expect(CONTROL_PROTOCOL_VERSION).toBe("m11-control-v1");
+    expect(CONTROL_PROTOCOL_VERSION).toBe("m11-control-v2");
   });
 
   it("ControlCommand discriminates on `cmd` and carries configure/pair fields", () => {
@@ -45,6 +46,35 @@ describe("control-protocol", () => {
     if (status.type === "status") {
       expect(status.pending).toBe(0);
       expect(status.inflight).toBe(0);
+    }
+  });
+
+  it("carries the Slice-2 connectors command + event (enable/disable + fidelity)", () => {
+    const set: ControlCommand = { cmd: "connectors.set", id: "codex-cli", enabled: false };
+    const list: ControlCommand = { cmd: "connectors.list" };
+    expect(set.cmd).toBe("connectors.set");
+    expect(list.cmd).toBe("connectors.list");
+    if (set.cmd === "connectors.set") {
+      expect(set.id).toBe("codex-cli");
+      expect(set.enabled).toBe(false);
+    }
+
+    const info: ConnectorInfo = {
+      id: "claude-code",
+      enabled: true,
+      status: "stable",
+      captureMethod: "tail-jsonl",
+      liveness: "streaming",
+      tokens: "exact",
+      cost: "reported",
+      knownGaps: [],
+      watchGlobs: ["/home/u/.claude/**/*.jsonl"],
+    };
+    const event: ControlEvent = { type: "connectors", connectors: [info] };
+    expect(event.type).toBe("connectors");
+    if (event.type === "connectors") {
+      expect(event.connectors[0]?.id).toBe("claude-code");
+      expect(event.connectors[0]?.enabled).toBe(true);
     }
   });
 });

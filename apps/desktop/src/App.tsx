@@ -1,9 +1,13 @@
 import { StatusBar } from "@/components/StatusBar";
+import { SyncHealth } from "@/components/SyncHealth";
+import { Connectors } from "@/components/Connectors";
 
 /**
- * The desktop webview shell (M11 Slice 1). A single StatusBar panel for now; later
- * slices add Sync & Health, Connectors, Pairing, and Settings panels here. The tray
- * (Rust) and this webview are two views over the same Rust↔sidecar relay.
+ * The desktop webview shell (M11). Slice 1 shipped the StatusBar; Slice 2 adds the
+ * Sync & Health (local backlog + server fleet view/alerts) and Connectors (per-source
+ * enable/disable + fidelity/permission-scope review) panels. Later slices add Pairing
+ * and Settings. The tray (Rust) and this webview are two views over the same
+ * Rust↔sidecar relay.
  */
 export function App() {
   return (
@@ -14,7 +18,11 @@ export function App() {
           Local capture agent — drive it here or from the tray.
         </p>
       </header>
-      <StatusBar />
+      <div className="space-y-6">
+        <StatusBar />
+        <SyncHealth />
+        <Connectors />
+      </div>
     </main>
   );
 }

@@ -1,11 +1,19 @@
 import { createInterface } from "node:readline";
 import { realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { isSea } from "node:sea";
 import { runCaptureEngine, type CaptureEngineOptions } from "./capture-engine.js";
 import { loadCredentials, QUEUE_PATH, type Credentials } from "./identity.js";
 import { QueueStore, type QueueStats } from "./queue/queue-store.js";
-import type { ControlCommand, ControlEvent } from "@420ai/shared";
+import { connectors as defaultConnectors, type Connector } from "./connectors/connector.js";
+import {
+  loadConnectorConfig as loadConnectorConfigDefault,
+  saveConnectorConfig as saveConnectorConfigDefault,
+  filterConnectors,
+  type ConnectorConfig,
+} from "./connectors/connector-config.js";
+import type { ControlCommand, ControlEvent, ConnectorInfo } from "@420ai/shared";
 
 /**
  * The `serve` entrypoint (M11): the long-running stdio protocol server the Tauri
@@ -48,6 +56,34 @@ export interface ServeDeps {
   exit?: (code: number) => void;
   pid?: number;
   heartbeatIntervalMs?: number;
+  /** Slice 2: the connector registry to expose/filter; defaults to the real `connectors`. */
+  connectorRegistry?: Connector[];
+  /** Slice 2: read per-connector enablement; defaults to the persisted config module. */
+  loadConnectorConfig?: () => ConnectorConfig;
+  /** Slice 2: persist per-connector enablement; defaults to the persisted config module. */
+  saveConnectorConfig?: (cfg: ConnectorConfig) => void;
+  /** Slice 2: home dir used to resolve a connector's `watchGlobs` (permission scope). */
+  home?: string;
+}
+
+/**
+ * Map a `Connector` (+ its resolved enablement + home) to the serializable
+ * `ConnectorInfo` wire shape. The SINGLE conversion point (`@420ai/shared` can't
+ * import `Connector`, so the fidelity fields are mirrored on the wire) — a serve
+ * test asserts this mapping stays 1:1 with `ConnectorFidelity`.
+ */
+function mapConnectorInfo(c: Connector, enabled: boolean, home: string): ConnectorInfo {
+  return {
+    id: c.id,
+    enabled,
+    status: c.fidelity.status,
+    captureMethod: c.fidelity.captureMethod,
+    liveness: c.fidelity.liveness,
+    tokens: c.fidelity.tokens,
+    cost: c.fidelity.cost,
+    knownGaps: c.fidelity.knownGaps,
+    watchGlobs: c.watchGlobs(home),
+  };
 }
 
 /** Default queue-stats reader: a short-lived WAL read, mirroring cli.ts `runQueueStatus`. */
@@ -77,6 +113,10 @@ export function runServe(deps: ServeDeps = {}): Promise<void> {
   const statusIntervalMs = deps.statusIntervalMs ?? 5000;
   const exit = deps.exit ?? ((code: number) => process.exit(code));
   const pid = deps.pid ?? process.pid;
+  const connectorRegistry = deps.connectorRegistry ?? defaultConnectors;
+  const loadConnectorCfg = deps.loadConnectorConfig ?? loadConnectorConfigDefault;
+  const saveConnectorCfg = deps.saveConnectorConfig ?? saveConnectorConfigDefault;
+  const home = deps.home ?? homedir();
 
   let state: ServeState = "idle";
   let intent: Intent = null;
@@ -107,6 +147,15 @@ export function runServe(deps: ServeDeps = {}): Promise<void> {
     emit({ type: "status", state, pending: stats.pending, inflight: stats.inflight, lastSyncAt });
   }
 
+  /** Emit the current registry + persisted enablement as a `connectors` event (Slice 2). */
+  function emitConnectors(): void {
+    const cfg = loadConnectorCfg();
+    const connectors = connectorRegistry.map((c) =>
+      mapConnectorInfo(c, cfg.connectors[c.id]?.enabled !== false, home),
+    );
+    emit({ type: "connectors", connectors });
+  }
+
   function startEngine(cmd: string): void {
     if (state === "running") {
       emit({ type: "ack", cmd });
@@ -120,12 +169,17 @@ export function runServe(deps: ServeDeps = {}): Promise<void> {
     controller = ctrl;
     intent = "running";
     state = "running";
+    // Slice 2: re-read enablement at each (re)start and hand the engine the FILTERED
+    // registry. The M3/M4 capture core is unchanged — this is the existing
+    // `CaptureEngineOptions.connectors` seam (capture-engine.ts).
+    const enabledConnectors = filterConnectors(connectorRegistry, loadConnectorCfg());
     enginePromise = runEngine({
       creds,
       signal: ctrl.signal,
       logger: (msg) => log("info", msg),
       collectorVersion,
       heartbeatIntervalMs: deps.heartbeatIntervalMs,
+      connectors: enabledConnectors,
     })
       .then(() => {
         controller = null;
@@ -201,6 +255,28 @@ export function runServe(deps: ServeDeps = {}): Promise<void> {
       case "status":
         emitStatus();
         return;
+      case "connectors.list":
+        emitConnectors();
+        return;
+      case "connectors.set": {
+        // Defense-in-depth at the stdin boundary: the Rust relay forwards opaque JSON,
+        // so validate `id`/`enabled` rather than trust the (typed) producer — without
+        // this, a malformed line writes a `"undefined"` config key and falsely acks.
+        if (typeof c.id !== "string" || typeof c.enabled !== "boolean") {
+          emit({ type: "error", message: "connectors.set requires id:string + enabled:boolean", cmd: c.cmd });
+          return;
+        }
+        // Persist enable/disable; re-emit so the UI reflects the saved state. Takes
+        // effect on the NEXT engine start/resume (startEngine re-reads) — no hot
+        // restart on toggle (state-machine simplicity; deferred refinement). `config`
+        // is reserved/forward-compat and ignored today.
+        const cfg = loadConnectorCfg();
+        cfg.connectors[c.id] = { enabled: c.enabled };
+        saveConnectorCfg(cfg);
+        emit({ type: "ack", cmd: c.cmd });
+        emitConnectors();
+        return;
+      }
       case "stop":
         await stop(c.cmd);
         return;

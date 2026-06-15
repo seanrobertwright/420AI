@@ -1,3 +1,4 @@
+mod proxy;
 mod sidecar;
 mod tray;
 
@@ -9,7 +10,10 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .manage(sidecar::SidecarState::default())
-        .invoke_handler(tauri::generate_handler![sidecar::send_command])
+        .invoke_handler(tauri::generate_handler![
+            sidecar::send_command,
+            proxy::get_monitor_snapshot
+        ])
         .setup(|app| {
             tray::build_tray(app.handle())?;
             sidecar::spawn_sidecar(app.handle().clone());
