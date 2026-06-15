@@ -47,7 +47,7 @@ function hasTestDbConfigured() {
 // --- Check 1: NUL-byte scan over tracked text sources ---------------------
 // A source written with embedded NULs passes typecheck + tests (the compiler
 // tolerates NULs in comments) yet is corrupt and stored as a binary blob.
-console.log("\n[1/5] NUL-byte scan (tracked text sources)");
+console.log("\n[1/6] NUL-byte scan (tracked text sources)");
 try {
   const exts = /\.(ts|tsx|js|mjs|cjs|json|md|ya?ml|sql|sh)$/;
   const tracked = execSync("git ls-files", { encoding: "utf8" })
@@ -72,7 +72,7 @@ try {
 // --- Check 2: stray build artifacts under any src/ ------------------------
 // src dirs are TypeScript-only; emitted .js/.d.ts/.map there are stray builds
 // (this is how M3's failed cross-project build leaked .js into apps/ingest/src).
-console.log("\n[2/5] Stray build-artifact scan (src/ dirs)");
+console.log("\n[2/6] Stray build-artifact scan (src/ dirs)");
 try {
   const srcDirs = [];
   for (const group of ["packages", "apps"]) {
@@ -106,7 +106,7 @@ try {
 }
 
 // --- Check 3: typecheck (root tsc -b) ------------------------------------
-console.log("\n[3/5] Typecheck (root tsc -b)");
+console.log("\n[3/6] Typecheck (root tsc -b)");
 try {
   run("npm run typecheck");
   ok("tsc -b: 0 errors");
@@ -119,7 +119,7 @@ try {
 // moduleResolution:bundler + jsx), so the root typecheck above will NEVER catch a
 // dashboard type error. This lane is the ONLY enforcement — a convention is not
 // enough (system review M4-6, "conditional-gate / silent-skip" trap, extended here).
-console.log("\n[4/5] Dashboard typecheck lane (tsc --noEmit -w @420ai/dashboard)");
+console.log("\n[4/6] Dashboard typecheck lane (tsc --noEmit -w @420ai/dashboard)");
 try {
   run("npm run typecheck:dashboard");
   ok("dashboard tsc --noEmit: 0 errors");
@@ -130,13 +130,30 @@ try {
   );
 }
 
-// --- Check 5: test suite (vitest) ----------------------------------------
+// --- Check 5: desktop webview typecheck lane (M11) -----------------------
+// The Tauri webview (apps/desktop) is, like the dashboard, DELIBERATELY out of the
+// root tsc -b graph (moduleResolution:bundler + jsx), so the root typecheck above
+// will NEVER catch a webview type error. This lane is its ONLY enforcement. The
+// Rust / `cargo tauri build` is NOT gated here — CI is Linux; it is a documented
+// local Windows sign-off (`npm run build:desktop`).
+console.log("\n[5/6] Desktop webview typecheck lane (tsc --noEmit -w @420ai/desktop)");
+try {
+  run("npm run typecheck:desktop");
+  ok("desktop tsc --noEmit: 0 errors");
+} catch {
+  fail(
+    "desktop typecheck failed",
+    "run `npm run typecheck:desktop` and fix the reported errors (the root tsc -b cannot see these)",
+  );
+}
+
+// --- Check 6: test suite (vitest) ----------------------------------------
 if (fast) {
-  console.log("\n[5/5] Test suite — SKIPPED (--fast)");
+  console.log("\n[6/6] Test suite — SKIPPED (--fast)");
 } else if (requireDb && !hasTestDbConfigured()) {
   // The integration layer self-skips without DATABASE_URL_TEST, and a skipped
   // layer still reports green — so at milestone sign-off, refuse to run blind.
-  console.log("\n[5/5] Test suite (--require-db)");
+  console.log("\n[6/6] Test suite (--require-db)");
   fail(
     "DATABASE_URL_TEST unset (--require-db)",
     "every *.int.test.ts would self-skip → the DB-backed layer is never exercised.\n" +
@@ -148,7 +165,7 @@ if (fast) {
   // Run with a JSON reporter alongside the console one so we can assert the
   // integration tests actually RAN (ran > 0, skipped === 0), not merely that
   // the suite was green with the int files quietly skipped (skipped ≠ passed).
-  console.log("\n[5/5] Test suite (vitest run, --require-db)");
+  console.log("\n[6/6] Test suite (vitest run, --require-db)");
   const out = join(tmpdir(), `repo-health-vitest-${process.pid}.json`);
   let suitePassed = true;
   try {
@@ -191,7 +208,7 @@ if (fast) {
     rmSync(out, { force: true });
   }
 } else {
-  console.log("\n[5/5] Test suite (vitest run)");
+  console.log("\n[6/6] Test suite (vitest run)");
   try {
     run("npx vitest run");
     ok("vitest: all tests passed");
