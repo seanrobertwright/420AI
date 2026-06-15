@@ -53,3 +53,4 @@ Thumbs.db
 # Exports / generated artifacts
 exports/
 *.parquet
+.gstack/

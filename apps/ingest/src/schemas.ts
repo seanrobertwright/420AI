@@ -86,6 +86,20 @@ export const ingestBodySchema = {
   },
 } as const;
 
+// --- M9 collector heartbeat body ---
+
+/** POST /v1/heartbeat body — the collector's sync backlog + version (HeartbeatRequest). */
+export const heartbeatBodySchema = {
+  type: "object",
+  required: ["queuePending", "queueInflight", "collectorVersion"],
+  additionalProperties: false,
+  properties: {
+    queuePending: { type: "integer", minimum: 0 },
+    queueInflight: { type: "integer", minimum: 0 },
+    collectorVersion: { type: "string", minLength: 1 },
+  },
+} as const;
+
 // --- M5 discovery / project mapping bodies ---
 
 const discoveredWorkspaceSchema = {

@@ -12,13 +12,16 @@ npm workspaces, all strict TS, Node ≥ 24:
 - `packages/db` — Drizzle Postgres schema + migrations, AES-256-GCM field encryption, repositories
 - `apps/ingest` — Fastify Ingest API (pairing, bearer-authed idempotent ingest, health)
 - `apps/collector` — headless capture agent (parser, durable queue, watcher, sync, CLI)
+- `apps/dashboard` — Next.js + shadcn/theGridCN frontend (M9 Live Monitor). **Out of the root
+  `tsc -b` graph** — see "Frontend workspace" below.
 
 ## Module / TS / naming
 
 - ESM, `"type": "module"`, `module`/`moduleResolution` NodeNext, `verbatimModuleSyntax`.
 - Relative imports end in `.js`. Use `import type` for type-only imports.
 - `kebab-case.ts` files, `PascalCase` types, `camelCase` functions, `snake_case` SQL columns.
-- Strict mode across all four workspaces; the root `tsc -b` must stay at 0 errors.
+- Strict mode across all workspaces; the **four backend** workspaces' root `tsc -b` must stay at 0
+  errors (the dashboard typechecks via its own enforced lane — see "Frontend workspace").
 
 ## Invariants — do NOT change without a milestone-level decision
 
@@ -29,6 +32,30 @@ npm workspaces, all strict TS, Node ≥ 24:
   re-derivable and upsert by fingerprint.
 - The M2 **ingest wire types** and server contract — the collector produces these shapes; M3+ feed
   them through the existing ingest client/API. No new server code or Postgres tables were added in M3.
+
+## Frontend workspace (`apps/dashboard`)
+
+A frontend stays **out of the root `tsc -b` graph** — it needs `moduleResolution: bundler` + `jsx`,
+incompatible with the root NodeNext/composite graph, so its `tsconfig.json` is **not referenced** by
+the root `tsconfig.json` (mirrors how `*.int.test.ts` are excluded). Consequence: **root `tsc -b` will
+NEVER catch dashboard type errors.** It therefore gets its own **enforced** lanes, wired into the gate
+(not just a convention): `typecheck:dashboard` (`tsc --noEmit`) runs inside `repo-health`, and
+`build:dashboard` (`next build`, which also catches theGridCN barrel breakage) gates milestone sign-off.
+
+- **In automated execution, hand-write shadcn primitives** (`card`/`table`/`badge`/`cn`/`globals.css`)
+  rather than running `npx shadcn init` — the CLI mutates `tsconfig`/`globals.css`/`components.json` and
+  can prompt. Reserve the CLI for **registry-only** components (e.g. `@thegridcn/data-card`), and
+  **build-verify every add** (the `@thegridcn/hud` barrel ships broken — missing siblings).
+- **The browser never holds `ADMIN_TOKEN`.** It talks to ingest only through same-origin **proxy Route
+  Handlers** that read `ADMIN_TOKEN`/`INGEST_URL` from server env and add the bearer on the
+  server→ingest hop. Never expose the token via a `NEXT_PUBLIC_*` var (assert: 0 occurrences in served
+  HTML). `next dev`/`next build` load env from the **dashboard CWD**, not the repo root — pass
+  `ADMIN_TOKEN`/`INGEST_URL` inline (or via `apps/dashboard/.env.local`) when running it standalone.
+- **For any long-lived resource** (SSE stream, `setInterval`, listener, upstream `fetch`): arm its
+  teardown BEFORE the first `await` (a disconnect during the initial await fires `close` before a
+  later-attached listener exists → leaked timer), and pass `request.signal` to proxy `fetch` so the
+  upstream hop cancels with the client. `tsc`+tests do not catch these leak windows — `/lril:code-review`
+  does (it found exactly this class in M9).
 
 ## Logging / process boundaries
 
@@ -88,14 +115,22 @@ the int test asserting it could never have passed against a real DB, so the laye
   ever on your own unmerged feature branch).
 - `node:sqlite` is experimental in Node 24 and prints an `ExperimentalWarning` on import **by
   design** — do not suppress it in a way that breaks tests.
+- The gstack **`browse`/`agent-browser` daemon is unreliable here** (`EEXIST .gstack`, start-timeout).
+  For screenshot evidence use **headless Edge** directly:
+  `"$EDGE" --headless=new --disable-gpu --hide-scrollbars --screenshot="<abs>.png" <url>`
+  (`$EDGE = /c/Program Files (x86)/Microsoft/Edge/Application/msedge.exe`). Pair it with HTTP-layer
+  assertions (rendered HTML contains the expected data; `grep -c "$ADMIN_TOKEN"` on page source == 0).
 
-## Drizzle / SQL gotchas (M6–M7)
+## Drizzle / SQL gotchas (M6–M9)
 
 - In a raw `sql` template a column's **`mode:"string"` parser does NOT apply** — `max(ts)` / `min(ts)` /
-  `date_trunc(...)` over a `mode:"string"` timestamptz come back as **strings**, not `Date`. Type the
-  `sql<...>` result as `string` (this exact mismatch was the latent M5 `projectEventSummary.lastActivity`
-  bug). node-postgres also returns `numeric` as a **string** (wrap in `Number(...)`) but `::int` as a JS
-  number — cast token/count sums `::int`, money `::numeric` + `Number()`.
+  `date_trunc(...)` over a `mode:"string"` timestamptz come back as **Postgres text**
+  (`2026-06-14 11:59:00+00`), NOT ISO and NOT `Date`. Type the `sql<...>` result as `string` AND
+  normalize through `new Date(v).toISOString()` if the wire contract is ISO. This shipped as the latent
+  M5 `projectEventSummary.lastActivity` bug and **recurred in M9 `activeSessions`** — so **when writing
+  illustrative aggregate SQL in a PLAN, always show the normalization; never write "already ISO — do not
+  re-coerce" for an aggregate.** node-postgres also returns `numeric` as a **string** (wrap in
+  `Number(...)`) but `::int` as a JS number — cast token/count sums `::int`, money `::numeric` + `Number()`.
 - **Inline closed-set SQL keywords** (e.g. `date_trunc` granularity `'day'|'week'`) as raw literals via
   `sql.raw` from a guarded union — **never as a bound parameter**. A bound param makes Postgres treat the
   SELECT and GROUP BY/ORDER BY expressions as distinct and reject the query

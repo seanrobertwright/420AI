@@ -62,6 +62,23 @@ export interface IngestResponse {
 }
 
 /**
+ * Collector liveness ping (M9, PRD §20). ADDITIVE to the M2 wire contract — a
+ * sibling of `IngestBatch`, not a change to it. The collector POSTs this to the
+ * machine-authed `POST /v1/heartbeat` on a throttled cadence so the server can
+ * see the (machine-local) sync backlog and tell an idle-but-alive collector from
+ * an offline one (`lastSeenAt` only refreshes on activity, so it can't).
+ */
+export interface HeartbeatRequest {
+  queuePending: number; // QueueStore.stats().pending
+  queueInflight: number; // QueueStore.stats().inflight
+  collectorVersion: string; // from the collector package.json, read at the entrypoint
+}
+
+export interface HeartbeatResponse {
+  ok: true;
+}
+
+/**
  * Map an internal RawSourceRecord onto the wire RawRecordPayload. The machine-
  * local record `id` becomes the wire `sourceRecordId`. Symmetric with
  * `toEventPayload` — keeps the collector's wire boundary in one place.

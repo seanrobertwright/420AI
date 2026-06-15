@@ -1,5 +1,6 @@
-import { postIngest, isUnauthorized } from "../ingest-client.js";
+import { postIngest, isUnauthorized, type postHeartbeat } from "../ingest-client.js";
 import type { QueueStore, SyncOutcome } from "../queue/queue-store.js";
+import { maybeSendHeartbeat, newHeartbeatState } from "../heartbeat.js";
 import type {
   IngestBatch,
   RawRecordPayload,
@@ -80,6 +81,18 @@ export interface SyncLoopDeps extends SyncDeps {
   retryMs?: number;
   /** Called once when the loop stops on a 401 so the engine/cli can surface it. */
   onStop?: () => void;
+  /**
+   * M9 heartbeat (opt-in): when `collectorVersion` is set, the loop sends a throttled,
+   * best-effort liveness ping each iteration (queue backlog + version). Omitting it
+   * disables heartbeats — existing callers/tests are unaffected.
+   */
+  collectorVersion?: string;
+  /** Heartbeat cadence; default 30 s. */
+  heartbeatIntervalMs?: number;
+  /** Injectable clock for the heartbeat throttle (tests); defaults to wall-clock. */
+  now?: () => Date;
+  /** Injectable heartbeat client (tests); defaults to the real fetch-based client. */
+  postHeartbeat?: typeof postHeartbeat;
 }
 
 /**
@@ -92,7 +105,27 @@ export async function runSyncLoop(
 ): Promise<"aborted" | "stop"> {
   const idleMs = deps.idleMs ?? 2000;
   const retryMs = deps.retryMs ?? 1000;
+  // M9: one throttle state per loop; heartbeats are sent only when collectorVersion is set.
+  const heartbeatState = newHeartbeatState();
+  const sendHeartbeat = async (): Promise<void> => {
+    if (!deps.collectorVersion) return; // heartbeat disabled (no version wired)
+    await maybeSendHeartbeat(
+      {
+        url: deps.url,
+        token: deps.token,
+        queue: deps.queue,
+        collectorVersion: deps.collectorVersion,
+        intervalMs: deps.heartbeatIntervalMs ?? 30000,
+        now: deps.now ?? (() => new Date()),
+        post: deps.postHeartbeat,
+      },
+      heartbeatState,
+    );
+  };
   while (!signal.aborted) {
+    // Best-effort liveness ping (throttled) before each drain — a failure is swallowed
+    // inside maybeSendHeartbeat and never affects the sync outcome (residual risk e).
+    await sendHeartbeat();
     const outcome = await syncOnce(deps);
     if (outcome === "stop") {
       deps.onStop?.();

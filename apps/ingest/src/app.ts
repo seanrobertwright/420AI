@@ -11,9 +11,12 @@ import workspaceRoutes from "./routes/workspaces.js";
 import projectionRoutes from "./routes/projections.js";
 import reportRoutes from "./routes/reports.js";
 import interpretationRoutes from "./routes/interpretations.js";
+import heartbeatRoutes from "./routes/heartbeat.js";
+import monitorRoutes from "./routes/monitor.js";
 import { AnalysisProviderError, type AnalysisProvider } from "./analysis/provider.js";
 
 const DEFAULT_ANALYSIS_MAX_OUTPUT_TOKENS = 4096;
+const DEFAULT_MONITOR_STREAM_INTERVAL_MS = 3000;
 
 export interface BuildAppOptions {
   db: Db;
@@ -22,6 +25,8 @@ export interface BuildAppOptions {
   analysisProvider: AnalysisProvider;
   /** M8 resolved max output tokens for an interpretation call (default 4096). */
   analysisMaxOutputTokens?: number;
+  /** M9 SSE push cadence for GET /v1/monitor/stream (default 3000; tests inject 50). */
+  monitorStreamIntervalMs?: number;
   logger?: boolean;
 }
 
@@ -43,6 +48,10 @@ export function buildApp(opts: BuildAppOptions): FastifyInstance {
     "analysisMaxOutputTokens",
     opts.analysisMaxOutputTokens ?? DEFAULT_ANALYSIS_MAX_OUTPUT_TOKENS,
   );
+  app.decorate(
+    "monitorStreamIntervalMs",
+    opts.monitorStreamIntervalMs ?? DEFAULT_MONITOR_STREAM_INTERVAL_MS,
+  );
 
   app.register(authPlugin);
   app.register(healthRoutes);
@@ -54,6 +63,8 @@ export function buildApp(opts: BuildAppOptions): FastifyInstance {
   app.register(projectionRoutes);
   app.register(reportRoutes);
   app.register(interpretationRoutes);
+  app.register(heartbeatRoutes);
+  app.register(monitorRoutes);
 
   // Map known failures to clean status codes; never leak internals on a 500.
   app.setErrorHandler((err: FastifyError, request, reply) => {

@@ -151,6 +151,10 @@ export async function runWatch(opts: {
   home?: string;
   signal: AbortSignal;
   logger?: (msg: string) => void;
+  /** M9: collector version (read from package.json at the entrypoint) — enables heartbeats. */
+  collectorVersion?: string;
+  /** M9: heartbeat cadence override (ms). */
+  heartbeatIntervalMs?: number;
 }): Promise<void> {
   const creds = resolveCreds(opts);
   await runCaptureEngine({
@@ -160,6 +164,8 @@ export async function runWatch(opts: {
     queuePath: opts.queuePath,
     home: opts.home,
     logger: opts.logger,
+    collectorVersion: opts.collectorVersion,
+    heartbeatIntervalMs: opts.heartbeatIntervalMs,
   });
 }
 
@@ -243,6 +249,21 @@ export async function runProjects(opts: {
 function getFlag(args: string[], name: string): string | undefined {
   const i = args.indexOf(name);
   return i >= 0 ? args[i + 1] : undefined;
+}
+
+/**
+ * The collector's own version, read from its package.json at the entrypoint (M9 heartbeat).
+ * Libraries stay silent/pure — the version is resolved HERE and passed into runWatch.
+ */
+function readCollectorVersion(): string {
+  try {
+    const pkg = JSON.parse(
+      readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"),
+    ) as { version?: string };
+    return pkg.version ?? "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
 }
 
 function usage(dbPath: string): string {
@@ -358,12 +379,15 @@ async function main(argv: string[]): Promise<void> {
       controller.abort();
     });
     process.stdout.write("watching… Ctrl-C to stop\n");
+    const heartbeatFlag = getFlag(args, "--heartbeat-interval") ?? process.env.HEARTBEAT_INTERVAL_MS;
     await runWatch({
       url: getFlag(args, "--url"),
       token: getFlag(args, "--token"),
       intervalMs,
       signal: controller.signal,
       logger: (msg) => process.stdout.write(msg + "\n"),
+      collectorVersion: readCollectorVersion(),
+      heartbeatIntervalMs: heartbeatFlag ? Number(heartbeatFlag) : undefined,
     });
     process.exit(0);
   }

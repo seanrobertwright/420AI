@@ -398,9 +398,40 @@ npx tsx apps/collector/src/cli.ts projects [--url <baseUrl>] [--token <adminToke
 upserts workspaces with no duplicate projects or keys. No change to the M1 fingerprint, the M2 event
 wire types/encryption split, or any connector's `parse`.
 
+### Milestone 9 — Live Monitor (first dashboard + real-time observability)
+
+M9 makes the archive **observable in real time** and ships the **first frontend** (PRD §8.4, §10.1.1,
+§20):
+
+- **Collector→server heartbeat:** the `watch` daemon POSTs a throttled, **best-effort** liveness ping
+  (sync backlog + collector version) to a new machine-authed `POST /v1/heartbeat`, persisted on four
+  additive nullable `machines` columns (one migration). This is the only way the server can see the
+  backlog and tell an idle-but-alive collector from an offline one (`lastSeenAt` can't).
+- **Monitor projections + derived status:** clock-free `machineStatuses`/`activeSessions` repos
+  (mirroring `connectorHealth`) plus a pure, clock-injected `deriveMachineStatus` →
+  `online`/`stale`/`offline` + a `backlogHigh` flag in `@420ai/shared`. **States only — the alert
+  engine is M10.**
+- **Monitor API:** admin-gated `GET /v1/monitor` (a composed `LiveMonitorSnapshot`, route owns the
+  clock) and `GET /v1/monitor/stream` (**SSE** — a fresh snapshot every `MONITOR_STREAM_INTERVAL_MS`;
+  guards run before `reply.hijack()`, interval injectable for deterministic tests).
+- **The dashboard (`apps/dashboard`):** a self-hosted Next.js + shadcn + theGridCN app whose **Live
+  Monitor page** renders machines/connectors/active-sessions and updates live over SSE. It talks to
+  ingest **only through server-side proxy Route Handlers** that hold `ADMIN_TOKEN` — the browser never
+  sees the token. The dashboard is deliberately **out of the root `tsc -b` graph** and gets its own
+  **enforced** typecheck lane in `repo-health` (`typecheck:dashboard`) + a `build:dashboard` gate.
+
+```bash
+npm run dashboard:dev        # Next.js dev server (reads INGEST_URL + ADMIN_TOKEN from .env)
+npm run build:dashboard      # production build (also gates theGridCN component resolution)
+npm run typecheck:dashboard  # the dashboard's own tsc --noEmit lane (root tsc -b cannot see it)
+```
+
+The heartbeat is an **additive** wire type + endpoint; the M2 ingest contract, fingerprint, and
+encryption split are untouched.
+
 ## Status
 
-Milestones 1–8 implemented. M1 (walking skeleton): `packages/shared` (token shape, event taxonomy,
+Milestones 1–9 implemented. M1 (walking skeleton): `packages/shared` (token shape, event taxonomy,
 fingerprint, pricing catalog, cost ladder) and `apps/collector` (Claude Code parser, SQLite store,
 Markdown report, CLI). M2 (archive deployment): `packages/db` (Drizzle Postgres schema + migrations,
 AES-256-GCM field encryption, ingest token + pairing repositories), `apps/ingest` (Fastify Ingest API
@@ -436,5 +467,11 @@ change), and `apps/ingest` (an injected, configurable **Analysis Provider** with
 and OpenAI-compatible `fetch` clients, a generation orchestrator that redacts before sending/storing,
 and admin-gated session/project interpretation endpoints). AI findings are stored as a new
 `report_artifacts` `reportType` reusing the M7 store — no migration, no new dependency. The §21
-redacted search projection, scheduled analysis, and report comparison remain deferred. Milestones
-9–10 above thicken this skeleton.
+redacted search projection, scheduled analysis, and report comparison remain deferred. M9 (live
+monitor): a collector→server **heartbeat** (`POST /v1/heartbeat` + four additive nullable `machines`
+columns), clock-free monitor projections + a pure `deriveMachineStatus` (`online`/`stale`/`offline` +
+`backlogHigh`) in `@420ai/shared`, the admin-gated `GET /v1/monitor` snapshot + `GET /v1/monitor/stream`
+**SSE** endpoints, and the **first frontend** — a Next.js + shadcn + theGridCN **`apps/dashboard`** whose
+Live Monitor page renders machines/connectors/active-sessions live over SSE through server-side proxy
+Route Handlers that keep `ADMIN_TOKEN` off the browser. States only — the operational-alert engine is
+M10. Milestone 10 above thickens this skeleton.

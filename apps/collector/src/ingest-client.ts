@@ -5,6 +5,8 @@ import type {
   IngestResponse,
   DiscoverRequest,
   DiscoverResponse,
+  HeartbeatRequest,
+  HeartbeatResponse,
 } from "@420ai/shared";
 
 /**
@@ -90,6 +92,29 @@ export async function postDiscover(
   });
   await expectOk(res, "discover");
   return (await res.json()) as DiscoverResponse;
+}
+
+/**
+ * POST a collector liveness heartbeat (M9). Machine-authed, like ingest. Reuses the
+ * same fetch + bearer + expectOk shape as `postIngest`. Best-effort by contract: the
+ * CALLER (maybeSendHeartbeat) swallows failures — a liveness ping is never queued or
+ * retried (residual risk e). Throws IngestHttpError on a non-2xx so the caller can log.
+ */
+export async function postHeartbeat(
+  baseUrl: string,
+  token: string,
+  body: HeartbeatRequest,
+): Promise<HeartbeatResponse> {
+  const res = await fetch(`${trimUrl(baseUrl)}/v1/heartbeat`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(body),
+  });
+  await expectOk(res, "heartbeat");
+  return (await res.json()) as HeartbeatResponse;
 }
 
 /** A project as listed by the admin `GET /v1/projects` endpoint. */
