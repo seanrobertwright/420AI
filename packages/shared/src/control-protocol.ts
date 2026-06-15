@@ -36,7 +36,28 @@ export type ControlCommand =
   | { cmd: "status" } //               request an immediate status event
   | { cmd: "pair"; url: string; code: string; name?: string } // Slice 3: GUI pairing
   | { cmd: "discover" } //             optional: trigger M5 discovery
+  | { cmd: "connectors.list" } //      Slice 2: request a `connectors` event (registry + persisted enablement)
+  | { cmd: "connectors.set"; id: string; enabled: boolean; config?: Record<string, unknown> } // Slice 2: persist per-connector enable/disable (`config` reserved/forward-compat — ignored today)
   | { cmd: "stop" }; //                graceful drain + exit
+
+/**
+ * A serializable connector descriptor for the webview (Slice 2). `@420ai/shared`
+ * is a leaf — it can NOT import `Connector` from `apps/collector` (that would invert
+ * the dependency graph), so the fidelity fields are mirrored 1:1 from
+ * `ConnectorFidelity` (connector.ts) and the collector's `mapConnectorInfo` is the
+ * single `Connector → ConnectorInfo` conversion point (a serve test asserts the map).
+ */
+export interface ConnectorInfo {
+  id: string;
+  enabled: boolean;
+  status: "stable" | "experimental" | "planned";
+  captureMethod: string;
+  liveness: "streaming" | "near-real-time" | "snapshot" | "batch";
+  tokens: "exact" | "estimated" | "none";
+  cost: "reported" | "computed" | "none";
+  knownGaps: string[];
+  watchGlobs: string[]; // resolved against home — the "permission scope" (which files it reads)
+}
 
 /**
  * Events: sidecar stdout → Rust → `app.emit` → webview `listen`.
@@ -58,7 +79,8 @@ export type ControlEvent =
   | { type: "paired"; machineId: string }
   | { type: "ack"; cmd: string }
   | { type: "stopped" }
+  | { type: "connectors"; connectors: ConnectorInfo[] } // Slice 2: registry + persisted enablement + watch globs
   | { type: "error"; message: string; cmd?: string };
 
 /** Stamps the control-protocol wire shape (sibling of MONITOR_VERSION / ALERT_VERSION). */
-export const CONTROL_PROTOCOL_VERSION = "m11-control-v1" as const;
+export const CONTROL_PROTOCOL_VERSION = "m11-control-v2" as const;
