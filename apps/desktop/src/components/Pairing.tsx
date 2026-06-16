@@ -78,7 +78,7 @@ export function Pairing() {
 
   const onPair = async (): Promise<void> => {
     setPairing(true);
-    const result = await run(() => pair(url, code, name));
+    const result = await run(() => pair(url.trim(), code.trim(), name.trim()));
     if (result) {
       // Token is never returned — only the machineId. Reflect the new paired state and
       // clear the one-time code (it's spent).
@@ -172,6 +172,7 @@ export function Pairing() {
             type="button"
             onClick={onToggleAutostart}
             disabled={autostart === null}
+            aria-pressed={autostart ?? false}
             className={cn(
               "inline-flex h-8 items-center rounded-md border px-3 text-sm font-medium transition-colors disabled:opacity-40 disabled:pointer-events-none",
               autostart

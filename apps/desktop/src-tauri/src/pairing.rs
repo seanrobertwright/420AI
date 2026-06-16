@@ -70,7 +70,7 @@ pub async fn pair(
     code: String,
     name: String,
 ) -> Result<PairResult, String> {
-    let base = url.trim_end_matches('/').to_string();
+    let base = url.trim().trim_end_matches('/').to_string();
     let computer_name = std::env::var("COMPUTERNAME").ok();
     // The ingest contract requires machine.name (minLength 1) — an empty name is a 400,
     // not a friendly error. Fall back to the computer name when the form is left blank
@@ -91,6 +91,7 @@ pub async fn pair(
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| format!("http client init failed: {e}"))?;
     let res = client
