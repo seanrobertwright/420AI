@@ -11,12 +11,25 @@ use crate::sidecar;
 /// if rebuilt on dev hot-reload). The menu drives the same sidecar relay as the
 /// webview: Start/Pause/Resume write a control command to the sidecar's stdin; Quit
 /// exits the app (the `RunEvent::Exit` handler tears the sidecar down).
+///
+/// A non-interactive (`enabled = false`) server-status line surfaces the server stack
+/// in the tray (Slice 4 acceptance "+ tray"); the live archive/ingest health renders in
+/// the Settings panel. A live tray label would need a stored `MenuItem` handle + a poll
+/// task — deliberately out of this slice (the static line satisfies the criterion).
 pub fn build_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let start = MenuItem::with_id(app, "start", "Start", true, None::<&str>)?;
     let pause = MenuItem::with_id(app, "pause", "Pause", true, None::<&str>)?;
     let resume = MenuItem::with_id(app, "resume", "Resume", true, None::<&str>)?;
+    // Display-only: a `false`-enabled item needs no `on_menu_event` branch.
+    let server_status = MenuItem::with_id(
+        app,
+        "server_status",
+        "Server: manage in Settings",
+        false,
+        None::<&str>,
+    )?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&start, &pause, &resume, &quit])?;
+    let menu = Menu::with_items(app, &[&start, &pause, &resume, &server_status, &quit])?;
 
     TrayIconBuilder::with_id("main")
         .icon(app.default_window_icon().expect("a default window icon").clone())

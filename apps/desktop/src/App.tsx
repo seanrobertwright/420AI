@@ -2,13 +2,16 @@ import { Pairing } from "@/components/Pairing";
 import { StatusBar } from "@/components/StatusBar";
 import { SyncHealth } from "@/components/SyncHealth";
 import { Connectors } from "@/components/Connectors";
+import { Settings } from "@/components/Settings";
 
 /**
  * The desktop webview shell (M11). Slice 1 shipped the StatusBar; Slice 2 added the
  * Sync & Health (local backlog + server fleet view/alerts) and Connectors (per-source
- * enable/disable + fidelity/permission-scope review) panels; Slice 3 adds Pairing (GUI
- * pairing + keychain token + run-on-login). A later slice adds Settings. The tray
- * (Rust) and this webview are two views over the same Rust↔sidecar relay.
+ * enable/disable + fidelity/permission-scope review) panels; Slice 3 added Pairing (GUI
+ * pairing + keychain token + run-on-login); Slice 4 adds Settings + full server-stack
+ * supervision (server config in a second keychain entry + start/stop/health for the
+ * Docker archive and the ingest process). The tray (Rust) and this webview are two
+ * views over the same Rust↔sidecar relay.
  */
 export function App() {
   return (
@@ -24,6 +27,7 @@ export function App() {
         <StatusBar />
         <SyncHealth />
         <Connectors />
+        <Settings />
       </div>
     </main>
   );

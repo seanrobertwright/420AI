@@ -5,12 +5,14 @@
 //! the bearer added here. This mirrors the dashboard's `app/api/monitor/route.ts`
 //! proxy, with Rust as the token-holder instead of the Next server.
 //!
-//! Token + base come from PROCESS ENV (`ADMIN_TOKEN` / `INGEST_URL`), exactly like
-//! the dashboard (`apps/dashboard/src/lib/ingest.ts`). `/v1/monitor` is admin-gated,
-//! so the saved per-machine ingest credentials would 401 — the admin token is the
-//! only correct source (Slice 3/4 migrates it into the Credential Manager + Settings).
-//! If `ADMIN_TOKEN` is unset the command returns `Err`, and the panel degrades to
-//! local-status-only. The token is NEVER logged and NEVER returned to the webview.
+//! Token + base come from the SERVER-CONFIG KEYCHAIN (Slice 4) — `adminToken` /
+//! `ingestUrl` — falling back to PROCESS ENV (`ADMIN_TOKEN` / `INGEST_URL`) when the
+//! keychain holds no server config, so a headless/dev run behaves exactly as before
+//! (mirrors the dashboard's `apps/dashboard/src/lib/ingest.ts` env path). `/v1/monitor`
+//! is admin-gated, so the saved per-machine ingest credentials would 401 — the admin
+//! token is the only correct source. If neither the keychain nor the env supplies a
+//! token the command returns `Err`, and the panel degrades to local-status-only. The
+//! token is NEVER logged and NEVER returned to the webview.
 
 use std::time::Duration;
 
@@ -22,13 +24,33 @@ fn monitor_url(base: &str) -> String {
     format!("{}/v1/monitor", base.trim_end_matches('/'))
 }
 
+/// Resolve the admin token + ingest base, preferring the server-config keychain
+/// (Slice 4) and falling back to process env (headless/dev). An empty keychain string
+/// is treated as unset (so we never send an empty bearer / a blank base). Returns
+/// `Err` only when NEITHER source supplies a token.
+fn monitor_credentials() -> Result<(String, String), String> {
+    let cfg = crate::keychain::load_server();
+    let token = cfg
+        .as_ref()
+        .map(|c| c.admin_token.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .or_else(|| std::env::var("ADMIN_TOKEN").ok().filter(|t| !t.trim().is_empty()))
+        .ok_or_else(|| "admin token not configured".to_string())?;
+    let base = cfg
+        .as_ref()
+        .map(|c| c.ingest_url.trim().to_string())
+        .filter(|b| !b.is_empty())
+        .or_else(|| std::env::var("INGEST_URL").ok().filter(|b| !b.trim().is_empty()))
+        .unwrap_or_else(|| DEFAULT_INGEST_URL.to_string());
+    Ok((token, base))
+}
+
 /// Fetch the server `LiveMonitorSnapshot` as opaque JSON. Rust does NOT model the
 /// snapshot — the webview casts it to the `@420ai/shared` type. A refused/!ok upstream
 /// maps to a clean `Err(String)` the panel renders (the dashboard's 502 analog).
 #[tauri::command]
 pub async fn get_monitor_snapshot() -> Result<serde_json::Value, String> {
-    let token = std::env::var("ADMIN_TOKEN").map_err(|_| "admin token not configured".to_string())?;
-    let base = std::env::var("INGEST_URL").unwrap_or_else(|_| DEFAULT_INGEST_URL.to_string());
+    let (token, base) = monitor_credentials()?;
     let client = reqwest::Client::builder()
         .timeout(MONITOR_TIMEOUT)
         .redirect(reqwest::redirect::Policy::none())
