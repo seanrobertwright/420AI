@@ -81,3 +81,88 @@ export function getAutostart(): Promise<boolean> {
 export function setAutostart(enabled: boolean): Promise<void> {
   return invoke("set_autostart", { enabled });
 }
+
+/**
+ * Server config + full-stack supervision (Slice 4). Rust is the privileged
+ * orchestrator: it holds the secrets in a SECOND keychain entry, injects them as the
+ * supervised ingest's env (never written to disk), and runs `docker compose` for the
+ * archive. The webview NEVER receives a secret value — `ServerConfigView` carries only
+ * presence booleans + the non-secret fields (token-isolation, like `PairResult` having
+ * no `token`).
+ */
+export interface ServerConfigView {
+  serverDir: string;
+  ingestUrl: string;
+  hasAdminToken: boolean;
+  hasDatabaseUrl: boolean;
+  hasArchiveEncryptionKey: boolean;
+  hasAnalysisApiKey: boolean;
+  ingestPort: number | null;
+  analysisProvider: string | null;
+  analysisModel: string | null;
+  analysisBaseUrl: string | null;
+}
+
+/**
+ * What the Settings form SENDS. Secrets are optional: a blank/omitted secret means
+ * "leave unchanged" (Rust merges against the stored blob) so re-saving non-secret prefs
+ * never wipes a secret the webview can't see.
+ */
+export interface ServerConfigInput {
+  serverDir: string;
+  ingestUrl: string;
+  adminToken?: string;
+  databaseUrl?: string;
+  archiveEncryptionKey?: string;
+  ingestPort?: number;
+  analysisProvider?: string;
+  analysisApiKey?: string;
+  analysisModel?: string;
+  analysisBaseUrl?: string;
+}
+
+/** Stack health: archive compose state + ingest `/v1/health` reachability. */
+export interface ServerHealth {
+  archive: string;
+  ingest: boolean;
+}
+
+/** Read the masked server config (presence booleans for secrets), or `null` if unset. */
+export function getServerConfig(): Promise<ServerConfigView | null> {
+  return invoke<ServerConfigView | null>("get_server_config");
+}
+
+/** Persist the server config (blank secret fields are merged, not wiped). */
+export function setServerConfig(cfg: ServerConfigInput): Promise<void> {
+  return invoke("set_server_config", { cfg });
+}
+
+/** Start the Docker Postgres archive (`docker compose up -d archive`). */
+export function startArchive(): Promise<void> {
+  return invoke("start_archive");
+}
+
+/** Stop the Docker archive (`docker compose down`; the data volume persists). */
+export function stopArchive(): Promise<void> {
+  return invoke("stop_archive");
+}
+
+/** Start the supervised ingest process (keychain secrets injected as env). */
+export function startIngest(): Promise<void> {
+  return invoke("start_ingest");
+}
+
+/** Stop the supervised ingest process (kill + reap — no zombie). */
+export function stopIngest(): Promise<void> {
+  return invoke("stop_ingest");
+}
+
+/** Poll archive + ingest health (best-effort — a failed probe is `stopped`/`false`). */
+export function getServerHealth(): Promise<ServerHealth> {
+  return invoke<ServerHealth>("get_server_health");
+}
+
+/** Unpair: clear the pairing keychain entry (the server-config entry is untouched). */
+export function unpair(): Promise<void> {
+  return invoke("unpair");
+}
