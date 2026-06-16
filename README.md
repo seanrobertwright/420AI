@@ -167,6 +167,17 @@ V1 is viable when **one Windows machine** can:
 
 ## Documentation
 
+**Usage guide** (start here to install and run it):
+
+- [`docs/guide/install.md`](./docs/guide/install.md) — install & setup (desktop-first, with a
+  manual/headless path): prerequisites, one-time repo setup, the desktop app, and the server stack.
+- [`docs/guide/usage.md`](./docs/guide/usage.md) — day-to-day how-to: the desktop panels & tray,
+  connectors, the full collector CLI, project mapping, and reports/insights via the ingest API.
+- [`docs/guide/troubleshooting.md`](./docs/guide/troubleshooting.md) — failure modes and fixes.
+- [`apps/desktop/README.md`](./apps/desktop/README.md) — building the branded NSIS desktop installer.
+
+**Reference:**
+
 - [`PRD.md`](./docs/PRD.md) — full product requirements document.
 - [`CONTEXT.md`](./docs/CONTEXT.md) — domain glossary and shared terminology.
 
