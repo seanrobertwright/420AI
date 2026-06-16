@@ -83,10 +83,9 @@ export function Settings() {
   const [error, setError] = useState<string | null>(null);
   const [savedNote, setSavedNote] = useState<string | null>(null);
 
-  // Wrap a VALUE-returning invoke so a rejection surfaces as panel state (Pairing.tsx
-  // pattern). NB: only use this for non-void invokes — a void invoke resolves to
-  // `undefined` on success too, which is indistinguishable from the failure path
-  // (use `runOk` for those).
+  // Wrap an invoke so a rejection surfaces as panel state (Pairing.tsx pattern).
+  // Use `runOk` instead when you need a success boolean — e.g. for void invokes where
+  // `undefined` on success is indistinguishable from the failure path.
   const run = async <T,>(fn: () => Promise<T>): Promise<T | undefined> => {
     setError(null);
     try {
@@ -251,7 +250,7 @@ export function Settings() {
                 type="text"
                 value={serverDir}
                 onChange={(e) => setServerDir(e.target.value)}
-                placeholder="C:\path\to\420AI"
+                placeholder={"C:\\path\\to\\420AI"}
                 className={inputClass}
               />
             </Field>

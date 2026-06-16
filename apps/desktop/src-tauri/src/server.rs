@@ -314,7 +314,10 @@ pub fn set_server_config(cfg: ServerConfigInput) -> Result<(), String> {
 #[tauri::command]
 pub async fn start_archive() -> Result<(), String> {
     let cfg = keychain::load_server().ok_or("server not configured")?;
-    run_docker(&compose_args(&cfg.server_dir, &["up", "-d", "archive"]))
+    let args = compose_args(&cfg.server_dir, &["up", "-d", "archive"]);
+    tokio::task::spawn_blocking(move || run_docker(&args))
+        .await
+        .map_err(|e| format!("task error: {e}"))?
 }
 
 /// Stop the Docker archive (`docker compose down`). The `archive-data` volume persists,
@@ -322,7 +325,10 @@ pub async fn start_archive() -> Result<(), String> {
 #[tauri::command]
 pub async fn stop_archive() -> Result<(), String> {
     let cfg = keychain::load_server().ok_or("server not configured")?;
-    run_docker(&compose_args(&cfg.server_dir, &["down"]))
+    let args = compose_args(&cfg.server_dir, &["down"]);
+    tokio::task::spawn_blocking(move || run_docker(&args))
+        .await
+        .map_err(|e| format!("task error: {e}"))?
 }
 
 /// Start the ingest Node process with the keychain secrets injected as env (which win
@@ -371,7 +377,14 @@ pub async fn stop_ingest(app: tauri::AppHandle) -> Result<(), String> {
     let state = app.state::<ServerState>();
     let mut guard = state.ingest.lock().map_err(|e| e.to_string())?;
     if let Some(mut child) = guard.take() {
-        child.kill().map_err(|e| format!("failed to stop ingest: {e}"))?;
+        // Only send SIGKILL when the process hasn't already exited.
+        if child
+            .try_wait()
+            .map_err(|e| format!("failed to check ingest status: {e}"))?
+            .is_none()
+        {
+            child.kill().map_err(|e| format!("failed to stop ingest: {e}"))?;
+        }
         let _ = child.wait(); // reap so no zombie lingers
     }
     Ok(())
