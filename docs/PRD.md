@@ -698,8 +698,8 @@ Requirements:
       (b) **Connector management** — enable/disable, edit config, review/grant per-connector permission scopes;
       (c) **Sync & health** — sync status, queue backlog, connector health, surfaced operational alerts;
       (d) **Pairing & autostart** — GUI pairing (enter dashboard URL + pairing code, replacing the CLI `pair`) + run-on-login;
-      (e) **Settings** — manage **both** collector config **and** archive/ingest server config (env vars),
-      with secrets stored in the **OS keychain (Windows Credential Manager)**, never plaintext on disk.
+      (e) **Settings** — manage archive/ingest server config (env vars), with secrets stored in the
+      **OS keychain (Windows Credential Manager)**, never plaintext on disk.
     - **Packaging:** local **NSIS** `tauri build` artifact (`npm run build:desktop`). `targets:"all"`
       also builds MSI via WiX (`light.exe`), which fails locally, so the bundle is pinned to
       `["nsis"]`. MSI + a signed installer + auto-update remain deferred (**revisit distribution

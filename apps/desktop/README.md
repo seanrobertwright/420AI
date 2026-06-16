@@ -12,7 +12,7 @@ the sequence that turns a fresh clone into a runnable, branded NSIS installer.
 
 ## Prerequisites
 
-- **Node ≥ 24** (the repo pins Node 24; the SEA sidecar relies on Node 24's stable `node:sqlite`).
+- **Node ≥ 24** (the repo pins Node 24; the SEA sidecar relies on Node 24's experimental `node:sqlite`).
 - **Rust stable** + the Tauri CLI (`cargo tauri`). Install with `cargo install tauri-cli` (this repo
   was built with `tauri-cli 2.11.2`).
 - **NSIS** (`makensis`) on `PATH` — the Windows installer backend. (The WiX/MSI path is intentionally
