@@ -244,6 +244,26 @@ A user-facing interface, such as a tray app or desktop UI, used to configure Con
 
 A Tauri-based local application that provides the Collector's Control Surface on Windows first, with macOS and Linux support later.
 
+## Tauri
+
+The Rust + system-webview desktop framework that hosts the M11 Desktop App. The Rust layer owns windowing, the tray, OS-keychain access, and sidecar/server-stack supervision; the UI runs as a webview.
+
+## Sidecar
+
+The headless Node/TS Collector packaged as a Single-Executable Application and bundled as a Tauri `externalBin`, whose lifecycle the Tauri Rust shell supervises. The proven capture core is reused unchanged and the Rust layer stays off the capture path.
+
+## Control Protocol
+
+The JSON-lines command/event protocol the Desktop App speaks to the Sidecar over its stdio (relayed to the webview via Rust events). It is versioned by `CONTROL_PROTOCOL_VERSION` (currently `m11-control-v2`).
+
+## Keychain (Windows Credential Manager)
+
+The OS-native secret store the Tauri Rust shell uses (via the `keyring` crate) to hold the Ingest Token and server-config secrets. The webview never reads these secrets; they are injected as child-process env, never written to a plaintext `.env`.
+
+## Single-Executable Application (SEA)
+
+Node's `node:sea` mechanism, used to package the Collector's `serve` entry into one `.exe` so the Tauri Sidecar can bundle and run it without a separate Node install.
+
 ## Web Dashboard
 
 A self-hosted Next.js application that provides central reporting, search, analysis, Project views, and cross-machine visibility over the Central Archive.
