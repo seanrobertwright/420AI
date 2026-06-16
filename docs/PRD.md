@@ -683,8 +683,10 @@ Requirements:
 
 ### Post-V1 milestones
 
-11. **Tauri desktop / tray collector (post-V1).** A Windows desktop + system-tray control surface
-    for the existing collector. Feasibility validated by `docs/research/m11-tauri-sidecar-spike.md`.
+11. **Tauri desktop / tray collector (post-V1).** **Built (Slices 1–5), signed off 2026-06-16.** A
+    Windows desktop + system-tray control surface for the existing collector. Feasibility validated by
+    `docs/research/m11-tauri-sidecar-spike.md`; the clean-checkout build recipe is in
+    `apps/desktop/README.md`.
     - **Architecture — sidecar (decided):** a Tauri (Rust) shell + webview that bundles the headless
       Node/TS collector (packaged via the built-in `node:sea`) as an `externalBin` sidecar and
       supervises its lifecycle. The proven M3 capture core (queue, watchers, tailer, sync worker,
@@ -698,10 +700,15 @@ Requirements:
       (d) **Pairing & autostart** — GUI pairing (enter dashboard URL + pairing code, replacing the CLI `pair`) + run-on-login;
       (e) **Settings** — manage **both** collector config **and** archive/ingest server config (env vars),
       with secrets stored in the **OS keychain (Windows Credential Manager)**, never plaintext on disk.
-    - **Packaging:** local `tauri build` artifact only for this milestone; a signed installer +
-      auto-update are deferred (**revisit distribution later** — code-signing cert required then).
-    - **Design points to resolve in planning:** (1) the UI↔sidecar **control protocol** — bidirectional
-      control + live status, likely JSON-lines over the sidecar's stdio relayed to the webview via Rust
-      events (may warrant a small control-protocol spike); (2) whether the app also **supervises the
-      local server-stack lifecycle** (Docker archive + ingest API up/down) or only writes its
-      configuration. Both are open until the M11 plan.
+    - **Packaging:** local **NSIS** `tauri build` artifact (`npm run build:desktop`). `targets:"all"`
+      also builds MSI via WiX (`light.exe`), which fails locally, so the bundle is pinned to
+      `["nsis"]`. MSI + a signed installer + auto-update remain deferred (**revisit distribution
+      later** — code-signing cert required then).
+    - **Resolved in implementation** (these overrode the open design points):
+      (1) the UI↔sidecar **control protocol** is JSON-lines commands/events over the sidecar's stdio,
+      relayed to the webview via Rust events, versioned by `CONTROL_PROTOCOL_VERSION = "m11-control-v2"`
+      (**unchanged through Slices 1–5**);
+      (2) the app **does supervise the local server-stack** (Docker archive + ingest up/down) — via Rust
+      `std::process::Command`, **not** `tauri-plugin-shell` — injecting keychain secrets as the child
+      process env (no `.env` written). Settings manages **server** config only; collector-config
+      management is deferred.

@@ -6,7 +6,7 @@
 
 ---
 
-## 0. Status — 2026-06-15
+## 0. Status — 2026-06-16
 
 **V1 is ~90% built.** Milestones **1–9 are implemented and on `main`** (M9 Live Monitor merged via
 PR #12). **M10 (hardening)** is a *bundle* and is being built in slices: the **operational-alerts slice
@@ -15,9 +15,14 @@ Live Monitor snapshot (no new table, no migration, no long-lived dispatcher), su
 panel on `/monitor`; the snapshot stamp bumped `m9-monitor-v1` → `m10-monitor-v1`. The remaining M10
 bundle items — **exports (§22), catalog signing (§10.4/§18), replay metadata (§23)**, and the richer
 **persisted alert engine** (firing history/ack + heartbeat time-series for "backlog growing") — still
-remain. **M11 (Tauri desktop/tray collector)** is the first *post-V1* milestone — planned and added to
-the PRD (§25) with a feasibility spike
-([`docs/research/m11-tauri-sidecar-spike.md`](./docs/research/m11-tauri-sidecar-spike.md)) — not yet built.
+remain. **M11 (Tauri desktop/tray collector)** — the first *post-V1* milestone — is **built across
+Slices 1–5**: a Tauri (Rust + system-webview) shell that bundles and lifecycle-supervises the headless
+collector as a `node:sea` **sidecar** (Rust stays off the capture path), with a tray; a Sync & Health
+panel + connector management; GUI pairing + run-on-login autostart + secrets in the Windows Credential
+Manager; a Settings panel that supervises the full local server-stack (Docker archive + ingest); and a
+local **NSIS** installer. See the slice plans under
+[`.agents/plans/`](./.agents/plans/) (`m11-tauri-desktop.md` for the bundle + Slices 1–2, then
+`m11-slice{2,3,4,5}-*.md`).
 
 **CI gate:** a `repo-health` GitHub Actions check (repo-root `tsc -b` + NUL/stray scans + the full
 vitest suite **including the Postgres integration layer**) runs on every PR to `main`
@@ -103,9 +108,11 @@ flowchart TD
 10. ⬜ Hardening: exports, catalog signing, alerts, replay metadata.
 
 **Post-V1:**
-11. ⬜ **Tauri desktop/tray collector** — sidecar shell over the headless collector (node:sea), theGridCN UI,
-    tray + connector mgmt + sync/health + pairing/autostart + settings (collector & server config, secrets in
-    OS keychain). Planned & in the PRD; ready for `/lril:plan-feature`.
+11. ✅ **Tauri desktop/tray collector** (Slices 1–5) — Tauri (Rust + system-webview) shell over the
+    headless collector (`node:sea` sidecar, Rust off the capture path); tray + connector mgmt +
+    sync/health + GUI pairing + run-on-login autostart + Windows Credential Manager secrets + Settings
+    that supervises the local server-stack (Docker archive + ingest via Rust `std::process::Command`);
+    local **NSIS** installer (`npm run build:desktop`). MSI/signed installer + auto-update deferred (§25).
 
 > **Principle:** nothing shows value until the pipe is whole — so make the *thinnest* end-to-end
 > pipe first (milestone 1), then thicken each stage.
@@ -168,6 +175,25 @@ tokens × catalog pricing).
 - ✅ Add rough **volume/retention** numbers to the PRD.
 - ✅ Name a simple **regex/entropy redaction engine** for V1 (shipped in M8).
 
+### M11 (Tauri desktop) — resolutions that overrode the bundle plan
+These were decided during Slices 1–5 implementation and supersede the open design points the PRD §25
+bullet listed for planning:
+- ✅ **UI↔sidecar control protocol** — JSON-lines commands/events over the sidecar's stdio, relayed to
+  the webview via Rust events. Versioned by `CONTROL_PROTOCOL_VERSION = "m11-control-v2"`, **unchanged
+  through Slices 1–5** (pinned by `packages/shared/src/control-protocol.test.ts`).
+- ✅ **The app supervises the local server-stack** (Docker archive + ingest) — via Rust
+  `std::process::Command`, **not** `tauri-plugin-shell` — injecting keychain secrets as the child
+  process env (no `.env` written). Settings manages **server** config only (collector config deferred).
+- ✅ **Secrets in the Windows Credential Manager** via the `keyring` crate (pairing token + server-config
+  secrets); the webview never reads them.
+- ✅ **NSIS, not MSI** — `cargo tauri build` with `targets:"all"` builds both, but the MSI/WiX leg
+  (`light.exe`) fails locally; NSIS (`makensis`) is robust. `tauri.conf.json` pins `targets:["nsis"]`.
+  MSI + signed installer + auto-update remain **deferred** (PRD §25 defers signed distribution).
+- ✅ **Sidecar packaged via `node:sea`** (`apps/collector/scripts/build-sea.mjs`) — bundles
+  `collector serve` into one `.exe` as the Tauri `externalBin`. The clean-checkout build recipe (incl.
+  the gitignored OneDrive `target-dir` redirect + `cargo tauri icon` regeneration) lives in
+  [`apps/desktop/README.md`](./apps/desktop/README.md).
+
 ---
 
 ## 5. Key principles to keep in your head
@@ -190,5 +216,6 @@ tokens × catalog pricing).
 - [ ] **Resolve CI enforcement:** branch protection needs **GitHub Pro** (private repo). Until then, treat the
       `repo-health` check as advisory — **don't merge red**. (Alternative: make repo public, or gate the
       automated-merge step on the check.)
-- [ ] **Plan M11 (Tauri)** via `/lril:plan-feature` — resolve the two open design points: the UI↔sidecar
-      control protocol, and whether the app supervises the local server-stack lifecycle.
+- [x] **M11 (Tauri desktop)** — built across Slices 1–5; both open design points resolved (see the M11
+      subsection in §4): JSON-lines control protocol (`m11-control-v2`) and Rust `std::process::Command`
+      server-stack supervision. Signed off 2026-06-16.
