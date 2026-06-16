@@ -16,6 +16,8 @@ target/
 # Tauri / Rust
 src-tauri/target/
 **/*.rs.bk
+# Machine-local Cargo config (redirects target-dir out of OneDrive — see the file's header)
+apps/desktop/src-tauri/.cargo/
 
 # Environment & secrets
 .env

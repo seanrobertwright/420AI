@@ -46,3 +46,38 @@ export function listConnectors(): Promise<void> {
 export function setConnector(id: string, enabled: boolean): Promise<void> {
   return sendCommand({ cmd: "connectors.set", id, enabled });
 }
+
+/**
+ * GUI pairing (Slice 3). Rust does the HTTP handshake against `/v1/pair`, stores the
+ * issued token in the OS keychain, and `configure`s the sidecar — the token is born in
+ * Rust and NEVER returned here. NB: `PairResult` has NO `token` field by design.
+ */
+export interface PairResult {
+  machineId: string;
+}
+
+/** Keychain pairing state (token never included). */
+export interface PairingStatus {
+  paired: boolean;
+  machineId: string | null;
+}
+
+/** Pair with an archive: URL + pairing code + machine name → `{ machineId }`. */
+export function pair(url: string, code: string, name: string): Promise<PairResult> {
+  return invoke<PairResult>("pair", { url, code, name });
+}
+
+/** Read the current keychain pairing state (paired? + machineId). */
+export function getPairingStatus(): Promise<PairingStatus> {
+  return invoke<PairingStatus>("get_pairing_status");
+}
+
+/** Whether run-on-login is enabled (reads the HKCU\…\Run registry entry). */
+export function getAutostart(): Promise<boolean> {
+  return invoke<boolean>("get_autostart");
+}
+
+/** Enable/disable run-on-login. */
+export function setAutostart(enabled: boolean): Promise<void> {
+  return invoke("set_autostart", { enabled });
+}

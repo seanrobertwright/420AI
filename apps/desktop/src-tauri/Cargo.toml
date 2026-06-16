@@ -24,3 +24,10 @@ tokio = { version = "1", features = ["time"] }
 # rustls-tls (not the default native-tls) avoids an OpenSSL/SChannel native build on
 # Windows; `json` enables `.json::<Value>()`. The async client runs on Tauri's tokio runtime.
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# OS keychain for the ingest token (Windows Credential Manager). PIN v3: v4 split into
+# keyring-core + separate store crates with no default store (every call silently no-ops
+# without a set_default_store() call). `default-features = false` + explicit windows-native
+# is required — v3 with no backend feature falls back to an in-memory mock that persists nothing.
+keyring = { version = "3", default-features = false, features = ["windows-native"] }
+# Run-on-login (HKCU\…\Run on Windows). Called from Rust #[command]s, so no npm package needed.
+tauri-plugin-autostart = "2"

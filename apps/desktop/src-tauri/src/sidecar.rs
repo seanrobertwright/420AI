@@ -96,7 +96,9 @@ async fn spawn_and_relay<R: Runtime>(app: &AppHandle<R>) {
                                 let line = String::from_utf8_lossy(&line_bytes);
                                 let trimmed = line.trim();
                                 if !trimmed.is_empty() {
-                                    let _ = app.emit(EVENT_NAME, parse_event_line(trimmed));
+                                    let event = parse_event_line(trimmed);
+                                    let _ = app.emit(EVENT_NAME, &event);
+                                    auto_configure_on_ready(app, &event);
                                 }
                             }
                         }
@@ -176,6 +178,29 @@ pub fn write_command<R: Runtime>(app: &AppHandle<R>, cmd: Value) -> Result<(), S
     match guard.as_mut() {
         Some(child) => child.write(line.as_bytes()).map_err(|e| e.to_string()),
         None => Err("sidecar not running".into()),
+    }
+}
+
+/// On the sidecar's `ready` event, inject keychain credentials via `configure` so a
+/// (re)spawned sidecar picks up the GUI-paired token without a re-pair — capture
+/// resumes after an app restart. Triggers on `ready` ONLY (once per spawn), not
+/// `status`. The keychain `load()` is a single fast CredMan read (sync I/O in the
+/// async relay is acceptable here). The token rides sidecar STDIN (Rust→sidecar),
+/// never stdout — so it never reaches the webview, and is never logged.
+fn auto_configure_on_ready<R: Runtime>(app: &AppHandle<R>, event: &Value) {
+    if event.get("type").and_then(Value::as_str) != Some("ready") {
+        return;
+    }
+    if let Some(creds) = crate::keychain::load() {
+        let _ = write_command(
+            app,
+            json!({
+                "cmd": "configure",
+                "url": creds.url,
+                "token": creds.token,
+                "machineId": creds.machine_id,
+            }),
+        );
     }
 }
 
