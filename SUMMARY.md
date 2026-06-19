@@ -238,17 +238,31 @@ original M10 "hardening bundle" (exports, catalog signing, replay metadata, pers
 
 - [ ] **V1 close-out** (scope confirmed 2026-06-19 — see §4) — completed to **full written scope**.
       Sequenced slices, each run through the build loop (§2). Recommended order is value/dependency-first:
-      1. **Git Outcomes & Attribution** (§11.3/§11.4, full) — collector emits `git.commit.detected` /
-         `git.diff.detected` (hash/author/time/branch + changed-file/line stats); new `session_git_links`
-         table + migration for persisted links carrying **Attribution Confidence**; fills M6's waiting
-         git-field projection. *Headline value + unblocks richer reports/search/dashboard — do first.*
+      1. **Git Outcomes & Attribution** (§11.3/§11.4, full) — capture commits (hash/author/time/branch +
+         changed-file/line stats, reverts) per repo into **dedicated `git_commits`/`git_commit_files`
+         tables** via a new machine-authed `POST /v1/git` (M7-style: dedicated tables, NOT `events`-table
+         rows — `/v1/ingest` + the fingerprint stay untouched; the commit SHA is the idempotency key).
+         Plus a `session_git_links` side-table + the attribution heuristic (manual link + one suggestion,
+         Q4) carrying **Attribution Confidence**, reusing M8 decrypt-for-render for file-overlap. (M6's
+         git-*branch* projection already works off tool events — commits are genuinely NEW data, not
+         "empty plumbing.") Plan + Phase-0 spike done →
+         [`.agents/plans/m10-slice1-git-outcomes-attribution.md`](./.agents/plans/m10-slice1-git-outcomes-attribution.md).
+         *Headline value + unblocks richer reports/search/dashboard — do first.*
       2. **Custom file/log connector** (thin) — config-driven connector on the existing framework; no
          schema change. Restores the MVP-criteria connector. *Small, independent — quick win.*
-      3. **M10 hardening bundle** — exports (§22: MD/JSON/JSONL/CSV, scoped; redact before any leaves
-         the archive; Parquet + restore-UI deferred), catalog signing (§10.4 + approval gate), replay
-         metadata (§23: stamp catalog/report/analysis versions; re-derive path — fingerprint unchanged),
-         persisted alert engine (firing history/ack + heartbeat **time-series** so "backlog growing" is a
-         real trend; layers around the M10 `deriveAlerts` contract, does not change it).
+      3. **M10 hardening bundle** — itself four sub-slices (recommended internal order **3b → 3a → 3c → 3d**):
+         - **3a — Exports** (§22) — MD/JSON/JSONL/CSV, scoped by project/time/session/report/connector;
+           **redact before anything leaves the archive**; decrypt-for-render only when the scope includes
+           raw content. *No schema change. Parquet + full restore-UI deferred. Size: M.*
+         - **3b — Replay metadata** (§23) — stamp catalog/report/analysis versions alongside the stored
+           `parser_version` + a re-derive path; **fingerprint unchanged, raw sacred**. *Small additive
+           column. Do first — de-risks every later re-parse. Size: S–M.*
+         - **3c — Persisted alert engine** — firing history/ack + heartbeat **time-series** so "backlog
+           growing" is a real trend, not a point read; layers around the M10 `deriveAlerts` contract
+           (does NOT change it). *New tables + migration. Size: M–L.*
+         - **3d — Catalog signing** (§10.4) — signed catalog updates + signature verify before apply +
+           a capture-surface **approval gate**. *Needs a key-management decision (ed25519: bundled public
+           key, offline private). Lowest cross-dependency — last or in parallel. Size: M.*
       4. **Basic search** (§21) — redacted plaintext projection (reuse M8 `redact()`) + Postgres FTS
          over sessions/reports/events/tool-calls/projects.
       5. **Dashboard surfaces** (§8.4) — reports/projects/search/catalog/settings UIs over the existing
