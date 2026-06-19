@@ -171,7 +171,8 @@ existing `ConnectorInfo` wire type — control protocol only)
 
 - `apps/collector/src/connectors/custom-connector.ts` — the `CustomConnectorDef` type, the tolerant
   `loadCustomConnectors(path?)` + `saveCustomConnectors(defs, path?)`, the `makeCustomConnector(def)`
-  factory (with its tail `parse`), and `validateCustomDef(raw)` returning `{ ok: def } | { error: string }`.
+  factory (with its tail `parse` + `getByPath`/`resolveEventType` helpers — the spike-proven reference
+  impl), and `validateCustomDef(raw)` returning `{ ok: def } | { error: string }`.
 - `apps/collector/src/connectors/custom-connector.test.ts` — unit tests (parse JSONL-by-path, parse
   line-regex, tolerant skip, validation rejects bad regex / empty globs / unknown eventType / colliding id,
   loader returns `[]` on absent/corrupt file, save→load round-trip).
@@ -244,9 +245,46 @@ function validateCustomDef(raw: unknown): { ok: CustomConnectorDef } | { error: 
 // Spike assertion: a bad regex ("(", unterminated) is REJECTED with an error, never thrown at capture time.
 ```
 
-**The factory's tail `parse` (mirror `parseClaudeCodeSession`'s tolerance + `makeEvent`/fingerprint):**
+**The frozen `CustomConnectorDef` (transcribe verbatim — proven by the spike):**
 ```ts
+export interface CustomConnectorDef {
+  id: string;                              // non-empty; must not collide with a built-in id (D8)
+  displayName?: string;
+  watchGlobs: string[];                    // absolute patterns; `home` is intentionally ignored
+  format: "jsonl" | "regex";
+  pattern?: string;                        // REQUIRED iff format==="regex"; compiled ONCE at construct time
+  // Field sources: a DOT-PATH for "jsonl" (e.g. "meta.session"); a GROUP NAME for "regex" (e.g. "sessionId").
+  tsField?: string;
+  sessionIdField?: string;
+  projectPathField?: string;
+  modelField?: string;
+  eventTypeField?: string;                 // per-line event type; falls back to the `eventType` constant
+  eventType?: EventType;                   // constant fallback when eventTypeField is absent/empty
+  tokenMap?: { input?: string; output?: string; cache_read?: string; cache_write?: string }; // optional
+}
+```
+
+**The factory + extractors (transcribe verbatim — this EXACT code passed the spike end-to-end):**
+```ts
+function getByPath(obj: unknown, path: string): string | undefined {
+  let cur: unknown = obj;
+  for (const key of path.split(".")) {
+    if (cur == null || typeof cur !== "object") return undefined;
+    cur = (cur as Record<string, unknown>)[key];
+  }
+  if (typeof cur === "string") return cur;
+  if (typeof cur === "number") return String(cur);
+  return undefined;
+}
+
+function resolveEventType(raw: string | undefined, def: CustomConnectorDef): EventType | undefined {
+  const t = raw ?? def.eventType;          // per-line field WINS; constant is the fallback
+  return t !== undefined && (MAPPABLE_EVENT_TYPES as readonly string[]).includes(t)
+    ? (t as EventType) : undefined;        // junk/non-mappable type ⇒ undefined ⇒ line is skipped
+}
+
 export function makeCustomConnector(def: CustomConnectorDef): Connector {
+  const re = def.format === "regex" ? new RegExp(def.pattern as string) : undefined; // compile ONCE
   const parse = (fileText: string): ParseResult => {
     const ingestedAt = new Date().toISOString();
     const rawRecords: RawSourceRecord[] = [];
@@ -254,17 +292,45 @@ export function makeCustomConnector(def: CustomConnectorDef): Connector {
     let skippedLines = 0;
     fileText.split(/\r?\n/).forEach((line, i) => {
       if (line.trim() === "") return;
-      const fields = def.format === "jsonl" ? extractByPath(line, def) : extractByRegex(line, def);
-      if (!fields) { skippedLines += 1; return; }           // tolerant: unmatched/unparseable line
-      const rawId = fields.rawId ?? `${fields.sessionId}:${i}`;
-      rawRecords.push({ id: rawId, sourceConnector: def.id, sessionId: fields.sessionId,
-                        ingestedAt, payload: line });
+      let f: Record<string, string | undefined>;
+      if (def.format === "jsonl") {
+        let obj: unknown;
+        try { obj = JSON.parse(line); } catch { skippedLines += 1; return; }   // tolerant
+        f = {
+          ts: def.tsField ? getByPath(obj, def.tsField) : undefined,
+          sessionId: def.sessionIdField ? getByPath(obj, def.sessionIdField) : undefined,
+          projectPath: def.projectPathField ? getByPath(obj, def.projectPathField) : undefined,
+          model: def.modelField ? getByPath(obj, def.modelField) : undefined,
+          eventType: def.eventTypeField ? getByPath(obj, def.eventTypeField) : undefined,
+        };
+      } else {
+        const m = (re as RegExp).exec(line);
+        if (!m) { skippedLines += 1; return; }                                  // tolerant: no match
+        const g = m.groups ?? {};
+        f = {
+          ts: def.tsField ? g[def.tsField] : undefined,
+          sessionId: def.sessionIdField ? g[def.sessionIdField] : undefined,
+          projectPath: def.projectPathField ? g[def.projectPathField] : undefined,
+          model: def.modelField ? g[def.modelField] : undefined,
+          eventType: def.eventTypeField ? g[def.eventTypeField] : undefined,
+        };
+      }
+      const eventType = resolveEventType(f.eventType, def);
+      if (!eventType) { skippedLines += 1; return; }                            // unmappable ⇒ skip
+      const sessionId = f.sessionId ?? "unknown-session";
+      // rawId = `${sessionId}:${i}` is STABLE across ticks: the tailer hands `parse` the WHOLE-FILE
+      // prefix every tick (readGrownPrefix reads from byte 0 — tailer.ts:14/40, VERIFIED), so line index
+      // `i` is fixed. Stable rawId ⇒ stable fingerprint ⇒ the queue's content-hash dedup stays correct
+      // — the EXACT discipline the Claude parser uses (`${session}:${lineIndex}`). Do NOT use a counter.
+      const rawId = `${sessionId}:${i}`;
+      rawRecords.push({ id: rawId, sourceConnector: def.id, sessionId, ingestedAt, payload: line });
       events.push({
-        fingerprint: eventFingerprint(def.id, rawId, 0, fields.eventType),
+        fingerprint: eventFingerprint(def.id, rawId, 0, eventType),
         sourceConnector: def.id, parserVersion: CUSTOM_CONNECTOR_CONFIG_VERSION,
-        rawRecordId: rawId, eventIndex: 0, eventType: fields.eventType,
-        sessionId: fields.sessionId, projectPath: fields.projectPath, model: fields.model,
-        ts: fields.ts ?? ingestedAt, tokens: fields.tokens, // tokens only if mapped (else undefined)
+        rawRecordId: rawId, eventIndex: 0, eventType, sessionId,
+        projectPath: f.projectPath, model: f.model, ts: f.ts ?? ingestedAt,
+        // tokens: only if a tokenMap is configured — read mapped numeric paths into zeroTokens() +
+        // computeTotal() (mirror claude-code.ts:76-88). NOT exercised by the spike; thin, low-risk add.
       });
     });
     return { rawRecords, events, skippedLines };
@@ -272,8 +338,7 @@ export function makeCustomConnector(def: CustomConnectorDef): Connector {
   return {
     id: def.id, captureMode: "tail",
     fidelity: {
-      status: "experimental", captureMethod: `custom-tail-${def.format}`,
-      liveness: "streaming",
+      status: "experimental", captureMethod: `custom-tail-${def.format}`, liveness: "streaming",
       tokens: def.tokenMap ? "estimated" : "none", cost: "none",
       knownGaps: [
         "user-defined mapping — fidelity is only as good as the configured field paths",
@@ -281,13 +346,18 @@ export function makeCustomConnector(def: CustomConnectorDef): Connector {
         ...(def.tokenMap ? [] : ["no token/cost capture — this source maps no usage fields"]),
       ],
     },
-    watchGlobs: () => def.watchGlobs,                       // absolute paths; `home` is intentionally ignored
+    watchGlobs: () => def.watchGlobs,       // absolute paths; `home` is intentionally ignored (see D-conflict)
     parse,
   };
 }
-// Spike assertion: a custom connector appended to the registry captures a temp log end-to-end
-// (watcher → queue: ≥1 raw + ≥1 event), proving the absolute-glob + tail path works outside `home`.
 ```
+> **PROVEN, not asserted.** The `getByPath` / `resolveEventType` / `makeCustomConnector` code above is the
+> verbatim reference implementation that passed the PRE-FLIGHT spike (**run 2026-06-19, Node v24.16.0,
+> 4/4 green**): jsonl dot-path extraction, regex named-capture extraction, tolerant skip of
+> blank/no-match/non-mappable lines, AND a real `FileWatcher.tickOnce()` → real `QueueStore` capture from
+> an **absolute glob outside `home`** (discovery found the file; first tick enqueued ≥1 raw + ≥1 event; a
+> second appended line grew the queue with no dedup blow-up). The executor SHOULD reproduce these as the
+> real `custom-connector.test.ts` (Task 4). `tokenMap` is the only piece the spike did not exercise.
 
 > **No DB / no SQL in this slice.** This feature touches **neither `@420ai/db` nor `apps/ingest`** — it
 > produces `NormalizedEvent`s that flow through the *existing* ingest client/API. Therefore the
@@ -350,17 +420,21 @@ export function makeCustomConnector(def: CustomConnectorDef): Connector {
 
 ## IMPLEMENTATION PLAN
 
-### Phase 0: PRE-FLIGHT SPIKE (gates the plan — ~20 min, throwaway)
-Prove the three load-bearing assumptions before writing real code. Delete the spike after.
-1. **Absolute-glob-outside-home + tail capture.** Write a temp log file at an absolute path NOT under a
-   fake `home`. Build a custom connector via `makeCustomConnector` (a stub is fine), append it to a
-   registry, run **one** `FileWatcher.tickOnce()` against a real `QueueStore`, and assert ≥1 raw + ≥1
-   event landed. (Reuses the `file-watcher.test.ts` / `capture-engine.int.test.ts` harness.)
-2. **Named-capture regex in Node 24.** `new RegExp("(?<ts>\\S+)\\s+(?<sessionId>\\S+)").exec(line).groups`
-   returns `{ ts, sessionId }`; a malformed pattern `"("` throws from the `RegExp` ctor (caught by
-   `validateCustomDef`).
-3. **No new dependency.** Confirm `glob` (from `node:fs/promises`) + `JSON.parse` + `RegExp` cover both
-   formats — nothing to add to `apps/collector/package.json`.
+### Phase 0: PRE-FLIGHT SPIKE — ✅ ALREADY RUN (2026-06-19, Node v24.16.0, 4/4 green)
+The three load-bearing assumptions are **VERIFIED** (see the proof results below); the executor does NOT
+re-run the spike, it transcribes the proven reference impl (above) into real source + tests. Results:
+1. ✅ **Absolute-glob-outside-home + tail capture.** A temp log at an absolute path NOT under the fake
+   `home` was discovered by `FileWatcher.discover()` and captured by `tickOnce()` → real `QueueStore`
+   (first tick ≥1 raw + ≥1 event; a second appended line grew the queue, no dedup blow-up). This also
+   confirmed the `${sessionId}:${i}` rawId is stable across ticks (the tailer re-reads the whole-file
+   prefix from byte 0 — `tailer.ts:14,40`).
+2. ✅ **Named-capture regex in Node 24.** `new RegExp("^(?<ts>\\S+)\\s+session=(?<sessionId>\\S+)\\s+(?<msg>.*)$")
+   .exec(...).groups` returned `{ ts, sessionId, msg }`; `new RegExp("(")` threw `SyntaxError` (so
+   `validateCustomDef` catches a bad pattern at validate time, never at capture time). *(The earlier
+   `groups: null` from a raw shell one-liner was shell-escaping mangling — the real `RegExp` works; this
+   is exactly why the spike was run in a test file, not a one-liner.)*
+3. ✅ **No new dependency.** `glob` (`node:fs/promises`, already used by the watcher), `JSON.parse`, and
+   `RegExp` cover both formats — nothing added to `apps/collector/package.json`.
 
 ### Phase 1: Foundation (shared + types)
 - ADD the additive optional `custom?: boolean` to `ConnectorInfo` (`packages/shared/src/control-protocol.ts`).
@@ -385,13 +459,13 @@ Prove the three load-bearing assumptions before writing real code. Delete the sp
 
 IMPORTANT: Execute every task in order, top to bottom. Each task is atomic and independently testable.
 
-### 0. SPIKE `apps/collector/src/connectors/_spike-custom.test.ts` (throwaway)
-- **IMPLEMENT**: The three Phase-0 proofs as a temporary vitest file. Confirm green, then **delete it**.
-- **PATTERN**: `apps/collector/src/watcher/file-watcher.test.ts` (temp dirs + `tickOnce`),
-  `connector-config.test.ts` (mkdtemp path seam).
-- **GOTCHA**: glob is minimatch-style — normalize `\` → `/` (see `file-watcher.ts:43`). On Windows an
-  absolute pattern like `C:/tmp/.../app.log` matches; backslashes do not.
-- **VALIDATE**: `npx vitest run apps/collector/src/connectors/_spike-custom.test.ts` (then delete the file).
+### 0. SPIKE — ✅ DONE (already run during planning; do NOT redo)
+- The throwaway `_spike-custom.test.ts` was written, run (4/4 green on Node v24.16.0), and deleted. Its
+  proven `getByPath`/`resolveEventType`/`makeCustomConnector` reference impl is embedded above ("Patterns
+  to Follow") — Task 3 transcribes it; Task 4 turns the spike's four proofs into the permanent unit test.
+- **GOTCHA carried forward**: glob is minimatch-style — the watcher normalizes `\` → `/` itself
+  (`file-watcher.ts:43`), so `watchGlobs` may return native absolute paths (backslashes on Windows); the
+  spike confirmed `join(logDir, "*.log")` matches a file outside `home`.
 
 ### 1. ADD `custom?` to `ConnectorInfo` — `packages/shared/src/control-protocol.ts`
 - **IMPLEMENT**: Add `/** True for user-defined config connectors (M10-S2). */ custom?: boolean;` to the
@@ -415,7 +489,8 @@ IMPORTANT: Execute every task in order, top to bottom. Each task is atomic and i
   `modelField`/`eventTypeField` (dot-paths for jsonl, group names for regex), `eventType?` (constant
   fallback), optional `tokenMap?: { input?; output?; cache_read?; cache_write? }`); `MAPPABLE_EVENT_TYPES`
   (`as const satisfies readonly EventType[]`); `validateCustomDef`; `loadCustomConnectors`/
-  `saveCustomConnectors`; `makeCustomConnector` + `extractByPath`/`extractByRegex`.
+  `saveCustomConnectors`; `makeCustomConnector` + the `getByPath`/`resolveEventType` helpers (the frozen,
+  spike-proven reference impl in "Patterns to Follow" — transcribe it verbatim).
 - **PATTERN**: loader/save ← `connector-config.ts:46-63`; parse tolerance + `makeEvent`/fingerprint ←
   `claude-code.ts:97-172`; tokens ← `claude-code.ts:76-88` (`zeroTokens`/`computeTotal`).
 - **IMPORTS**: `eventFingerprint, computeTotal, zeroTokens, type EventType, type NormalizedEvent,
@@ -460,14 +535,18 @@ IMPORTANT: Execute every task in order, top to bottom. Each task is atomic and i
 - **VALIDATE**: `npx vitest run apps/collector/src/connectors/registry.test.ts`
 
 ### 7. UPDATE `apps/collector/src/serve.ts` — surface + capture custom connectors
-- **IMPLEMENT**: Change the default `connectorRegistry` (line 116) from `defaultConnectors` to
-  `loadRegistry(home).connectors`. In `mapConnectorInfo` (75-87) add `custom: <id not in built-in ids>`
-  (pass a `Set<string>` of built-in ids, or a per-connector flag threaded from `loadRegistry`). Optionally
-  `log("warn", …)` dropped custom defs at boot (entrypoint may log).
-- **PATTERN**: existing `connectorRegistry`/`filterConnectors` flow (`serve.ts:116,150-157,175-182`).
-- **GOTCHA**: `mapConnectorInfo` is the **single** `Connector → ConnectorInfo` point — keep it the only
-  place that sets `custom`. Compute the built-in id set once outside the `.map`. Do NOT change
-  `filterConnectors`/`connectors.set` — custom enable/disable works as-is (keyed by id).
+- **IMPLEMENT** (frozen approach — no latitude): (a) Change the default `connectorRegistry` (line 116)
+  from `defaultConnectors` to `loadRegistry(home).connectors`. (b) Compute a built-in id set ONCE, module
+  scope: `const BUILTIN_IDS = new Set(defaultConnectors.map((c) => c.id));`. (c) Change
+  `mapConnectorInfo(c, enabled, home)` to set `custom: !BUILTIN_IDS.has(c.id)` (read `BUILTIN_IDS` from
+  module scope — do NOT add a param, keeping the one-line call sites at 153-155 unchanged). (d) In
+  `emitConnectors`/boot, `log("warn", …)` any `loadRegistry(home).dropped` reasons (entrypoint may log).
+- **PATTERN**: existing `connectorRegistry`/`filterConnectors` flow (`serve.ts:116,150-157,175-182`);
+  `BUILTIN_IDS` mirrors how `registry.ts` derives built-in ids (single source — import the same const if
+  you prefer, but a local `Set` is fine since `defaultConnectors` is already imported here).
+- **GOTCHA**: `mapConnectorInfo` is the **single** `Connector → ConnectorInfo` point — it is the ONLY
+  place that sets `custom`. Do NOT change `filterConnectors`/`connectors.set` — custom enable/disable
+  works as-is (keyed by id). `BUILTIN_IDS` is computed once at module load, never per-connector.
 - **VALIDATE**: `npx vitest run apps/collector/src/serve.test.ts`
 
 ### 8. UPDATE `apps/collector/src/serve.test.ts` — custom connector surfacing + disable
@@ -625,9 +704,23 @@ Run from the repo root. Each is a GATE.
 
 ## Confidence Score
 
-**8.5 / 10** for one-pass success. High because the connector contract, the registry-injection seam, the
-tolerant-config pattern, and the test harness all already exist and are directly mirrored (M11-S2 is a
-near-exact precedent), and the slice touches no DB/server/migration surface. The −1.5 is the open design
-*shape* the executor should sanity-check against the spike: the exact `CustomConnectorDef` field set
-(dot-path vs. group-name ergonomics) and the `mapConnectorInfo` `custom` threading are the only spots with
-real latitude — both are pinned by tests here, but worth a quick validation pass before coding.
+**9.4 / 10** for one-pass success — raised from 8.5 by **running the pre-flight spike during planning and
+retiring the design latitude**:
+- **Spike PROVEN, not asserted** (2026-06-19, Node v24.16.0, 4/4 green): the embedded
+  `getByPath`/`resolveEventType`/`makeCustomConnector` is the verbatim code that captured an absolute-path
+  log outside `home` end-to-end through the real `FileWatcher` + `QueueStore` — the executor transcribes
+  proven code, it does not design it.
+- **`rawId` dedup-correctness resolved at the source:** confirmed `readGrownPrefix` re-reads the whole-file
+  prefix from byte 0 (`tailer.ts:14,40`), so `${sessionId}:${i}` is stable across ticks → stable
+  fingerprint → correct dedup. This was the one subtle correctness trap; it's now closed in the snippet +
+  a comment.
+- **Latitude removed:** the `CustomConnectorDef` field set is frozen verbatim; `eventType` precedence
+  (per-line field wins, constant fallback, then validate-or-skip) is pinned; the `mapConnectorInfo`
+  `custom` threading is frozen to one approach (`!BUILTIN_IDS.has(c.id)`, set computed once at module scope).
+
+The remaining **−0.6** is genuine, not removable by planning: (1) `tokenMap` is the only path the spike
+didn't exercise (a thin `zeroTokens()`/`computeTotal()` add, low risk); (2) the `serve.ts`
+`connectorRegistry` default switch (`defaultConnectors` → `loadRegistry(home).connectors`) interacts with
+the M11 control-protocol tests — additive and covered by Task 8, but it's the one spot touching existing
+shipped behavior; (3) the additive `custom?` field touches the version-pinned `ConnectorInfo` mapping test
+(Task 2 updates it). All three are gated by named tests in this plan.
