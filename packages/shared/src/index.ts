@@ -12,3 +12,4 @@ export * from "./control-protocol.js";
 export * from "./reports.js";
 export * from "./redaction.js";
 export * from "./analysis.js";
+export * from "./git.js";

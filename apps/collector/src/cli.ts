@@ -10,10 +10,12 @@ import {
   postPair,
   postIngest,
   postDiscover,
+  postGit,
   getProjects,
   isUnauthorized,
   type ProjectListItem,
 } from "./ingest-client.js";
+import { captureGitCommits } from "./discovery/git-capture.js";
 import {
   CREDENTIALS_PATH,
   QUEUE_PATH,
@@ -33,6 +35,7 @@ import {
   type PairResponse,
   type IngestResponse,
   type DiscoverResponse,
+  type GitCaptureResponse,
 } from "@420ai/shared";
 
 const DEFAULT_DB = "./420ai.sqlite";
@@ -231,6 +234,34 @@ export async function runDiscover(opts: {
   return { response, unresolved };
 }
 
+export interface GitSummary {
+  response: GitCaptureResponse;
+  /** Distinct repo roots scanned this sweep. */
+  reposScanned: number;
+  /** Repos whose history exceeded the read cap (more commits exist — re-run / raise cap). */
+  capped: number;
+}
+
+/**
+ * One-shot git capture (M10): enumerate every connector's repo roots, read each
+ * repo's `git log`, and POST the commits to the archive. Uses the MACHINE token
+ * (git capture is machine-scoped, like ingest). Pure of process concerns —
+ * `main()` prints the summary. Idempotent server-side (SHA dedup).
+ */
+export async function runGit(opts: {
+  url?: string;
+  token?: string;
+  home?: string;
+}): Promise<GitSummary> {
+  const creds = resolveCreds(opts);
+  const { commits, reposScanned, capped } = await captureGitCommits({
+    connectors,
+    home: opts.home ?? homedir(),
+  });
+  const response = await postGit(creds.url, creds.token, { commits });
+  return { response, reposScanned, capped };
+}
+
 /**
  * List the archive's projects (M5). ADMIN-authed — pass `--token <adminToken>`
  * (discovery uses the machine token; this CRUD surface is admin-gated).
@@ -285,6 +316,7 @@ function usage(dbPath: string): string {
     "  collector sync [--url <baseUrl>] [--token <token>]",
     "  collector queue",
     "  collector discover [--url <baseUrl>] [--token <token>]",
+    "  collector git [--url <baseUrl>] [--token <token>]",
     "  collector projects [--url <baseUrl>] [--token <adminToken>]",
     "",
     `Default DB: ${dbPath}`,
@@ -427,6 +459,19 @@ async function main(argv: string[]): Promise<void> {
     for (const m of response.mappings) {
       process.stdout.write(`  ${m.projectName}  ← ${m.projectKey}\n`);
     }
+    return;
+  }
+
+  if (command === "git") {
+    const { response, reposScanned, capped } = await runGit({
+      url: getFlag(args, "--url"),
+      token: getFlag(args, "--token"),
+    });
+    process.stdout.write(
+      `Captured ${response.commitsInserted} new commit(s) across ${reposScanned} repo(s)` +
+        (capped > 0 ? ` (${capped} capped — run again or raise the cap)` : "") +
+        "\n",
+    );
     return;
   }
 

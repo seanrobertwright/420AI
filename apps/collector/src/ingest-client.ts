@@ -7,6 +7,8 @@ import type {
   DiscoverResponse,
   HeartbeatRequest,
   HeartbeatResponse,
+  GitCaptureRequest,
+  GitCaptureResponse,
 } from "@420ai/shared";
 
 /**
@@ -115,6 +117,29 @@ export async function postHeartbeat(
   });
   await expectOk(res, "heartbeat");
   return (await res.json()) as HeartbeatResponse;
+}
+
+/**
+ * POST captured git commits to the archive (M10). Machine-authed, like ingest;
+ * the server records them in `git_commits`/`git_commit_files` (idempotent by SHA)
+ * and returns how many NEW commits were inserted. Reuses the same fetch + bearer +
+ * expectOk shape as `postDiscover`.
+ */
+export async function postGit(
+  baseUrl: string,
+  token: string,
+  req: GitCaptureRequest,
+): Promise<GitCaptureResponse> {
+  const res = await fetch(`${trimUrl(baseUrl)}/v1/git`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(req),
+  });
+  await expectOk(res, "git");
+  return (await res.json()) as GitCaptureResponse;
 }
 
 /** A project as listed by the admin `GET /v1/projects` endpoint. */
