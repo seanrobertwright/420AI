@@ -6,6 +6,11 @@ import { connectors as defaultConnectors } from "./connectors/connector.js";
 import type { Connector } from "./connectors/connector.js";
 import { FileWatcher } from "./watcher/file-watcher.js";
 import { syncOnce, runSyncLoop } from "./sync/sync-worker.js";
+import { captureGitCommits } from "./discovery/git-capture.js";
+import { postGit } from "./ingest-client.js";
+
+/** Default git-sweep cadence: a SLOW background sweep (commits change far less often than sessions). */
+const DEFAULT_GIT_INTERVAL_MS = 5 * 60_000;
 
 /**
  * The capture engine wires the proven primitives into the `collector watch`
@@ -27,6 +32,62 @@ export interface CaptureEngineOptions {
   collectorVersion?: string;
   /** M9: heartbeat cadence; default 30 s in the sync loop. */
   heartbeatIntervalMs?: number;
+  /** M10: git-sweep cadence (default 5 min). Set to 0 to disable the background git sweep. */
+  gitIntervalMs?: number;
+}
+
+/**
+ * An abortable sleep. The abort listener + timer are armed SYNCHRONOUSLY (before
+ * any await elsewhere can interleave), so an abort during a sweep clears the timer
+ * cleanly — no leaked timer (CLAUDE.md long-lived-resource rule).
+ */
+function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) return resolve();
+    let timer: ReturnType<typeof setTimeout>;
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      resolve();
+    };
+    timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/**
+ * Slow background git-outcome sweep (M10). Best-effort: a git/network error NEVER
+ * stops capture (caught + ignored). Runs an immediate sweep then repeats every
+ * `intervalMs` until the signal aborts. POSTs commits directly (idempotent by SHA
+ * server-side) — it does not enqueue, keeping the durable queue session-only.
+ */
+async function gitSweepLoop(
+  opts: {
+    connectors: Connector[];
+    home: string;
+    url: string;
+    token: string;
+    intervalMs: number;
+    log: (msg: string) => void;
+  },
+  signal: AbortSignal,
+): Promise<void> {
+  while (!signal.aborted) {
+    try {
+      const { commits } = await captureGitCommits({ connectors: opts.connectors, home: opts.home });
+      if (commits.length > 0) {
+        const res = await postGit(opts.url, opts.token, { commits });
+        if (res.commitsInserted > 0) {
+          opts.log(`git: captured ${res.commitsInserted} new commit(s)`);
+        }
+      }
+    } catch {
+      // Best-effort by contract: never let a git/network error stop session capture.
+    }
+    await abortableDelay(opts.intervalMs, signal);
+  }
 }
 
 export async function runCaptureEngine(opts: CaptureEngineOptions): Promise<void> {
@@ -79,9 +140,27 @@ export async function runCaptureEngine(opts: CaptureEngineOptions): Promise<void
       internal.signal,
     );
 
+    // M10: best-effort slow git sweep alongside the watcher/sync loops. NOT part of
+    // the race (it is infinite + best-effort) — it unwinds when internal aborts.
+    const gitIntervalMs = opts.gitIntervalMs ?? DEFAULT_GIT_INTERVAL_MS;
+    const gitLoop =
+      gitIntervalMs > 0
+        ? gitSweepLoop(
+            {
+              connectors,
+              home,
+              url: opts.creds.url,
+              token: opts.creds.token,
+              intervalMs: gitIntervalMs,
+              log,
+            },
+            internal.signal,
+          )
+        : Promise.resolve();
+
     await Promise.race([watcherLoop, syncLoop]);
-    internal.abort(); // ensure the other loop unwinds too
-    await Promise.allSettled([watcherLoop, syncLoop]);
+    internal.abort(); // ensure the other loops unwind too
+    await Promise.allSettled([watcherLoop, syncLoop, gitLoop]);
     opts.signal.removeEventListener("abort", onExternalAbort);
 
     // Best-effort final drain of anything captured but not yet sent.

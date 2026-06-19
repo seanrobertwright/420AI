@@ -3,6 +3,7 @@ import {
   uuid,
   text,
   integer,
+  boolean,
   timestamp,
   jsonb,
   index,
@@ -258,5 +259,105 @@ export const reportArtifacts = pgTable(
       t.version,
     ),
     index("report_artifacts_by_scope").on(t.userId, t.reportType, t.scopeId),
+  ],
+);
+
+/**
+ * M10 Git Outcomes (PRD §11.3, §18.1, §23). A captured git commit per repository.
+ * DEDICATED table (NOT `events` rows — D2), mirroring `report_artifacts`: the row
+ * IS the record of a commit. Encryption split (D4): the commit MESSAGE is
+ * encrypted (a "message body" per §18.1); author name/email, branch, changed-file
+ * paths and numstat counts stay PLAINTEXT (git metadata, same class as the
+ * already-plaintext `project_path`) so attribution + reports query them WITHOUT
+ * decrypting. Full patch text is deferred (§11.3 marks Git Diff Capture optional).
+ *
+ * The commit SHA is git's own content hash → the idempotency key (D3): a re-scan
+ * `ON CONFLICT (machine_id, commit_sha) DO NOTHING` is a no-op, like the event
+ * fingerprint but with zero new fingerprint code. `repo_root_path` is the join key
+ * == `events.project_path` (attribution maps it via `workspace_keys`).
+ */
+export const gitCommits = pgTable(
+  "git_commits",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    machineId: uuid("machine_id")
+      .notNull()
+      .references(() => machines.id),
+    commitSha: text("commit_sha").notNull(),
+    repoRootPath: text("repo_root_path").notNull(), // == events.project_path (the attribution join key)
+    gitBranch: text("git_branch"),
+    authorName: text("author_name"),
+    authorEmail: text("author_email"),
+    // mode "string" keeps the ISO timestamp verbatim (offset OR Z form) — no Date/TZ coercion.
+    authoredAt: timestamp("authored_at", { withTimezone: true, mode: "string" }).notNull(),
+    committedAt: timestamp("committed_at", { withTimezone: true, mode: "string" }),
+    parents: text("parents"), // space-joined parent SHAs (2+ ⇒ a merge commit)
+    isRevert: boolean("is_revert").notNull().default(false),
+    filesChanged: integer("files_changed").notNull(),
+    insertions: integer("insertions").notNull(),
+    deletions: integer("deletions").notNull(),
+    // Encrypted commit message (§18.1) — nullable (an empty body is normal).
+    messageCiphertext: text("message_ciphertext"),
+    messageIv: text("message_iv"),
+    messageTag: text("message_tag"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // Idempotency key (D3 / PRD §23): the same commit from the same machine dedups.
+    uniqueIndex("git_commits_machine_sha").on(t.machineId, t.commitSha),
+    // Attribution + project join: resolve commits for a repo root (== project_path).
+    index("git_commits_by_root").on(t.repoRootPath),
+  ],
+);
+
+/**
+ * M10 per-commit changed file (the `--numstat` rows). PLAINTEXT path + line counts
+ * (patch text is deferred per §11.3). Binary files store 0/0 (numstat `-`/`-`).
+ */
+export const gitCommitFiles = pgTable(
+  "git_commit_files",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    commitId: uuid("commit_id")
+      .notNull()
+      .references(() => gitCommits.id),
+    filePath: text("file_path").notNull(), // repo-relative (e.g. src/x.ts)
+    status: text("status").notNull(), // "added" | "modified" | "deleted" | "renamed"
+    insertions: integer("insertions").notNull(),
+    deletions: integer("deletions").notNull(),
+  },
+  (t) => [index("git_commit_files_by_commit").on(t.commitId)],
+);
+
+/**
+ * M10 Outcome Attribution (PRD §11.4, D5). The session→commit link side-table:
+ * attribution is a JOIN/side-table, NEVER a column on `events` or `git_commits`.
+ * A link ALWAYS carries a `confidence` + `status` — a suggestion is never a fact.
+ *
+ * `(user_id, session_id, commit_id)` is unique so a re-suggest is idempotent and a
+ * manual confirm upserts the SAME row (D6 — the suggest path refreshes metrics for
+ * `suggested` rows but never clobbers a human `confirmed`/`rejected`).
+ */
+export const sessionGitLinks = pgTable(
+  "session_git_links",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
+    sessionId: text("session_id").notNull(),
+    commitId: uuid("commit_id")
+      .notNull()
+      .references(() => gitCommits.id),
+    projectId: uuid("project_id").references(() => projects.id),
+    confidence: text("confidence").notNull(), // AttributionConfidence
+    status: text("status").notNull(), // "suggested" | "confirmed" | "rejected"
+    minutesDelta: integer("minutes_delta"),
+    fileOverlap: integer("file_overlap").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("session_git_links_unique").on(t.userId, t.sessionId, t.commitId),
+    index("session_git_links_by_commit").on(t.commitId),
   ],
 );

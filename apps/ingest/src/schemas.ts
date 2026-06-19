@@ -214,3 +214,94 @@ export const listReportsQuerySchema = {
     scopeId: { type: "string" },
   },
 } as const;
+
+// --- M10 git capture + attribution bodies ---
+
+/** One changed file in a captured commit (numstat row). */
+const gitFileChangeSchema = {
+  type: "object",
+  required: ["path", "status", "insertions", "deletions"],
+  additionalProperties: false,
+  properties: {
+    path: { type: "string", minLength: 1 },
+    status: { type: "string", enum: ["added", "modified", "deleted", "renamed"] },
+    insertions: { type: "integer", minimum: 0 },
+    deletions: { type: "integer", minimum: 0 },
+  },
+} as const;
+
+/** One captured commit. Core identity/metric fields required; `message` may be empty; `gitBranch` optional. */
+const gitCommitSchema = {
+  type: "object",
+  required: [
+    "commitSha",
+    "repoRootPath",
+    "authorName",
+    "authorEmail",
+    "authoredAt",
+    "committedAt",
+    "message",
+    "parents",
+    "isRevert",
+    "filesChanged",
+    "insertions",
+    "deletions",
+    "files",
+  ],
+  additionalProperties: false,
+  properties: {
+    commitSha: { type: "string", minLength: 1 },
+    repoRootPath: { type: "string", minLength: 1 },
+    gitBranch: { type: "string" },
+    authorName: { type: "string" },
+    authorEmail: { type: "string" },
+    authoredAt: { type: "string", minLength: 1 },
+    committedAt: { type: "string" },
+    message: { type: "string" }, // may be "" (empty body is normal)
+    parents: { type: "array", items: { type: "string" } },
+    isRevert: { type: "boolean" },
+    filesChanged: { type: "integer", minimum: 0 },
+    insertions: { type: "integer", minimum: 0 },
+    deletions: { type: "integer", minimum: 0 },
+    files: { type: "array", items: gitFileChangeSchema },
+  },
+} as const;
+
+/** POST /v1/git body — a batch of captured commits (machine-authed; idempotent by SHA). */
+export const gitCaptureBodySchema = {
+  type: "object",
+  required: ["commits"],
+  additionalProperties: false,
+  properties: {
+    commits: { type: "array", items: gitCommitSchema },
+  },
+} as const;
+
+/** POST /v1/projects/:id/git/suggest body — optional `sessionId` to scope to one session. */
+export const suggestGitBodySchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    sessionId: { type: "string", minLength: 1 },
+  },
+} as const;
+
+/** POST /v1/sessions/:sessionId/git-links body — link a session to a commit by SHA. */
+export const manualLinkBodySchema = {
+  type: "object",
+  required: ["commitSha"],
+  additionalProperties: false,
+  properties: {
+    commitSha: { type: "string", minLength: 1 },
+  },
+} as const;
+
+/** PATCH /v1/git-links/:id body — confirm or reject a suggested link. */
+export const patchGitLinkBodySchema = {
+  type: "object",
+  required: ["status"],
+  additionalProperties: false,
+  properties: {
+    status: { type: "string", enum: ["confirmed", "rejected"] },
+  },
+} as const;

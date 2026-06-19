@@ -11,6 +11,9 @@ export {
   workspaces,
   workspaceKeys,
   reportArtifacts,
+  gitCommits,
+  gitCommitFiles,
+  sessionGitLinks,
 } from "./schema.js";
 export { createDb } from "./client.js";
 export type { Db, Tx, DbClient } from "./client.js";
@@ -67,3 +70,18 @@ export {
   DEFAULT_TRANSCRIPT_CAPS,
 } from "./repositories/transcript.js";
 export type { TranscriptEntry, TranscriptCaps } from "./repositories/transcript.js";
+export {
+  recordGitCommits,
+  gitCommitsByProject,
+  gitCommitDetail,
+} from "./repositories/git.js";
+export type { GitCommitDetail } from "./repositories/git.js";
+export {
+  sessionModifiedPaths,
+  sessionEndTs,
+  computeSessionGitSuggestions,
+  addManualLink,
+  setLinkStatus,
+  listProjectLinks,
+  projectSessionIds,
+} from "./repositories/attribution.js";
