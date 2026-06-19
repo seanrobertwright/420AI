@@ -70,11 +70,27 @@ describe("control-protocol", () => {
       knownGaps: [],
       watchGlobs: ["/home/u/.claude/**/*.jsonl"],
     };
-    const event: ControlEvent = { type: "connectors", connectors: [info] };
+    // M10-S2: a user-defined connector carries the additive optional `custom` flag.
+    const customInfo: ConnectorInfo = {
+      id: "custom-mytool",
+      enabled: true,
+      status: "experimental",
+      captureMethod: "custom-tail-regex",
+      liveness: "streaming",
+      tokens: "none",
+      cost: "none",
+      knownGaps: ["user-defined mapping"],
+      watchGlobs: ["/tmp/mytool/*.log"],
+      custom: true,
+    };
+    const event: ControlEvent = { type: "connectors", connectors: [info, customInfo] };
     expect(event.type).toBe("connectors");
     if (event.type === "connectors") {
       expect(event.connectors[0]?.id).toBe("claude-code");
       expect(event.connectors[0]?.enabled).toBe(true);
+      // A built-in omits `custom` (additive-optional ⇒ undefined); a custom connector sets it true.
+      expect(event.connectors[0]?.custom).toBeUndefined();
+      expect(event.connectors[1]?.custom).toBe(true);
     }
   });
 });

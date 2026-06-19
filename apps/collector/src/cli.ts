@@ -2,7 +2,9 @@ import { readFileSync, writeFileSync, existsSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { hostname as osHostname, homedir } from "node:os";
 import { parseClaudeCodeSession } from "./connectors/claude-code.js";
-import { connectors } from "./connectors/connector.js";
+import { connectors as defaultConnectors } from "./connectors/connector.js";
+import { loadRegistry } from "./connectors/registry.js";
+import { CUSTOM_CONNECTOR_CONFIG_PATH } from "./connectors/custom-connector.js";
 import { discoverWorkspaces } from "./discovery/discover-engine.js";
 import { SqliteStore } from "./store/sqlite-store.js";
 import { renderSessionReport } from "./report/session-report.js";
@@ -157,15 +159,22 @@ export async function runWatch(opts: {
   heartbeatIntervalMs?: number;
 }): Promise<void> {
   const creds = resolveCreds(opts);
+  const home = opts.home ?? homedir();
+  // Merge built-ins + valid custom connectors (M10-S2). The plain CLI must merge
+  // too, else `collector watch` would capture only the built-ins while `serve` did
+  // both. Surface any dropped (invalid/colliding) defs through the logger callback.
+  const { connectors, dropped } = loadRegistry(home);
+  for (const d of dropped) opts.logger?.(`custom connector "${d.id}" dropped: ${d.reason}`);
   await runCaptureEngine({
     creds,
     signal: opts.signal,
     intervalMs: opts.intervalMs,
     queuePath: opts.queuePath,
-    home: opts.home,
+    home,
     logger: opts.logger,
     collectorVersion: opts.collectorVersion,
     heartbeatIntervalMs: opts.heartbeatIntervalMs,
+    connectors,
   });
 }
 
@@ -223,12 +232,50 @@ export async function runDiscover(opts: {
   home?: string;
 }): Promise<DiscoverSummary> {
   const creds = resolveCreds(opts);
-  const { workspaces, unresolved } = await discoverWorkspaces({
-    connectors,
-    home: opts.home ?? homedir(),
-  });
+  const home = opts.home ?? homedir();
+  // Custom connectors omit `discoverRoots` (D7), so the discovery sweep skips them
+  // cleanly; merging keeps the built-ins identical and is future-proof.
+  const { connectors } = loadRegistry(home);
+  const { workspaces, unresolved } = await discoverWorkspaces({ connectors, home });
   const response = await postDiscover(creds.url, creds.token, { workspaces });
   return { response, unresolved };
+}
+
+export interface CustomConnectorSummary {
+  id: string;
+  /** "jsonl" | "regex" — derived from the connector's captureMethod. */
+  format: string;
+  status: string;
+  watchGlobs: string[];
+}
+
+export interface CustomInspectResult {
+  connectors: CustomConnectorSummary[];
+  dropped: { id: string; reason: string }[];
+}
+
+/**
+ * Read-only inspection (D9): load + validate `~/.420ai/custom-connectors.json` and
+ * summarize each user-defined connector plus any dropped (invalid/colliding) defs.
+ * Authoring the JSON is done by hand / the desktop UI — the CLI does not write it.
+ * Pure of process concerns — `main()` prints the summary.
+ */
+export function runCustom(opts: { home?: string; customPath?: string } = {}): CustomInspectResult {
+  const home = opts.home ?? homedir();
+  const { connectors, dropped } = loadRegistry(
+    home,
+    opts.customPath ? { customPath: opts.customPath } : undefined,
+  );
+  const builtinIds = new Set(defaultConnectors.map((c) => c.id));
+  const summaries = connectors
+    .filter((c) => !builtinIds.has(c.id))
+    .map((c) => ({
+      id: c.id,
+      format: c.fidelity.captureMethod.replace("custom-tail-", ""),
+      status: c.fidelity.status,
+      watchGlobs: c.watchGlobs(home),
+    }));
+  return { connectors: summaries, dropped };
 }
 
 /**
@@ -286,6 +333,7 @@ function usage(dbPath: string): string {
     "  collector queue",
     "  collector discover [--url <baseUrl>] [--token <token>]",
     "  collector projects [--url <baseUrl>] [--token <adminToken>]",
+    "  collector custom",
     "",
     `Default DB: ${dbPath}`,
     `Credentials: ${CREDENTIALS_PATH} (written by 'pair', read by 'push')`,
@@ -454,6 +502,25 @@ async function main(argv: string[]): Promise<void> {
     for (const p of projects) {
       process.stdout.write(`  ${p.id}  ${p.name}  ${p.gitRemote ?? "(no remote)"}\n`);
     }
+    return;
+  }
+
+  if (command === "custom") {
+    const { connectors, dropped } = runCustom();
+    if (connectors.length === 0) {
+      process.stdout.write("No custom connectors configured.\n");
+    } else {
+      process.stdout.write(`${connectors.length} custom connector(s):\n`);
+      for (const c of connectors) {
+        process.stdout.write(
+          `  ${c.id}  (format ${c.format}, status ${c.status}, ${c.watchGlobs.length} glob(s))\n`,
+        );
+      }
+    }
+    for (const d of dropped) {
+      process.stdout.write(`  dropped ${d.id}: ${d.reason}\n`);
+    }
+    process.stdout.write(`Config: ${CUSTOM_CONNECTOR_CONFIG_PATH}\n`);
     return;
   }
 
