@@ -345,3 +345,19 @@ export const patchGitLinkBodySchema = {
     status: { type: "string", enum: ["confirmed", "rejected"] },
   },
 } as const;
+
+// --- M10 3d signed catalog upload (PRD §10.4/§18). `payload` stays permissive
+// (`type:"object"`) — the ed25519 signature is the real integrity check, not the
+// JSON schema; arbitrary nested model→rates ride through. ---
+
+/** POST /v1/catalog body — a signed pricing-catalog update (version + payload + base64 ed25519 signature). */
+export const catalogUploadBodySchema = {
+  type: "object",
+  required: ["version", "payload", "signature"],
+  additionalProperties: false,
+  properties: {
+    version: { type: "string", minLength: 1 },
+    payload: { type: "object" },
+    signature: { type: "string", minLength: 1 },
+  },
+} as const;

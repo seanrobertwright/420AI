@@ -39,7 +39,8 @@ export type AlertCode =
   | "collector.stale"
   | "connector.failing"
   | "sync.backlog_high"
-  | "sync.backlog_growing";
+  | "sync.backlog_growing"
+  | "catalog.update_requires_approval";
 
 /** Stamps the alert derivation shape (sibling of MONITOR_VERSION; D11, PRD §23). */
 export const ALERT_VERSION = "m10-alerts-v1" as const;
@@ -202,4 +203,26 @@ export function deriveBacklogTrendAlerts(
     });
   }
   return alerts;
+}
+
+/**
+ * Emit a `catalog.update_requires_approval` (warning) when ≥1 signed pricing-catalog
+ * update is awaiting approval (PRD §20/§10.4/§18). Pure + clock-free — sibling of
+ * deriveBacklogTrendAlerts (3c D2); `deriveAlerts` stays frozen. `since` is null (a
+ * count/state, like sync.backlog_high). Severity is `warning` (tunable: it needs
+ * admin action, but no catalog ever changes a cost until approval, so it is not an
+ * outage). Keys on neither machine nor connector → alertKey
+ * "catalog.update_requires_approval:*" (one firing). Merged + re-sorted by sortAlerts
+ * in the route, not here.
+ */
+export function deriveCatalogAlerts(pendingCount: number): OperationalAlert[] {
+  if (pendingCount <= 0) return [];
+  return [
+    {
+      code: "catalog.update_requires_approval",
+      severity: "warning",
+      message: `${pendingCount} signed pricing-catalog update${pendingCount === 1 ? "" : "s"} awaiting approval`,
+      since: null,
+    },
+  ];
 }

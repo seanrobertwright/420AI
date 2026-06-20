@@ -28,4 +28,29 @@ describe("computeCost", () => {
     expect(result.confidence).toBe("unknown");
     expect(result.usd).toBe(0);
   });
+
+  it("an injected catalog (M10 3d re-pricing) uses the injected rates, not PRICING_CATALOG", () => {
+    const t = tokens({ input: 1000 });
+    const injected = {
+      "claude-opus-4-8": {
+        input: 1e-3,
+        output: 0,
+        cache_read: 0,
+        cache_write: 0,
+        sourceUrl: "x",
+        asOf: "x",
+      },
+    };
+    const result = computeCost("claude-opus-4-8", t, injected);
+    expect(result.confidence).toBe("estimated-model-known");
+    expect(result.usd).toBeCloseTo(1, 10); // 1000 * 1e-3 — the INJECTED rate, not the bundled 5e-6
+    // No catalog → the bundled PRICING_CATALOG (back-compat).
+    expect(computeCost("claude-opus-4-8", t).usd).toBeCloseTo(1000 * 5e-6, 10);
+  });
+
+  it("an injected catalog that drops a model → estimated-model-unknown (the active catalog is authoritative)", () => {
+    const result = computeCost("claude-opus-4-8", tokens({ input: 1000 }), {});
+    expect(result.confidence).toBe("estimated-model-unknown");
+    expect(result.usd).toBe(0);
+  });
 });

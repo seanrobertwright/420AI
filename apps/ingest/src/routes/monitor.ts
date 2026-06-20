@@ -3,6 +3,7 @@ import {
   deriveMachineStatus,
   deriveAlerts,
   deriveBacklogTrendAlerts,
+  deriveCatalogAlerts,
   sortAlerts,
   isBacklogHigh,
   BACKLOG_TREND_WINDOW_MS,
@@ -16,6 +17,7 @@ import {
   connectorHealth,
   recentBacklogSamples,
   reconcileAlertFirings,
+  countPendingCatalogs,
   findUserIdByEmail,
   type DbClient,
 } from "@420ai/db";
@@ -44,11 +46,12 @@ async function buildSnapshot(db: DbClient, userId: string, now: Date): Promise<L
   const nowMs = now.getTime();
   const sinceIso = new Date(nowMs - ACTIVE_WINDOW_MS).toISOString();
   const trendSince = new Date(nowMs - BACKLOG_TREND_WINDOW_MS);
-  const [machines, connectors, sessions, samplesByMachine] = await Promise.all([
+  const [machines, connectors, sessions, samplesByMachine, pendingCatalogs] = await Promise.all([
     machineStatuses(db, userId),
     connectorHealth(db, userId),
     activeSessions(db, userId, sinceIso),
     recentBacklogSamples(db, userId, trendSince),
+    countPendingCatalogs(db),
   ]);
   // Assemble the derived-state snapshot first, then fold in alerts — deriveAlerts reads the
   // already-derived machine status/backlogHigh + connector rows (no clock, no re-derivation, D3).
@@ -66,10 +69,12 @@ async function buildSnapshot(db: DbClient, userId: string, now: Date): Promise<L
     alerts: [],
     alertFirings: [],
   };
-  // Frozen deriveAlerts (D2) + the sibling backlog-growing derivative, merged + re-sorted.
+  // Frozen deriveAlerts (D2) + the sibling backlog-growing + the §20 catalog-approval
+  // derivatives, merged + re-sorted. The catalog alert is GLOBAL (no machine/connector).
   const alerts = sortAlerts([
     ...deriveAlerts(built),
     ...deriveBacklogTrendAlerts(machineRows, samplesByMachine),
+    ...deriveCatalogAlerts(pendingCatalogs),
   ]);
   // The new WRITE (D1): reconcile firing state against the derived alerts (route owns `now`).
   const alertFirings = await reconcileAlertFirings(db, userId, alerts, now);

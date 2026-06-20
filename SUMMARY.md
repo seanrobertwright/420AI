@@ -6,17 +6,24 @@
 
 ---
 
-## 0. Status — 2026-06-16
+## 0. Status — 2026-06-20
 
-**V1 is ~90% built.** Milestones **1–9 are implemented and on `main`** (M9 Live Monitor merged via
-PR #12). **M10 (hardening)** is a *bundle* being built in slices: the **operational-alerts slice** (the
+**V1 is ~95% built.** Milestones **1–9 are implemented and on `main`** (M9 Live Monitor merged via
+PR #12). **M10 (hardening)** is a *bundle* built in slices: the **operational-alerts slice** (the
 stateless `deriveAlerts` projection on the M9 snapshot), **3a exports (§22)**, **3b replay metadata
-(§23)**, and **3c the persisted alert engine** are all **done**. 3c added two additive tables
-(`machine_heartbeats` time-series + `alert_firings` firing history/ack via a partial unique index;
-migration `0006`), the `sync.backlog_growing` derivative layered beside the frozen `deriveAlerts`, an
-**evaluate-on-read** reconcile inside `buildSnapshot` (no background dispatcher), and a `/monitor` Ack
-button; the snapshot stamp bumped `m10-monitor-v1` → `m10-monitor-v2`. The remaining M10 bundle item is
-**3d catalog signing (§10.4/§18)**. **M11 (Tauri desktop/tray collector)** — the first *post-V1* milestone — is **built across
+(§23)**, **3c the persisted alert engine**, and **3d catalog signing (§10.4/§18)** are **all done — the
+M10 bundle is complete.** 3c added two additive tables (`machine_heartbeats` time-series + `alert_firings`
+firing history/ack via a partial unique index; migration `0006`), the `sync.backlog_growing` derivative
+layered beside the frozen `deriveAlerts`, an **evaluate-on-read** reconcile inside `buildSnapshot` (no
+background dispatcher), and a `/monitor` Ack button; the snapshot stamp bumped `m10-monitor-v1` →
+`m10-monitor-v2`. **3d** shipped an ed25519 verify primitive (`@420ai/shared/catalog-signing.ts`, no new
+dependency) + a bundled public key + an offline `scripts/sign-catalog.ts` signer (private key offline-only),
+the `pricing_catalogs` table (migration `0007`) with a `pending → active` approval gate (partial-unique
+≤1 active), four admin endpoints (`POST/GET /v1/catalog`, `:id/approve`, `:id/reject`), **ingest-time
+re-pricing under the active catalog** (going forward only; historical replay still deferred), and the
+`catalog.update_requires_approval` §20 alert via the existing 3c firing surface. Deferred: the
+archive-replay engine (retroactive re-pricing) and making connectors catalog-driven (this bundle is
+pricing-only). **M11 (Tauri desktop/tray collector)** — the first *post-V1* milestone — is **built across
 Slices 1–5**: a Tauri (Rust + system-webview) shell that bundles and lifecycle-supervises the headless
 collector as a `node:sea` **sidecar** (Rust stays off the capture path), with a tray; a Sync & Health
 panel + connector management; GUI pairing + run-on-login autostart + secrets in the Windows Credential
@@ -106,7 +113,7 @@ flowchart TD
 7. ✅ Reporting: deterministic metrics + durable, versioned Markdown report artifacts.
 8. ✅ AI interpretation: redaction engine + decrypt-for-render + configurable provider (Anthropic + OpenAI-compatible).
 9. ✅ Live Monitor: collector heartbeat → real-time monitor API + SSE → first Next.js dashboard (shadcn/theGridCN).
-10. ⬜ Hardening: exports, catalog signing, alerts, replay metadata.
+10. ✅ Hardening: exports, catalog signing, alerts, replay metadata (M10 bundle 3a/3b/3c/3d all done).
 
 **Post-V1:**
 11. ✅ **Tauri desktop/tray collector** (Slices 1–5) — Tauri (Rust + system-webview) shell over the
@@ -273,9 +280,22 @@ original M10 "hardening bundle" (exports, catalog signing, replay metadata, pers
            dispatcher / no new long-lived resource**); `POST /v1/alerts/firings/:id/ack` + a dashboard Ack
            button (token-never-in-browser proxy). Snapshot stamp bumped `m10-monitor-v1` →
            `m10-monitor-v2`. *Reconcile-throttle + windowed connector-failure rate deferred.*
-         - **3d — Catalog signing** (§10.4) — **the last remaining M10 sub-slice.** Signed catalog updates
-           + signature verify before apply + a capture-surface **approval gate**. *Needs a key-management
-           decision (ed25519: bundled public key, offline private). Lowest cross-dependency. Size: M.*
+         - ✅ **3d — Catalog signing** (§10.4/§18/§20/§23) — **DONE — completes the M10 hardening bundle.**
+           Shipped an ed25519 verify primitive (`@420ai/shared/catalog-signing.ts`, `node:crypto`, no new
+           dependency) over a recursive canonical serialization + a **bundled public key** + an offline
+           `scripts/sign-catalog.ts` signer (private key offline-only, gitignored `.secrets/`, never
+           committed). Added the `pricing_catalogs` table (migration `0007`) with a
+           `pending → active → superseded/rejected` lifecycle behind an admin **approval gate** (partial
+           unique enforcing ≤1 active; idempotent re-upload by version), four admin endpoints
+           (`POST/GET /v1/catalog`, `:id/approve`, `:id/reject`), and **ingest-time re-pricing under the
+           active catalog** — `computeCost`/`getPricing` gained an optional injected catalog and
+           `ingestBatch` an optional `repricing` arg, so an approved catalog re-prices cost-bearing events
+           **going forward** (zero ripple with no active catalog; the bundled `PRICING_CATALOG` stays the
+           offline baseline). The `catalog.update_requires_approval` §20 alert rides the existing 3c firing
+           reconcile (history + ack for free). The public key is **injectable** (`buildApp({ catalogPublicKey })`)
+           so int tests sign with an ephemeral key. **Fingerprint untouched, no new event type, no raw-record
+           change.** *Deferred: the archive-replay engine (retroactive re-pricing of historical rows) and
+           making connectors catalog-driven (this bundle is pricing-only).*
       4. **Basic search** (§21) — redacted plaintext projection (reuse M8 `redact()`) + Postgres FTS
          over sessions/reports/events/tool-calls/projects.
       5. **Dashboard surfaces** (§8.4) — reports/projects/search/catalog/settings UIs over the existing

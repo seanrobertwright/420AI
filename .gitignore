@@ -26,6 +26,7 @@ apps/desktop/src-tauri/.cargo/
 *.pem
 *.key
 secrets/
+.secrets/
 
 # Supabase / Docker local data
 supabase/.branches/

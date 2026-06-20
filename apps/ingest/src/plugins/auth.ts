@@ -10,6 +10,8 @@ declare module "fastify" {
   interface FastifyInstance {
     db: Db;
     adminToken: string;
+    /** M10 3d bundled (or test-injected) ed25519 public key for catalog signature verify. */
+    catalogPublicKey: string;
     /** M8 injected analysis provider (real client in server.ts; stub in tests). */
     analysisProvider: AnalysisProvider;
     /** M8 resolved max output tokens for an interpretation call. */
