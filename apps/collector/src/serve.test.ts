@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { PassThrough } from "node:stream";
 import { runServe, type ServeDeps } from "./serve.js";
 import type { CaptureEngineOptions } from "./capture-engine.js";
-import type { Connector } from "./connectors/connector.js";
+import { connectors as defaultConnectors, type Connector } from "./connectors/connector.js";
 import type { ConnectorConfig } from "./connectors/connector-config.js";
 import type { ControlCommand, ControlEvent } from "@420ai/shared";
 
@@ -83,6 +83,9 @@ function makeHarness(overrides: Partial<ServeDeps> = {}): Harness {
     statusIntervalMs: 0, // disable the timer; tests drive status by command
     exit: (code) => exitCodes.push(code),
     pid: 4242,
+    // Inject the built-in registry by default so non-overriding tests never read the
+    // real ~/.420ai/custom-connectors.json (runServe's loadRegistry branch is skipped).
+    connectorRegistry: defaultConnectors,
     ...overrides,
   };
 
@@ -283,6 +286,59 @@ describe("serve connector management (Slice 2)", () => {
       saveConnectorConfig: store.save,
       runEngine,
     });
+    await h.send({ cmd: "start" }, (e) => e.type === "status" && e.state === "running");
+    expect(seen?.map((c) => c.id)).toEqual(["claude-code"]);
+    await h.send({ cmd: "stop" }, (e) => e.type === "stopped");
+    await h.done;
+  });
+});
+
+describe("serve custom connectors (M10-S2)", () => {
+  // `custom` is id-derived (not a built-in id ⇒ custom), so a fake connector with a
+  // non-built-in id is flagged custom:true regardless of its fidelity fields.
+  const registry = [fakeConnector("claude-code"), fakeConnector("custom-mytool")];
+
+  it("connectors.list flags a user-defined connector with custom:true (built-ins false)", async () => {
+    const store = inMemoryConfig();
+    const h = makeHarness({
+      connectorRegistry: registry,
+      loadConnectorConfig: store.load,
+      saveConnectorConfig: store.save,
+      home: "/fake/home",
+    });
+    const ev = (await h.send(
+      { cmd: "connectors.list" },
+      (e) => e.type === "connectors",
+    )) as Extract<ControlEvent, { type: "connectors" }>;
+    expect(ev.connectors.find((c) => c.id === "custom-mytool")?.custom).toBe(true);
+    expect(ev.connectors.find((c) => c.id === "claude-code")?.custom).toBe(false);
+  });
+
+  it("a custom connector honors connectors.set disable and is dropped from capture", async () => {
+    const store = inMemoryConfig();
+    let seen: Connector[] | undefined;
+    const runEngine = (opts: CaptureEngineOptions): Promise<void> => {
+      seen = opts.connectors;
+      return new Promise<void>((resolve) => {
+        if (opts.signal.aborted) return resolve();
+        opts.signal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    };
+    const h = makeHarness({
+      connectorRegistry: registry,
+      loadConnectorConfig: store.load,
+      saveConnectorConfig: store.save,
+      runEngine,
+    });
+    await h.send(
+      { cmd: "connectors.set", id: "custom-mytool", enabled: false },
+      (e) => e.type === "ack",
+    );
+    const ev = (await h.send(
+      { cmd: "connectors.list" },
+      (e) => e.type === "connectors",
+    )) as Extract<ControlEvent, { type: "connectors" }>;
+    expect(ev.connectors.find((c) => c.id === "custom-mytool")?.enabled).toBe(false);
     await h.send({ cmd: "start" }, (e) => e.type === "status" && e.state === "running");
     expect(seen?.map((c) => c.id)).toEqual(["claude-code"]);
     await h.send({ cmd: "stop" }, (e) => e.type === "stopped");

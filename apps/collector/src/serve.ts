@@ -7,6 +7,7 @@ import { runCaptureEngine, type CaptureEngineOptions } from "./capture-engine.js
 import { loadCredentials, QUEUE_PATH, type Credentials } from "./identity.js";
 import { QueueStore, type QueueStats } from "./queue/queue-store.js";
 import { connectors as defaultConnectors, type Connector } from "./connectors/connector.js";
+import { loadRegistry } from "./connectors/registry.js";
 import {
   loadConnectorConfig as loadConnectorConfigDefault,
   saveConnectorConfig as saveConnectorConfigDefault,
@@ -14,6 +15,9 @@ import {
   type ConnectorConfig,
 } from "./connectors/connector-config.js";
 import type { ControlCommand, ControlEvent, ConnectorInfo } from "@420ai/shared";
+
+/** Built-in connector ids, computed once — `mapConnectorInfo` flags anything else as `custom`. */
+const BUILTIN_IDS = new Set(defaultConnectors.map((c) => c.id));
 
 /**
  * The `serve` entrypoint (M11): the long-running stdio protocol server the Tauri
@@ -83,6 +87,8 @@ function mapConnectorInfo(c: Connector, enabled: boolean, home: string): Connect
     cost: c.fidelity.cost,
     knownGaps: c.fidelity.knownGaps,
     watchGlobs: c.watchGlobs(home),
+    // A connector whose id is not a built-in is a user-defined custom connector (M10-S2).
+    custom: !BUILTIN_IDS.has(c.id),
   };
 }
 
@@ -113,10 +119,15 @@ export function runServe(deps: ServeDeps = {}): Promise<void> {
   const statusIntervalMs = deps.statusIntervalMs ?? 5000;
   const exit = deps.exit ?? ((code: number) => process.exit(code));
   const pid = deps.pid ?? process.pid;
-  const connectorRegistry = deps.connectorRegistry ?? defaultConnectors;
+  const home = deps.home ?? homedir();
+  // Default registry = built-ins + valid custom connectors (M10-S2). An injected
+  // registry (tests) bypasses the loader and carries no drop reasons.
+  const registry = deps.connectorRegistry
+    ? { connectors: deps.connectorRegistry, dropped: [] as { id: string; reason: string }[] }
+    : loadRegistry(home);
+  const connectorRegistry = registry.connectors;
   const loadConnectorCfg = deps.loadConnectorConfig ?? loadConnectorConfigDefault;
   const saveConnectorCfg = deps.saveConnectorConfig ?? saveConnectorConfigDefault;
-  const home = deps.home ?? homedir();
 
   let state: ServeState = "idle";
   let intent: Intent = null;
@@ -340,6 +351,11 @@ export function runServe(deps: ServeDeps = {}): Promise<void> {
 
     emit({ type: "ready", pid, collectorVersion, paired: Boolean(creds) });
     emitStatus();
+    // Surface any custom-connector declarations the loader dropped (invalid/colliding).
+    // The entrypoint may log; the registry library itself stays silent (D5).
+    for (const d of registry.dropped) {
+      log("warn", `custom connector "${d.id}" dropped: ${d.reason}`);
+    }
   });
 }
 

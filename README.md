@@ -173,6 +173,8 @@ V1 is viable when **one Windows machine** can:
   manual/headless path): prerequisites, one-time repo setup, the desktop app, and the server stack.
 - [`docs/guide/usage.md`](./docs/guide/usage.md) — day-to-day how-to: the desktop panels & tray,
   connectors, the full collector CLI, project mapping, and reports/insights via the ingest API.
+- [`docs/guide/custom-connectors.md`](./docs/guide/custom-connectors.md) — declare a config-only
+  custom connector for any file/log a built-in doesn't cover (`~/.420ai/custom-connectors.json`).
 - [`docs/guide/troubleshooting.md`](./docs/guide/troubleshooting.md) — failure modes and fixes.
 - [`apps/desktop/README.md`](./apps/desktop/README.md) — building the branded NSIS desktop installer.
 

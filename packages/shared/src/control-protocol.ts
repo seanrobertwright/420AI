@@ -57,6 +57,8 @@ export interface ConnectorInfo {
   cost: "reported" | "computed" | "none";
   knownGaps: string[];
   watchGlobs: string[]; // resolved against home — the "permission scope" (which files it reads)
+  /** True for user-defined config connectors (M10-S2 custom connectors); absent/false ⇒ a built-in. */
+  custom?: boolean;
 }
 
 /**
