@@ -19,7 +19,15 @@ import type { LiveMonitorSnapshot, MonitorStatus } from "./monitor.js";
  * STATELESS: alerts are re-derived on every snapshot (repo invariant "events
  * disposable / projections re-derivable"). There is NO persisted firing history —
  * `since` is the timestamp of the triggering EVIDENCE (e.g. last heartbeat / last
- * event), NOT a "fired at" time. A persisted firing/ack engine is a deferred M10 slice.
+ * event), NOT a "fired at" time.
+ *
+ * M10 3c (persisted alert engine): `deriveAlerts` itself stays FROZEN (D2). The new
+ * "backlog GROWING" derivative is produced by a SEPARATE pure function —
+ * `deriveBacklogTrendAlerts` — layered BESIDE `deriveAlerts` and merged via the
+ * exported `sortAlerts` helper (the route does
+ * `sortAlerts([...deriveAlerts(built), ...deriveBacklogTrendAlerts(...)])`). Firing
+ * history + ack live in the persisted layer (alert-firings.ts + the db/ingest layers),
+ * never here — this module remains pure + clock-free.
  */
 
 /** Alert urgency, rendered critical-first. */
@@ -30,7 +38,8 @@ export type AlertCode =
   | "collector.offline"
   | "collector.stale"
   | "connector.failing"
-  | "sync.backlog_high";
+  | "sync.backlog_high"
+  | "sync.backlog_growing";
 
 /** Stamps the alert derivation shape (sibling of MONITOR_VERSION; D11, PRD §23). */
 export const ALERT_VERSION = "m10-alerts-v1" as const;
@@ -126,7 +135,71 @@ export function deriveAlerts(snapshot: LiveMonitorSnapshot): OperationalAlert[] 
     }
   }
 
-  return alerts
-    .slice()
-    .sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity]);
+  return sortAlerts(alerts);
+}
+
+/**
+ * Sort alerts critical-first, stable within a severity (Array.prototype.sort is stable
+ * in Node ≥ 24). Extracted from `deriveAlerts` (D2 — behaviour unchanged) so the route
+ * can sort the MERGED list of `deriveAlerts` + `deriveBacklogTrendAlerts` output once.
+ */
+export function sortAlerts(alerts: OperationalAlert[]): OperationalAlert[] {
+  return alerts.slice().sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity]);
+}
+
+/** One time-stamped sync-backlog reading from the heartbeat time-series (sorted asc by the repo). */
+export interface BacklogSample {
+  ts: string; // ISO
+  queuePending: number;
+}
+
+/** Lookback window for the backlog-growing trend (the repo windows samples to this). */
+export const BACKLOG_TREND_WINDOW_MS = 10 * 60_000; // 10 minutes
+
+/**
+ * A deliberately simple, tunable trend heuristic — a recent-window slope model is a
+ * deferred refinement, sibling of `connector.failing`'s lifetime-ratio honest-limit
+ * note. `minSamples` avoids a false positive on a fresh collector; `minGrowth` is the
+ * pending-count rise (first→last) over the window that counts as "growing".
+ */
+export const BACKLOG_TREND_THRESHOLDS = { minSamples: 3, minGrowth: 50 } as const;
+
+/**
+ * Pure trend test: did the backlog rise by ≥ `minGrowth` across a window of ≥ `minSamples`
+ * samples? Clock-free — the repo pre-windows + sorts the samples ascending by `ts`.
+ */
+export function deriveBacklogTrend(samples: BacklogSample[]): boolean {
+  if (samples.length < BACKLOG_TREND_THRESHOLDS.minSamples) return false;
+  const first = samples[0]!;
+  const last = samples[samples.length - 1]!;
+  return last.queuePending - first.queuePending >= BACKLOG_TREND_THRESHOLDS.minGrowth;
+}
+
+/**
+ * Emit a `sync.backlog_growing` (warning) per machine whose recent backlog is rising
+ * (D2 — sibling of `deriveAlerts`, NOT folded into it). Offline machines are suppressed
+ * (mirrors the backlog-high offline suppression in `deriveAlerts`; they emit no samples
+ * anyway). `since` carries the last sample's ts as a display label.
+ */
+export function deriveBacklogTrendAlerts(
+  machines: LiveMonitorSnapshot["machines"],
+  samplesByMachine: Map<string, BacklogSample[]>,
+): OperationalAlert[] {
+  const alerts: OperationalAlert[] = [];
+  for (const m of machines) {
+    if (m.status === "offline") continue;
+    const s = samplesByMachine.get(m.id) ?? [];
+    if (!deriveBacklogTrend(s)) continue;
+    const first = s[0]!;
+    const last = s[s.length - 1]!;
+    alerts.push({
+      code: "sync.backlog_growing",
+      severity: "warning",
+      message: `Collector "${m.name}" sync backlog is growing (${first.queuePending}→${last.queuePending} pending)`,
+      machineId: m.id,
+      machineName: m.name,
+      since: last.ts,
+    });
+  }
+  return alerts;
 }

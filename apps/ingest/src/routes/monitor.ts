@@ -2,7 +2,10 @@ import type { FastifyInstance } from "fastify";
 import {
   deriveMachineStatus,
   deriveAlerts,
+  deriveBacklogTrendAlerts,
+  sortAlerts,
   isBacklogHigh,
+  BACKLOG_TREND_WINDOW_MS,
   MONITOR_VERSION,
   emptyMonitorSnapshot,
   type LiveMonitorSnapshot,
@@ -11,6 +14,8 @@ import {
   machineStatuses,
   activeSessions,
   connectorHealth,
+  recentBacklogSamples,
+  reconcileAlertFirings,
   findUserIdByEmail,
   type DbClient,
 } from "@420ai/db";
@@ -29,30 +34,46 @@ const ACTIVE_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
  * Compose the LiveMonitorSnapshot from the clock-free projections. The ONLY wall-clock
  * read is `now`, passed in by the route (D6 — route owns the clock, like routes/reports.ts
  * owns `generatedAt`). `deriveMachineStatus`/`isBacklogHigh` are applied per machine here.
+ *
+ * M10 3c (D1): this is now also a WRITER. After deriving the alerts (the frozen
+ * `deriveAlerts` plus the sibling `deriveBacklogTrendAlerts` over the recent heartbeat
+ * samples, merged + re-sorted by `sortAlerts`), it reconciles them against the persisted
+ * open firings (evaluate-on-read — no background dispatcher) and attaches `alertFirings`.
  */
 async function buildSnapshot(db: DbClient, userId: string, now: Date): Promise<LiveMonitorSnapshot> {
   const nowMs = now.getTime();
   const sinceIso = new Date(nowMs - ACTIVE_WINDOW_MS).toISOString();
-  const [machines, connectors, sessions] = await Promise.all([
+  const trendSince = new Date(nowMs - BACKLOG_TREND_WINDOW_MS);
+  const [machines, connectors, sessions, samplesByMachine] = await Promise.all([
     machineStatuses(db, userId),
     connectorHealth(db, userId),
     activeSessions(db, userId, sinceIso),
+    recentBacklogSamples(db, userId, trendSince),
   ]);
   // Assemble the derived-state snapshot first, then fold in alerts — deriveAlerts reads the
   // already-derived machine status/backlogHigh + connector rows (no clock, no re-derivation, D3).
+  const machineRows = machines.map((m) => ({
+    ...m,
+    status: deriveMachineStatus(m, nowMs),
+    backlogHigh: isBacklogHigh(m.queuePending),
+  }));
   const built: LiveMonitorSnapshot = {
     monitorVersion: MONITOR_VERSION,
     generatedAt: now.toISOString(),
-    machines: machines.map((m) => ({
-      ...m,
-      status: deriveMachineStatus(m, nowMs),
-      backlogHigh: isBacklogHigh(m.queuePending),
-    })),
+    machines: machineRows,
     connectors,
     activeSessions: sessions,
     alerts: [],
+    alertFirings: [],
   };
-  return { ...built, alerts: deriveAlerts(built) };
+  // Frozen deriveAlerts (D2) + the sibling backlog-growing derivative, merged + re-sorted.
+  const alerts = sortAlerts([
+    ...deriveAlerts(built),
+    ...deriveBacklogTrendAlerts(machineRows, samplesByMachine),
+  ]);
+  // The new WRITE (D1): reconcile firing state against the derived alerts (route owns `now`).
+  const alertFirings = await reconcileAlertFirings(db, userId, alerts, now);
+  return { ...built, alerts, alertFirings };
 }
 
 /**

@@ -9,13 +9,14 @@
 ## 0. Status — 2026-06-16
 
 **V1 is ~90% built.** Milestones **1–9 are implemented and on `main`** (M9 Live Monitor merged via
-PR #12). **M10 (hardening)** is a *bundle* and is being built in slices: the **operational-alerts slice
-is done** — a **stateless derived projection** (`deriveAlerts` in `@420ai/shared`) folded into the M9
-Live Monitor snapshot (no new table, no migration, no long-lived dispatcher), surfaced as an Alerts
-panel on `/monitor`; the snapshot stamp bumped `m9-monitor-v1` → `m10-monitor-v1`. The remaining M10
-bundle items — **exports (§22), catalog signing (§10.4/§18), replay metadata (§23)**, and the richer
-**persisted alert engine** (firing history/ack + heartbeat time-series for "backlog growing") — still
-remain. **M11 (Tauri desktop/tray collector)** — the first *post-V1* milestone — is **built across
+PR #12). **M10 (hardening)** is a *bundle* being built in slices: the **operational-alerts slice** (the
+stateless `deriveAlerts` projection on the M9 snapshot), **3a exports (§22)**, **3b replay metadata
+(§23)**, and **3c the persisted alert engine** are all **done**. 3c added two additive tables
+(`machine_heartbeats` time-series + `alert_firings` firing history/ack via a partial unique index;
+migration `0006`), the `sync.backlog_growing` derivative layered beside the frozen `deriveAlerts`, an
+**evaluate-on-read** reconcile inside `buildSnapshot` (no background dispatcher), and a `/monitor` Ack
+button; the snapshot stamp bumped `m10-monitor-v1` → `m10-monitor-v2`. The remaining M10 bundle item is
+**3d catalog signing (§10.4/§18)**. **M11 (Tauri desktop/tray collector)** — the first *post-V1* milestone — is **built across
 Slices 1–5**: a Tauri (Rust + system-webview) shell that bundles and lifecycle-supervises the headless
 collector as a `node:sea` **sidecar** (Rust stays off the capture path), with a tray; a Sync & Health
 panel + connector management; GUI pairing + run-on-login autostart + secrets in the Windows Credential
@@ -251,9 +252,9 @@ original M10 "hardening bundle" (exports, catalog signing, replay metadata, pers
       2. **Custom file/log connector** (thin) — config-driven connector on the existing framework; no
          schema change. Restores the MVP-criteria connector. *Small, independent — quick win.*
       3. **M10 hardening bundle** — itself four sub-slices (recommended internal order **3b → 3a → 3c → 3d**):
-         - **3a — Exports** (§22) — MD/JSON/JSONL/CSV, scoped by project/time/session/report/connector;
-           **redact before anything leaves the archive**; decrypt-for-render only when the scope includes
-           raw content. *No schema change. Parquet + full restore-UI deferred. Size: M.*
+         - ✅ **3a — Exports** (§22) — **DONE.** Shipped MD/JSON/JSONL/CSV portable bundles, scoped by
+           project/time/session/report/connector; **redact before anything leaves the archive**;
+           decrypt-for-render only when the scope includes raw content. *No schema change.*
          - ✅ **3b — Replay metadata** (§23) — **DONE.** Shipped `PRICING_CATALOG_VERSION="m10-catalog-v1"`
            + nullable `catalog_version` (events + report_artifacts) and `analysis_version` (report_artifacts)
            columns (migration `0005`), stamped through the existing ingest path + the M7/M8 report
@@ -263,12 +264,18 @@ original M10 "hardening bundle" (exports, catalog signing, replay metadata, pers
            nothing). The **archive-replay engine** (read-back/decrypt/re-parse stored raw records) remains
            **deferred** to its own slice — the re-derive path here is the existing ingest upsert.
            *Small additive column. Done first — de-risks every later re-parse. Size: S–M.*
-         - **3c — Persisted alert engine** — firing history/ack + heartbeat **time-series** so "backlog
-           growing" is a real trend, not a point read; layers around the M10 `deriveAlerts` contract
-           (does NOT change it). *New tables + migration. Size: M–L.*
-         - **3d — Catalog signing** (§10.4) — signed catalog updates + signature verify before apply +
-           a capture-surface **approval gate**. *Needs a key-management decision (ed25519: bundled public
-           key, offline private). Lowest cross-dependency — last or in parallel. Size: M.*
+         - ✅ **3c — Persisted alert engine** — **DONE.** Shipped two additive tables (migration `0006`):
+           `machine_heartbeats` (append-only time-series; `recordHeartbeat` appends + prunes) and
+           `alert_firings` (firing history/ack, one OPEN row per `(user, alert_key)` via a **partial**
+           unique index). Added `sync.backlog_growing` as a sibling pure derivative
+           (`deriveBacklogTrendAlerts`) merged beside the **frozen** `deriveAlerts` (only `sortAlerts` was
+           extracted). Reconcile is **evaluate-on-read** inside `buildSnapshot` (**no background
+           dispatcher / no new long-lived resource**); `POST /v1/alerts/firings/:id/ack` + a dashboard Ack
+           button (token-never-in-browser proxy). Snapshot stamp bumped `m10-monitor-v1` →
+           `m10-monitor-v2`. *Reconcile-throttle + windowed connector-failure rate deferred.*
+         - **3d — Catalog signing** (§10.4) — **the last remaining M10 sub-slice.** Signed catalog updates
+           + signature verify before apply + a capture-surface **approval gate**. *Needs a key-management
+           decision (ed25519: bundled public key, offline private). Lowest cross-dependency. Size: M.*
       4. **Basic search** (§21) — redacted plaintext projection (reuse M8 `redact()`) + Postgres FTS
          over sessions/reports/events/tool-calls/projects.
       5. **Dashboard surfaces** (§8.4) — reports/projects/search/catalog/settings UIs over the existing

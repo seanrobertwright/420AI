@@ -1,7 +1,7 @@
-import { eq, sql } from "drizzle-orm";
-import type { ActiveSessionRow, MachineStatusRow } from "@420ai/shared";
+import { and, eq, gte, sql } from "drizzle-orm";
+import type { ActiveSessionRow, BacklogSample, MachineStatusRow } from "@420ai/shared";
 import type { DbClient } from "../client.js";
-import { events, machines } from "../schema.js";
+import { events, machineHeartbeats, machines } from "../schema.js";
 
 /**
  * M9 Live Monitor projections (PRD §8.4, §10.1.1, §20). Read-only, CLOCK-FREE —
@@ -96,4 +96,35 @@ export async function activeSessions(
     projectPath: r.projectPath ?? null,
     gitBranch: r.gitBranch ?? null,
   }));
+}
+
+/**
+ * Recent backlog samples per machine for the trend derivative (M10 3c). Clock-free:
+ * the route passes `since` (a Date = now - BACKLOG_TREND_WINDOW_MS). Scoped by userId
+ * via the machines join. `ts` is plain timestamptz → Date → ISO. Sorted asc (by machine
+ * then ts) so the pure `deriveBacklogTrend` can read first/last directly.
+ */
+export async function recentBacklogSamples(
+  db: DbClient,
+  userId: string,
+  since: Date,
+): Promise<Map<string, BacklogSample[]>> {
+  const rows = await db
+    .select({
+      machineId: machineHeartbeats.machineId,
+      ts: machineHeartbeats.ts,
+      queuePending: machineHeartbeats.queuePending,
+    })
+    .from(machineHeartbeats)
+    .innerJoin(machines, eq(machineHeartbeats.machineId, machines.id))
+    .where(and(eq(machines.userId, userId), gte(machineHeartbeats.ts, since)))
+    .orderBy(machineHeartbeats.machineId, machineHeartbeats.ts);
+  const byMachine = new Map<string, BacklogSample[]>();
+  for (const r of rows) {
+    const list = byMachine.get(r.machineId) ?? [];
+    // Plain timestamptz column → JS Date → normalize to ISO (CLAUDE.md Drizzle gotcha).
+    list.push({ ts: r.ts.toISOString(), queuePending: r.queuePending });
+    byMachine.set(r.machineId, list);
+  }
+  return byMachine;
 }

@@ -108,6 +108,6 @@ describe("isBacklogHigh", () => {
 
 describe("MONITOR_VERSION", () => {
   it("is the stable shape stamp", () => {
-    expect(MONITOR_VERSION).toBe("m10-monitor-v1");
+    expect(MONITOR_VERSION).toBe("m10-monitor-v2");
   });
 });
