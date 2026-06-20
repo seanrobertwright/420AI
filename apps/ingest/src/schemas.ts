@@ -216,6 +216,45 @@ export const listReportsQuerySchema = {
   },
 } as const;
 
+// --- M10 export querystrings (PRD §22). `format` is REQUIRED so a missing/invalid
+// value is a 400 via the err.validation branch in app.ts; filter fields stay
+// permissive strings (no coercion). ---
+
+/** ?format=json|jsonl|csv (+ optional project/session/connector/time filters). */
+export const exportEventsQuerySchema = {
+  type: "object",
+  required: ["format"],
+  additionalProperties: false,
+  properties: {
+    format: { type: "string", enum: ["json", "jsonl", "csv"] },
+    projectId: { type: "string" },
+    sessionId: { type: "string" },
+    connector: { type: "string" },
+    start: { type: "string" },
+    end: { type: "string" },
+  },
+} as const;
+
+/** ?format=md|json for a single report-artifact export. */
+export const exportReportQuerySchema = {
+  type: "object",
+  required: ["format"],
+  additionalProperties: false,
+  properties: {
+    format: { type: "string", enum: ["md", "json"] },
+  },
+} as const;
+
+/** ?format=md|json|jsonl for a decrypt-for-render session-transcript export. */
+export const exportTranscriptQuerySchema = {
+  type: "object",
+  required: ["format"],
+  additionalProperties: false,
+  properties: {
+    format: { type: "string", enum: ["md", "json", "jsonl"] },
+  },
+} as const;
+
 // --- M10 git capture + attribution bodies ---
 
 /** One changed file in a captured commit (numstat row). */

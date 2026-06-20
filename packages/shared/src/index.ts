@@ -11,5 +11,6 @@ export * from "./alerts.js";
 export * from "./control-protocol.js";
 export * from "./reports.js";
 export * from "./redaction.js";
+export * from "./serialize.js";
 export * from "./analysis.js";
 export * from "./git.js";
