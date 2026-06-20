@@ -109,8 +109,8 @@ Each non-blank line is `JSON.parse`d, then each field source is read as a **dot-
 ### `regex` — one line, named-capture groups
 
 Each line is matched against `pattern`; field sources name the capture groups (`match.groups`).
-The pattern **must** name a `ts` group (or a group matching your `tsField`) so each line carries a
-timestamp source.
+If you set `tsField`, the pattern **must** name a group with that exact name; otherwise the timestamp
+falls back to the capture time and no `ts` group is required.
 
 ```jsonc
 {
@@ -130,6 +130,11 @@ timestamp source.
 
 → one `message.user` event for session `s2`. A line that doesn't match the pattern is skipped
 (counted, never fatal).
+
+> **Keep the pattern linear.** Your regex runs against every line on the capture thread. Avoid nested
+> quantifiers and overlapping alternations (e.g. `(\S+)+`, `(a|a)*`) that can backtrack
+> catastrophically — a pathological pattern can stall capture. Prefer specific character classes
+> (`\S+`, `[^ ]+`) over `.*` where you can.
 
 ---
 
@@ -161,8 +166,9 @@ You must provide at least one of `eventTypeField` or `eventType`, or the declara
 - A **blank** line is ignored.
 - An **unparseable** line (bad JSON, or no regex match) is skipped and counted.
 - A line whose resolved event type isn't mappable is skipped and counted.
-- An **invalid declaration** (empty `watchGlobs`, bad regex, unknown `eventType`, a regex with no
-  timestamp group) is dropped with a reason — the other declarations and all built-ins keep running.
+- An **invalid declaration** (empty `watchGlobs`, bad regex, unknown `eventType`, a `tsField` that
+  names no group in the pattern) is dropped with a reason — the other declarations and all built-ins
+  keep running.
 - An **id collision** (with a built-in or another custom def) drops the later one; **first wins**.
 
 ---
@@ -176,6 +182,12 @@ and desktop UI surface these):
 - `tokens: "none"` **unless** you configure a `tokenMap` (then `"estimated"`); `cost: "none"`.
 - **No workspace discovery.** Custom connectors don't enumerate project roots, so they're skipped by
   `collector discover`. Project attribution relies entirely on a mapped `projectPathField`.
+
+> **Map a unique `sessionIdField`.** Each event is keyed by `` `${sessionId}:lineIndex` ``. If several
+> files match one glob and don't carry a session id unique per logical session (or you omit
+> `sessionIdField` entirely), lines that share a line index across files produce the **same key** and
+> the later one is silently deduplicated away. Map a `sessionIdField` that is unique per session —
+> ideally one logical session per file — so nothing is dropped.
 
 Custom connectors appear in the desktop **Connectors** panel flagged as user-defined, and honor the
 same enable/disable toggle as the built-ins.

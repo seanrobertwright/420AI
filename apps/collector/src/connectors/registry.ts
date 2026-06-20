@@ -38,7 +38,13 @@ export function loadRegistry(home: string, opts?: { customPath?: string }): Regi
   for (const raw of loadCustomConnectors(opts?.customPath)) {
     const result = validateCustomDef(raw);
     if ("error" in result) {
-      const id = typeof (raw as { id?: unknown }).id === "string" ? (raw as { id: string }).id : "(unknown)";
+      // `raw` may be ANY parseable JSON value here (incl. null / a number / a string
+      // for a malformed `connectors[]` entry) — extract the id defensively so building
+      // the drop reason can never throw and take down capture of the built-ins (D4).
+      const id =
+        raw && typeof raw === "object" && typeof (raw as { id?: unknown }).id === "string"
+          ? (raw as { id: string }).id
+          : "(unknown)";
       dropped.push({ id, reason: result.error });
       continue;
     }

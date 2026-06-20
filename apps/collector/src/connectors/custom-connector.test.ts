@@ -159,14 +159,26 @@ describe("custom-connector factory", () => {
     });
     expect("error" in unknownType && unknownType.error).toMatch(/unknown eventType/);
 
-    const noTsGroup = validateCustomDef({
+    // A mapped tsField whose group is absent from the pattern is rejected (catches the typo)…
+    const tsFieldTypo = validateCustomDef({
       id: "c",
       watchGlobs: ["/x"],
       format: "regex",
       pattern: "^(?<sessionId>\\S+)$",
+      tsField: "ts",
       eventType: "message.user",
     });
-    expect("error" in noTsGroup && noTsGroup.error).toMatch(/<ts>/);
+    expect("error" in tsFieldTypo && tsFieldTypo.error).toMatch(/tsField/);
+
+    // …but a regex with NO tsField and no ts group is valid (timestamp falls back to capture time).
+    const captureTimeOnly = validateCustomDef({
+      id: "c",
+      watchGlobs: ["/x"],
+      format: "regex",
+      pattern: "^(?<sessionId>\\S+)\\s+(?<msg>.*)$",
+      eventType: "message.user",
+    });
+    expect("ok" in captureTimeOnly).toBe(true);
 
     const noEventType = validateCustomDef({ id: "c", watchGlobs: ["/x"], format: "jsonl" });
     expect("error" in noEventType && noEventType.error).toMatch(/eventType/);

@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { PassThrough } from "node:stream";
 import { runServe, type ServeDeps } from "./serve.js";
 import type { CaptureEngineOptions } from "./capture-engine.js";
-import type { Connector } from "./connectors/connector.js";
+import { connectors as defaultConnectors, type Connector } from "./connectors/connector.js";
 import type { ConnectorConfig } from "./connectors/connector-config.js";
 import type { ControlCommand, ControlEvent } from "@420ai/shared";
 
@@ -83,6 +83,9 @@ function makeHarness(overrides: Partial<ServeDeps> = {}): Harness {
     statusIntervalMs: 0, // disable the timer; tests drive status by command
     exit: (code) => exitCodes.push(code),
     pid: 4242,
+    // Inject the built-in registry by default so non-overriding tests never read the
+    // real ~/.420ai/custom-connectors.json (runServe's loadRegistry branch is skipped).
+    connectorRegistry: defaultConnectors,
     ...overrides,
   };
 

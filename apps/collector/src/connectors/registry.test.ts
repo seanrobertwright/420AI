@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { connectors as defaultConnectors } from "./connector.js";
@@ -73,5 +73,22 @@ describe("loadRegistry", () => {
     expect(connectors.map((c) => c.id)).toEqual(BUILTIN_IDS);
     expect(dropped[0]).toMatchObject({ id: "custom-bad" });
     expect(dropped[0]?.reason).toMatch(/watchGlobs/);
+  });
+
+  it("a null / non-object entry in connectors[] is dropped, never crashes (D4 tolerance)", () => {
+    // saveCustomConnectors can't emit these — write the raw JSON a hand-edited config might contain.
+    const path = tempCustomPath();
+    writeFileSync(
+      path,
+      JSON.stringify({ version: "m10-custom-v1", connectors: [null, 42, "oops", def("custom-ok")] }),
+    );
+    let result!: ReturnType<typeof loadRegistry>;
+    expect(() => {
+      result = loadRegistry("/fake/home", { customPath: path });
+    }).not.toThrow();
+    // The one valid def still loads; the three junk entries are dropped as "(unknown)".
+    expect(result.connectors.map((c) => c.id)).toEqual([...BUILTIN_IDS, "custom-ok"]);
+    expect(result.dropped).toHaveLength(3);
+    expect(result.dropped.every((d) => d.id === "(unknown)")).toBe(true);
   });
 });

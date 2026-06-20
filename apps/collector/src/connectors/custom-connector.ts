@@ -149,11 +149,14 @@ export function validateCustomDef(raw: unknown): { ok: CustomConnectorDef } | { 
     } catch (err) {
       return { error: `connector "${def.id}": invalid regex — ${(err as Error).message}` };
     }
-    // The timestamp source must be a named capture group present in the pattern
-    // (default group name "ts"); otherwise the line carries no usable timestamp.
-    const tsGroup = def.tsField ?? "ts";
-    if (!def.pattern.includes(`(?<${tsGroup}>`)) {
-      return { error: `connector "${def.id}": regex pattern must name a (?<${tsGroup}>…) group` };
+    // If a tsField is mapped, the pattern MUST name that group (catches the typo where
+    // tsField="ts" but the pattern wrote `(?<timestamp>…)`). When no tsField is set the
+    // timestamp falls back to capture time, so a ts group is not required — same tolerance
+    // as every other unmapped field.
+    if (def.tsField && !def.pattern.includes(`(?<${def.tsField}>`)) {
+      return {
+        error: `connector "${def.id}": tsField "${def.tsField}" names no (?<${def.tsField}>…) group in the pattern`,
+      };
     }
   }
 
@@ -303,6 +306,8 @@ export function makeCustomConnector(def: CustomConnectorDef): Connector {
       knownGaps: [
         "user-defined mapping — fidelity is only as good as the configured field paths",
         "discoverRoots not implemented; project attribution relies on a mapped projectPath field only",
+        "events are keyed by `${sessionId}:lineIndex`; map a sessionIdField unique per session " +
+          "(ideally one session per file) or lines sharing a line index across files dedup-collide",
         ...(def.tokenMap ? [] : ["no token/cost capture — this source maps no usage fields"]),
       ],
     },
