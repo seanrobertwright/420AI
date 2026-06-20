@@ -45,6 +45,10 @@ import type { NormalizedTokens, CostResult, ModelPricing } from "@420ai/shared";
 export const users = pgTable("users", {
   id: uuid("id").primaryKey().defaultRandom(),
   email: text("email").notNull().unique(),
+  // M12 12.3 admin login: scrypt hash of the single admin's password. NULLABLE on
+  // purpose — pairing-flow users (ensureUserByEmail) have no password; only the
+  // env-seeded admin (setUserPassword) gets one.
+  passwordHash: text("password_hash"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

@@ -14,6 +14,20 @@ export const pairingCodeBodySchema = {
   },
 } as const;
 
+// --- M12 12.3 admin login. Both fields REQUIRED + minLength:1 so a malformed body
+// is a 400 (via the err.validation branch in app.ts) before the handler runs. ---
+
+/** POST /v1/auth/login body — the single admin's email + password. */
+export const loginBodySchema = {
+  type: "object",
+  required: ["email", "password"],
+  additionalProperties: false,
+  properties: {
+    email: { type: "string", minLength: 1 },
+    password: { type: "string", minLength: 1 },
+  },
+} as const;
+
 export const pairBodySchema = {
   type: "object",
   required: ["code", "machine"],

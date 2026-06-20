@@ -139,7 +139,8 @@ V1 is viable when **one Windows machine** can:
 ## Onboarding Flow
 
 1. Start local Docker Supabase + dashboard via guided setup.
-2. Create admin user.
+2. Create the admin user (set `ADMIN_EMAIL` + `ADMIN_PASSWORD` in `.env`; seeded on ingest boot) and
+   **log in** at the dashboard's `/login`.
 3. Generate a machine pairing code in the dashboard.
 4. Install/start the Windows collector (headless Node/TS service in V1; Tauri tray later).
 5. Enter dashboard URL + pairing code.
@@ -429,12 +430,16 @@ M9 makes the archive **observable in real time** and ships the **first frontend*
   guards run before `reply.hijack()`, interval injectable for deterministic tests).
 - **The dashboard (`apps/dashboard`):** a self-hosted Next.js + shadcn + theGridCN app whose **Live
   Monitor page** renders machines/connectors/active-sessions and updates live over SSE. It talks to
-  ingest **only through server-side proxy Route Handlers** that hold `ADMIN_TOKEN` — the browser never
-  sees the token. The dashboard is deliberately **out of the root `tsc -b` graph** and gets its own
-  **enforced** typecheck lane in `repo-health` (`typecheck:dashboard`) + a `build:dashboard` gate.
+  ingest **only through server-side proxy Route Handlers** — the browser never holds a credential.
+  **M12 12.3:** the dashboard now requires a **real admin login** (`/login`); unauthenticated requests
+  redirect there. It no longer reads `ADMIN_TOKEN` — instead it carries the logged-in admin's session
+  token (an httpOnly cookie) and needs `SESSION_SECRET` (the SAME value as ingest) so its Edge
+  middleware can verify that cookie. The dashboard is deliberately **out of the root `tsc -b` graph**
+  and gets its own **enforced** typecheck lane in `repo-health` (`typecheck:dashboard`) + a
+  `build:dashboard` gate.
 
 ```bash
-npm run dashboard:dev        # Next.js dev server (reads INGEST_URL + ADMIN_TOKEN from .env)
+npm run dashboard:dev        # Next.js dev server (reads INGEST_URL + SESSION_SECRET from .env)
 npm run build:dashboard      # production build (also gates theGridCN component resolution)
 npm run typecheck:dashboard  # the dashboard's own tsc --noEmit lane (root tsc -b cannot see it)
 ```

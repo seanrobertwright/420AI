@@ -1,7 +1,8 @@
 import { config } from "dotenv";
 import { fileURLToPath } from "node:url";
-import { createDb } from "@420ai/db";
+import { createDb, setUserPassword } from "@420ai/db";
 import { buildApp } from "./app.js";
+import { hashPassword } from "./password.js";
 import { createAnalysisProvider, type AnalysisProviderConfig } from "./analysis/provider.js";
 
 // Load the repo-root .env (this runs from apps/ingest/ via npm -w).
@@ -11,6 +12,14 @@ const databaseUrl = process.env.DATABASE_URL;
 const adminToken = process.env.ADMIN_TOKEN;
 if (!databaseUrl) throw new Error("DATABASE_URL is not set (copy .env.example to .env)");
 if (!adminToken) throw new Error("ADMIN_TOKEN is not set (copy .env.example to .env)");
+
+// M12 12.3 admin login config. ADMIN_EMAIL defaults to the legacy single-user address
+// (back-compat with every legacy-default-seeded row). SESSION_SECRET is required — it signs
+// session tokens AND must be shared with the dashboard middleware (which verifies them).
+const adminEmail = process.env.ADMIN_EMAIL ?? "seanrobertwright@gmail.com";
+const sessionSecret = process.env.SESSION_SECRET;
+const adminPassword = process.env.ADMIN_PASSWORD;
+if (!sessionSecret) throw new Error("SESSION_SECRET is not set (copy .env.example to .env)");
 
 function parsePositiveInt(raw: string | undefined, name: string, defaultValue: number): number {
   if (raw === undefined) return defaultValue;
@@ -49,9 +58,21 @@ const monitorStreamIntervalMs = parsePositiveInt(
 );
 
 const { db } = createDb(databaseUrl);
+
+// Seed the single admin's password (scrypt) from env. Idempotent: re-running on every boot
+// re-hashes ADMIN_PASSWORD, so rotating it + restart re-seeds. If unset, login is disabled
+// (admin has no hash → 401 for everyone) but the rest of the API still works via the service token.
+if (adminPassword) {
+  await setUserPassword(db, adminEmail, hashPassword(adminPassword));
+} else {
+  console.warn("ADMIN_PASSWORD is not set — dashboard login disabled until it is (set it + restart).");
+}
+
 const app = buildApp({
   db,
   adminToken,
+  adminEmail,
+  sessionSecret,
   analysisProvider: createAnalysisProvider(analysisConfig),
   analysisMaxOutputTokens,
   monitorStreamIntervalMs,

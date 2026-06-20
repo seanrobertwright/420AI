@@ -15,8 +15,6 @@ import {
 } from "../schemas.js";
 import { adminAuthorized, isUuid } from "../auth.js";
 
-const DEFAULT_EMAIL = "seanrobertwright@gmail.com";
-
 interface GenerateSessionInterpretationBody {
   type?: "session.ai_interpretation";
 }
@@ -52,7 +50,7 @@ export default async function interpretationRoutes(app: FastifyInstance): Promis
       if (detail.eventCount === 0) {
         return reply.code(404).send({ error: "session not found or has no events" });
       }
-      const userId = await ensureUserByEmail(app.db, DEFAULT_EMAIL);
+      const userId = await ensureUserByEmail(app.db, app.adminEmail);
       const generatedAt = new Date().toISOString();
       const row = await generateSessionInterpretation(
         app.db,
@@ -86,7 +84,7 @@ export default async function interpretationRoutes(app: FastifyInstance): Promis
       if (totals.eventCount === 0) {
         return reply.code(404).send({ error: "project has no events" });
       }
-      const userId = await ensureUserByEmail(app.db, DEFAULT_EMAIL);
+      const userId = await ensureUserByEmail(app.db, app.adminEmail);
       const generatedAt = new Date().toISOString();
       const row = await generateProjectInterpretation(
         app.db,

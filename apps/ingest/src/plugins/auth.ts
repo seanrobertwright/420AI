@@ -10,6 +10,10 @@ declare module "fastify" {
   interface FastifyInstance {
     db: Db;
     adminToken: string;
+    /** M12 12.3 single-admin identity (from ADMIN_EMAIL; replaces the hardcoded default email constant). */
+    adminEmail: string;
+    /** M12 12.3 HMAC key for signing/verifying admin session tokens (POST /v1/auth/login). */
+    sessionSecret: string;
     /** M10 3d bundled (or test-injected) ed25519 public key for catalog signature verify. */
     catalogPublicKey: string;
     /** M8 injected analysis provider (real client in server.ts; stub in tests). */

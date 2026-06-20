@@ -10,8 +10,6 @@ import {
 import { createProjectBodySchema, patchProjectBodySchema } from "../schemas.js";
 import { adminAuthorized, isUuid } from "../auth.js";
 
-const DEFAULT_EMAIL = "seanrobertwright@gmail.com";
-
 interface CreateProjectBody {
   name: string;
   gitRemote?: string;
@@ -30,7 +28,7 @@ export default async function projectRoutes(app: FastifyInstance): Promise<void>
     if (!adminAuthorized(app, request)) {
       return reply.code(401).send({ error: "admin authorization required" });
     }
-    const userId = await findUserIdByEmail(app.db, DEFAULT_EMAIL);
+    const userId = await findUserIdByEmail(app.db, app.adminEmail);
     if (!userId) return reply.code(200).send({ projects: [] });
     const projects = await listProjects(app.db, userId);
     return reply.code(200).send({ projects });
@@ -43,7 +41,7 @@ export default async function projectRoutes(app: FastifyInstance): Promise<void>
       if (!adminAuthorized(app, request)) {
         return reply.code(401).send({ error: "admin authorization required" });
       }
-      const userId = await ensureUserByEmail(app.db, DEFAULT_EMAIL);
+      const userId = await ensureUserByEmail(app.db, app.adminEmail);
       const { id } = await createProject(
         app.db,
         userId,

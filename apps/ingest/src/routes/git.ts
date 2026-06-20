@@ -22,8 +22,6 @@ import {
 } from "../schemas.js";
 import { adminAuthorized, isUuid } from "../auth.js";
 
-const DEFAULT_EMAIL = "seanrobertwright@gmail.com";
-
 /**
  * M10 Git Outcomes + Attribution (PRD §11.3, §11.4). Mirrors the workspaces.ts
  * machine+admin split:
@@ -67,7 +65,7 @@ export default async function gitRoutes(app: FastifyInstance): Promise<void> {
     if (!isUuid(request.params.id)) {
       return reply.code(404).send({ error: "project not found" });
     }
-    const userId = await findUserIdByEmail(app.db, DEFAULT_EMAIL);
+    const userId = await findUserIdByEmail(app.db, app.adminEmail);
     if (!userId) return reply.code(200).send([]);
     return reply.code(200).send(await listProjectLinks(app.db, userId, request.params.id));
   });
@@ -88,7 +86,7 @@ export default async function gitRoutes(app: FastifyInstance): Promise<void> {
       if (!(await getProjectName(app.db, id))) {
         return reply.code(404).send({ error: "project not found" });
       }
-      const userId = await findUserIdByEmail(app.db, DEFAULT_EMAIL);
+      const userId = await findUserIdByEmail(app.db, app.adminEmail);
       if (!userId) return reply.code(200).send([]);
       const scoped = request.body?.sessionId;
       const sessionIds = scoped ? [scoped] : await projectSessionIds(app.db, id);
@@ -108,7 +106,7 @@ export default async function gitRoutes(app: FastifyInstance): Promise<void> {
       if (!adminAuthorized(app, request)) {
         return reply.code(401).send({ error: "admin authorization required" });
       }
-      const userId = await findUserIdByEmail(app.db, DEFAULT_EMAIL);
+      const userId = await findUserIdByEmail(app.db, app.adminEmail);
       if (!userId) return reply.code(404).send({ error: "commit not found" });
       const detail = await gitCommitDetail(app.db, userId, request.body.commitSha);
       if (!detail) return reply.code(404).send({ error: "commit not found" });
@@ -136,7 +134,7 @@ export default async function gitRoutes(app: FastifyInstance): Promise<void> {
       if (!isUuid(request.params.id)) {
         return reply.code(404).send({ error: "link not found" });
       }
-      const userId = await findUserIdByEmail(app.db, DEFAULT_EMAIL);
+      const userId = await findUserIdByEmail(app.db, app.adminEmail);
       if (!userId) return reply.code(404).send({ error: "link not found" });
       const link = await setLinkStatus(app.db, userId, request.params.id, request.body.status);
       if (!link) return reply.code(404).send({ error: "link not found" });

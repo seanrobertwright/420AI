@@ -10,7 +10,7 @@ export default async function ProjectsPage() {
   let projects: ProjectRow[] = [];
   try {
     const res = await fetch(`${ingestUrl()}/v1/projects`, {
-      headers: adminHeaders(),
+      headers: await adminHeaders(),
       cache: "no-store",
     });
     if (res.ok) projects = ((await res.json()) as { projects: ProjectRow[] }).projects;

@@ -18,8 +18,6 @@ import {
 } from "../schemas.js";
 import { adminAuthorized, isUuid } from "../auth.js";
 
-const DEFAULT_EMAIL = "seanrobertwright@gmail.com";
-
 interface PatchWorkspaceBody {
   projectId: string;
 }
@@ -111,7 +109,7 @@ export default async function workspaceRoutes(app: FastifyInstance): Promise<voi
     if (!adminAuthorized(app, request)) {
       return reply.code(401).send({ error: "admin authorization required" });
     }
-    const userId = await findUserIdByEmail(app.db, DEFAULT_EMAIL);
+    const userId = await findUserIdByEmail(app.db, app.adminEmail);
     if (!userId) return reply.code(200).send({ workspaces: [] });
     const workspaces = await listWorkspaces(app.db, userId);
     return reply.code(200).send({ workspaces });
@@ -137,7 +135,7 @@ export default async function workspaceRoutes(app: FastifyInstance): Promise<voi
       if (!(await getProjectName(app.db, projectId))) {
         return reply.code(404).send({ error: "project not found" });
       }
-      const userId = await findUserIdByEmail(app.db, DEFAULT_EMAIL);
+      const userId = await findUserIdByEmail(app.db, app.adminEmail);
       if (!userId) return reply.code(404).send({ error: "workspace not found" });
       const row = await remapWorkspace(app.db, userId, id, projectId);
       if (!row) return reply.code(404).send({ error: "workspace not found" });

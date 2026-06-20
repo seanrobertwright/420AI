@@ -16,7 +16,7 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
   try {
     const res = await fetch(`${ingestUrl()}/v1/alerts/firings/${id}/ack`, {
       method: "POST",
-      headers: adminHeaders(),
+      headers: await adminHeaders(),
       cache: "no-store",
     });
     if (!res.ok) {

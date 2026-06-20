@@ -1,7 +1,9 @@
+import { randomBytes } from "node:crypto";
 import Fastify, { type FastifyError, type FastifyInstance } from "fastify";
 import type { Db } from "@420ai/db";
 import { PairingError } from "@420ai/db";
 import authPlugin from "./plugins/auth.js";
+import authRoutes from "./routes/auth.js";
 import healthRoutes from "./routes/health.js";
 import pairingCodeRoutes from "./routes/pairing-codes.js";
 import pairRoutes from "./routes/pair.js";
@@ -24,9 +26,17 @@ import { AnalysisProviderError, type AnalysisProvider } from "./analysis/provide
 const DEFAULT_ANALYSIS_MAX_OUTPUT_TOKENS = 4096;
 const DEFAULT_MONITOR_STREAM_INTERVAL_MS = 3000;
 
+const DEFAULT_ADMIN_EMAIL = "seanrobertwright@gmail.com";
+
 export interface BuildAppOptions {
   db: Db;
   adminToken: string;
+  /** M12 12.3 single-admin email (defaults to the legacy literal so existing test callers + the
+   * legacy-default-seeded users keep resolving the same user; only server.ts passes a real value). */
+  adminEmail?: string;
+  /** M12 12.3 HMAC session-signing key. Optional with an ephemeral per-process default so the 6
+   * existing buildApp test callers don't change; server.ts passes the persistent SESSION_SECRET. */
+  sessionSecret?: string;
   /** M10 3d ed25519 public key for catalog verify (defaults to the bundled CATALOG_PUBLIC_KEY; tests inject ephemeral). */
   catalogPublicKey?: string;
   /** M8 injected analysis provider (real client in server.ts; deterministic stub in tests). */
@@ -51,6 +61,10 @@ export function buildApp(opts: BuildAppOptions): FastifyInstance {
 
   app.decorate("db", opts.db);
   app.decorate("adminToken", opts.adminToken);
+  app.decorate("adminEmail", opts.adminEmail ?? DEFAULT_ADMIN_EMAIL);
+  // Ephemeral fallback secret (per-process) so test callers that omit it still sign/verify
+  // internally; tokens simply don't survive a restart. server.ts always passes a persistent one.
+  app.decorate("sessionSecret", opts.sessionSecret ?? randomBytes(32).toString("base64url"));
   app.decorate("catalogPublicKey", opts.catalogPublicKey ?? CATALOG_PUBLIC_KEY);
   app.decorate("analysisProvider", opts.analysisProvider);
   app.decorate(
@@ -63,6 +77,7 @@ export function buildApp(opts: BuildAppOptions): FastifyInstance {
   );
 
   app.register(authPlugin);
+  app.register(authRoutes);
   app.register(healthRoutes);
   app.register(pairingCodeRoutes);
   app.register(pairRoutes);

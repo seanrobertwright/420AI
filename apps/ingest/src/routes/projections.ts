@@ -12,8 +12,6 @@ import {
 import { usageOverTimeQuerySchema } from "../schemas.js";
 import { adminAuthorized, isUuid } from "../auth.js";
 
-const DEFAULT_EMAIL = "seanrobertwright@gmail.com";
-
 /**
  * M6 deterministic-projection read endpoints (PRD §16.1, D6). All admin-gated
  * (mirrors routes/projects.ts) — these are dashboard/reporting reads, not the
@@ -90,7 +88,7 @@ export default async function projectionRoutes(app: FastifyInstance): Promise<vo
     if (!adminAuthorized(app, request)) {
       return reply.code(401).send({ error: "admin authorization required" });
     }
-    const userId = await findUserIdByEmail(app.db, DEFAULT_EMAIL);
+    const userId = await findUserIdByEmail(app.db, app.adminEmail);
     if (!userId) return reply.code(200).send([]);
     return reply.code(200).send(await connectorHealth(app.db, userId));
   });

@@ -12,7 +12,7 @@ export async function GET(request: Request) {
   let upstream: Response;
   try {
     upstream = await fetch(`${ingestUrl()}/v1/monitor/stream`, {
-      headers: adminHeaders(),
+      headers: await adminHeaders(),
       cache: "no-store",
       // Tie the upstream stream to the browser connection: when the client closes its
       // EventSource, this aborts the Next→ingest hop too (no leaked upstream stream).

@@ -23,8 +23,6 @@ import {
   exportTranscriptQuerySchema,
 } from "../schemas.js";
 
-const DEFAULT_EMAIL = "seanrobertwright@gmail.com";
-
 /**
  * M10 export surface (PRD §22): three admin-gated read routes that serialize scoped
  * archive data into the V1 portable formats (MD/JSON/JSONL/CSV; Parquet deferred).
@@ -168,7 +166,7 @@ export default async function exportRoutes(app: FastifyInstance): Promise<void> 
         return reply.code(400).send({ error: "invalid time range" });
       }
 
-      const userId = await findUserIdByEmail(app.db, DEFAULT_EMAIL);
+      const userId = await findUserIdByEmail(app.db, app.adminEmail);
       let rows: EventExportRow[] = [];
       let truncated = false;
       // A project scope is user-scoped through the workspace join (no userId needed);
