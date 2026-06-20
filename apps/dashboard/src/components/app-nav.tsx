@@ -27,6 +27,16 @@ const LINKS: { href: string; label: string }[] = [
 
 export function AppNav() {
   const pathname = usePathname();
+  // The login page is its own standalone surface — no nav (and no logout to show while logged out).
+  if (pathname === "/login") return null;
+
+  // M12 12.3 logout: POST the same-origin logout route (clears the httpOnly cookie), then a hard
+  // nav to /login so the middleware re-gates with no session.
+  async function logout(): Promise<void> {
+    await fetch("/api/auth/logout", { method: "POST" });
+    window.location.href = "/login";
+  }
+
   return (
     <nav className="border-border/60 bg-card/40 border-b backdrop-blur-sm">
       <div className="mx-auto flex max-w-6xl items-center gap-1 px-6 py-3">
@@ -49,6 +59,13 @@ export function AppNav() {
             </Link>
           );
         })}
+        <button
+          type="button"
+          onClick={logout}
+          className="text-muted-foreground hover:text-foreground hover:bg-muted ml-auto rounded-md px-3 py-1.5 text-sm font-medium transition-colors"
+        >
+          Logout
+        </button>
       </div>
     </nav>
   );

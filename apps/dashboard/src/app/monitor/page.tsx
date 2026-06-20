@@ -18,7 +18,7 @@ export default async function MonitorPage() {
   let initial: LiveMonitorSnapshot;
   try {
     const res = await fetch(`${ingestUrl()}/v1/monitor`, {
-      headers: adminHeaders(),
+      headers: await adminHeaders(),
       cache: "no-store",
     });
     initial = res.ok ? ((await res.json()) as LiveMonitorSnapshot) : emptySnapshot();

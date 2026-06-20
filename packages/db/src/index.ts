@@ -37,7 +37,12 @@ export {
   listAlertFirings,
   ackAlertFiring,
 } from "./repositories/alert-firings.js";
-export { findUserIdByEmail, ensureUserByEmail } from "./repositories/users.js";
+export {
+  findUserIdByEmail,
+  ensureUserByEmail,
+  findAdminCredential,
+  setUserPassword,
+} from "./repositories/users.js";
 export { issueIngestToken, findMachineIdByToken } from "./repositories/tokens.js";
 export { ingestBatch } from "./repositories/ingest.js";
 export {

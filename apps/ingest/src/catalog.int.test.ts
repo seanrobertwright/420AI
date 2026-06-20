@@ -145,7 +145,7 @@ describe.skipIf(!TEST_URL)("catalog API (HTTP e2e via inject) — M10 3d", () =>
   });
 
   it("uploads pending → lists → approves → re-prices ingest → §20 alert fires while pending and clears on approval", async () => {
-    const { token } = await pair(await createCode()); // also creates the DEFAULT_EMAIL user (for monitor)
+    const { token } = await pair(await createCode()); // also creates the admin-email user (for monitor)
 
     // (1) upload a validly-signed catalog → 200 pending
     const up = await adminPost("/v1/catalog", { ...CONTENT, signature: sign(CONTENT) });

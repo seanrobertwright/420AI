@@ -13,10 +13,11 @@ export default async function MachinesPage() {
   let projects: ProjectOption[] = [];
   try {
     // The projects list feeds the workspace-remap picker (real uuids → no malformed 400).
+    const headers = await adminHeaders();
     const [snapRes, wsRes, projRes] = await Promise.all([
-      fetch(`${ingestUrl()}/v1/monitor`, { headers: adminHeaders(), cache: "no-store" }),
-      fetch(`${ingestUrl()}/v1/workspaces`, { headers: adminHeaders(), cache: "no-store" }),
-      fetch(`${ingestUrl()}/v1/projects`, { headers: adminHeaders(), cache: "no-store" }),
+      fetch(`${ingestUrl()}/v1/monitor`, { headers, cache: "no-store" }),
+      fetch(`${ingestUrl()}/v1/workspaces`, { headers, cache: "no-store" }),
+      fetch(`${ingestUrl()}/v1/projects`, { headers, cache: "no-store" }),
     ]);
     if (snapRes.ok) snapshot = (await snapRes.json()) as LiveMonitorSnapshot;
     if (wsRes.ok) workspaces = ((await wsRes.json()) as { workspaces: WorkspaceRow[] }).workspaces;

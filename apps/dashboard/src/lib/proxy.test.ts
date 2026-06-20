@@ -1,16 +1,25 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { proxyJson } from "./proxy.js";
 
 /**
- * Unit coverage for the generalized JSON proxy (D8). Stubs `globalThis.fetch` (typed as
- * `typeof fetch` so the recorded call args are the real `[input, init]` tuple) and asserts the
- * three load-bearing behaviors: the admin bearer is added on the server→ingest hop only when
- * ADMIN_TOKEN is set; a `!res.ok` upstream status is FORWARDED (not collapsed to 502); a
- * thrown/unreachable fetch becomes a clean 502. Mirrors `ingest.test.ts` env save/restore.
+ * Unit coverage for the generalized JSON proxy (D8; M12 12.3 login). Stubs `globalThis.fetch`
+ * (typed as `typeof fetch` so the recorded call args are the real `[input, init]` tuple) and
+ * asserts the load-bearing behaviors: the admin bearer (now the logged-in admin's SESSION token
+ * from the httpOnly cookie) is added on the server→ingest hop only when the cookie is present; a
+ * `!res.ok` upstream status is FORWARDED (not collapsed to 502); a thrown/unreachable fetch
+ * becomes a clean 502. `next/headers` cookies() is mocked (adminHeaders() reads it).
  */
 
+// vi.hoisted keeps the shared cookie state initialized before the hoisted vi.mock factory runs.
+const cookieState = vi.hoisted(() => ({ value: undefined as string | undefined }));
+vi.mock("next/headers", () => ({
+  cookies: async () => ({
+    get: (_name: string) => (cookieState.value !== undefined ? { value: cookieState.value } : undefined),
+  }),
+}));
+
+import { proxyJson } from "./proxy.js";
+
 const ORIGINAL_INGEST_URL = process.env.INGEST_URL;
-const ORIGINAL_ADMIN_TOKEN = process.env.ADMIN_TOKEN;
 
 beforeEach(() => {
   process.env.INGEST_URL = "https://ingest.example.test";
@@ -19,15 +28,14 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  cookieState.value = undefined;
   if (ORIGINAL_INGEST_URL === undefined) delete process.env.INGEST_URL;
   else process.env.INGEST_URL = ORIGINAL_INGEST_URL;
-  if (ORIGINAL_ADMIN_TOKEN === undefined) delete process.env.ADMIN_TOKEN;
-  else process.env.ADMIN_TOKEN = ORIGINAL_ADMIN_TOKEN;
 });
 
 describe("proxyJson", () => {
-  it("adds the admin bearer on the server→ingest hop when ADMIN_TOKEN is set", async () => {
-    process.env.ADMIN_TOKEN = "secret-token";
+  it("adds the session-token bearer on the server→ingest hop when the cookie is present", async () => {
+    cookieState.value = "session-token";
     const fetchMock = vi.fn<typeof fetch>(
       async () => new Response(JSON.stringify({ ok: true }), { status: 200 }),
     );
@@ -38,14 +46,14 @@ describe("proxyJson", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0]!;
     expect(url).toBe("https://ingest.example.test/v1/projects");
-    expect(init!.headers).toMatchObject({ authorization: "Bearer secret-token" });
+    expect(init!.headers).toMatchObject({ authorization: "Bearer session-token" });
     expect(init!.cache).toBe("no-store");
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true });
   });
 
-  it("omits the authorization header when no token is configured", async () => {
-    delete process.env.ADMIN_TOKEN;
+  it("omits the authorization header when there is no session cookie", async () => {
+    cookieState.value = undefined;
     const fetchMock = vi.fn<typeof fetch>(async () => new Response("{}", { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
 

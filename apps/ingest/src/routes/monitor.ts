@@ -23,8 +23,6 @@ import {
 } from "@420ai/db";
 import { adminAuthorized } from "../auth.js";
 
-const DEFAULT_EMAIL = "seanrobertwright@gmail.com";
-
 /**
  * The "active now" window: a session whose last event is within this lookback is
  * shown as active. M9 stores only the LATEST heartbeat sample, so this is current
@@ -99,7 +97,7 @@ export default async function monitorRoutes(app: FastifyInstance): Promise<void>
     if (!adminAuthorized(app, request)) {
       return reply.code(401).send({ error: "admin authorization required" });
     }
-    const userId = await findUserIdByEmail(app.db, DEFAULT_EMAIL);
+    const userId = await findUserIdByEmail(app.db, app.adminEmail);
     const now = new Date();
     if (!userId) return reply.code(200).send(emptyMonitorSnapshot(now.toISOString()));
     return reply.code(200).send(await buildSnapshot(app.db, userId, now));
@@ -110,7 +108,7 @@ export default async function monitorRoutes(app: FastifyInstance): Promise<void>
     if (!adminAuthorized(app, request)) {
       return reply.code(401).send({ error: "admin authorization required" });
     }
-    const userId = await findUserIdByEmail(app.db, DEFAULT_EMAIL);
+    const userId = await findUserIdByEmail(app.db, app.adminEmail);
 
     reply.raw.writeHead(200, {
       "content-type": "text/event-stream",

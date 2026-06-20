@@ -2,8 +2,6 @@ import type { FastifyInstance } from "fastify";
 import { ackAlertFiring, findUserIdByEmail } from "@420ai/db";
 import { adminAuthorized, isUuid } from "../auth.js";
 
-const DEFAULT_EMAIL = "seanrobertwright@gmail.com";
-
 /**
  * M10 3c — admin-gated alert-firing acknowledgement (PRD §20). Mirrors the
  * PATCH /v1/git-links/:id guard ladder verbatim: adminAuthorized → isUuid(id) else 404
@@ -19,7 +17,7 @@ export default async function alertRoutes(app: FastifyInstance): Promise<void> {
     if (!isUuid(request.params.id)) {
       return reply.code(404).send({ error: "alert firing not found" });
     }
-    const userId = await findUserIdByEmail(app.db, DEFAULT_EMAIL);
+    const userId = await findUserIdByEmail(app.db, app.adminEmail);
     if (!userId) return reply.code(404).send({ error: "alert firing not found" });
     const firing = await ackAlertFiring(app.db, userId, request.params.id, new Date());
     if (!firing) return reply.code(404).send({ error: "alert firing not found" });

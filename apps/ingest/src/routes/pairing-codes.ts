@@ -3,8 +3,6 @@ import { createPairingCode, users } from "@420ai/db";
 import { pairingCodeBodySchema } from "../schemas.js";
 import { adminAuthorized } from "../auth.js";
 
-const DEFAULT_EMAIL = "seanrobertwright@gmail.com";
-
 interface PairingCodeBody {
   email?: string;
   userId?: string;
@@ -25,7 +23,7 @@ export default async function pairingCodeRoutes(app: FastifyInstance): Promise<v
 
       let userId = request.body.userId;
       if (!userId) {
-        const email = request.body.email ?? DEFAULT_EMAIL;
+        const email = request.body.email ?? app.adminEmail;
         // M2 single-user: upsert a user by email.
         const [user] = await app.db
           .insert(users)

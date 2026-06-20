@@ -5,9 +5,9 @@
  * with NO auth header, and these helpers add the admin bearer on the server→ingest hop
  * (the token is read from server env only and never reaches the browser).
  *
- * Reads `process.env.ADMIN_TOKEN` via `adminHeaders()` → NEVER import from a "use client"
- * file; only Route Handlers (`app/api/**`) may call these. `force-dynamic` belongs on each
- * route file, not here.
+ * Adds the admin bearer via `adminHeaders()` (M12 12.3: the logged-in admin's session token
+ * from the httpOnly cookie, read server-side) → NEVER import from a "use client" file; only
+ * Route Handlers (`app/api/**`) may call these. `force-dynamic` belongs on each route file, not here.
  */
 import { NextResponse } from "next/server";
 import { ingestUrl, adminHeaders } from "@/lib/ingest";
@@ -24,7 +24,7 @@ export async function proxyJson(path: string, init: Init = {}): Promise<NextResp
   try {
     const res = await fetch(`${ingestUrl()}${path}`, {
       method: init.method ?? "GET",
-      headers: { ...adminHeaders(), ...(init.contentType ? { "content-type": init.contentType } : {}) },
+      headers: { ...(await adminHeaders()), ...(init.contentType ? { "content-type": init.contentType } : {}) },
       body: init.body ?? null,
       cache: "no-store",
     });
@@ -48,9 +48,10 @@ export async function proxyJson(path: string, init: Init = {}): Promise<NextResp
  * discipline). Defined now so the foundation is complete in one place.
  */
 export async function proxyStream(path: string, signal: AbortSignal): Promise<Response> {
+  const reqHeaders = await adminHeaders();
   let upstream: Response;
   try {
-    upstream = await fetch(`${ingestUrl()}${path}`, { headers: adminHeaders(), cache: "no-store", signal });
+    upstream = await fetch(`${ingestUrl()}${path}`, { headers: reqHeaders, cache: "no-store", signal });
   } catch {
     return new Response("ingest unreachable", { status: 502 });
   }

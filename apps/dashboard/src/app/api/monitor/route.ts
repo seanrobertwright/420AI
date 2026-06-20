@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   try {
     const res = await fetch(`${ingestUrl()}/v1/monitor`, {
-      headers: adminHeaders(),
+      headers: await adminHeaders(),
       cache: "no-store",
     });
     if (!res.ok) {

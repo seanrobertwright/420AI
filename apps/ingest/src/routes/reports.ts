@@ -17,8 +17,6 @@ import {
 } from "../schemas.js";
 import { adminAuthorized, isUuid } from "../auth.js";
 
-const DEFAULT_EMAIL = "seanrobertwright@gmail.com";
-
 interface GenerateProjectReportBody {
   type?: "project.cost_over_time";
   bucket?: "day" | "week";
@@ -55,7 +53,7 @@ export default async function reportRoutes(app: FastifyInstance): Promise<void> 
       if (!(await getProjectName(app.db, request.params.id))) {
         return reply.code(404).send({ error: "project not found" });
       }
-      const userId = await ensureUserByEmail(app.db, DEFAULT_EMAIL);
+      const userId = await ensureUserByEmail(app.db, app.adminEmail);
       const bucket = request.body.bucket ?? "day";
       const generatedAt = new Date().toISOString();
       const row = await generateProjectCostReport(
@@ -77,7 +75,7 @@ export default async function reportRoutes(app: FastifyInstance): Promise<void> 
         return reply.code(401).send({ error: "admin authorization required" });
       }
       // sessionId is a connector text id (NOT a uuid) — ungated; unknown → zeroed autopsy.
-      const userId = await ensureUserByEmail(app.db, DEFAULT_EMAIL);
+      const userId = await ensureUserByEmail(app.db, app.adminEmail);
       const generatedAt = new Date().toISOString();
       const row = await generateSessionAutopsyReport(
         app.db,
@@ -108,7 +106,7 @@ export default async function reportRoutes(app: FastifyInstance): Promise<void> 
       if (!adminAuthorized(app, request)) {
         return reply.code(401).send({ error: "admin authorization required" });
       }
-      const userId = await findUserIdByEmail(app.db, DEFAULT_EMAIL);
+      const userId = await findUserIdByEmail(app.db, app.adminEmail);
       if (!userId) return reply.code(200).send([]);
       const rows = await listReportArtifacts(app.db, userId, {
         reportType: request.query.type,

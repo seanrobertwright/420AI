@@ -14,7 +14,7 @@ export const dynamic = "force-dynamic";
 /** GET ingest JSON on the server→ingest hop (D8), returning a fallback on any non-200/throw. */
 async function getJson<T>(path: string, fallback: T): Promise<T> {
   try {
-    const res = await fetch(`${ingestUrl()}${path}`, { headers: adminHeaders(), cache: "no-store" });
+    const res = await fetch(`${ingestUrl()}${path}`, { headers: await adminHeaders(), cache: "no-store" });
     return res.ok ? ((await res.json()) as T) : fallback;
   } catch {
     return fallback;
