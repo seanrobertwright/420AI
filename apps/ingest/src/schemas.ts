@@ -361,3 +361,20 @@ export const catalogUploadBodySchema = {
     signature: { type: "string", minLength: 1 },
   },
 } as const;
+
+// --- M12 §21 search querystring. `q` is REQUIRED + `minLength:1` so an empty
+// query is a 400 (via the err.validation branch) before the handler runs;
+// `type`/`projectId`/`limit` are optional filters. ---
+
+/** ?q=…[&type=session|report|project][&projectId=…][&limit=1..100] for GET /v1/search. */
+export const searchQuerySchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["q"],
+  properties: {
+    q: { type: "string", minLength: 1, maxLength: 256 },
+    type: { type: "string", enum: ["session", "report", "project"] },
+    projectId: { type: "string" },
+    limit: { type: "integer", minimum: 1, maximum: 100 },
+  },
+} as const;

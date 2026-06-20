@@ -57,6 +57,13 @@
       "when": 1781928705613,
       "tag": "0007_skinny_paper_doll",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1781960291732,
+      "tag": "0008_violet_wraith",
+      "breakpoints": true
     }
   ]
 }

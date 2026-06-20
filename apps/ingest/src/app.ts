@@ -17,6 +17,7 @@ import heartbeatRoutes from "./routes/heartbeat.js";
 import monitorRoutes from "./routes/monitor.js";
 import alertRoutes from "./routes/alerts.js";
 import catalogRoutes from "./routes/catalog.js";
+import searchRoutes from "./routes/search.js";
 import { CATALOG_PUBLIC_KEY } from "@420ai/shared";
 import { AnalysisProviderError, type AnalysisProvider } from "./analysis/provider.js";
 
@@ -77,6 +78,7 @@ export function buildApp(opts: BuildAppOptions): FastifyInstance {
   app.register(monitorRoutes);
   app.register(alertRoutes);
   app.register(catalogRoutes);
+  app.register(searchRoutes);
 
   // Map known failures to clean status codes; never leak internals on a 500.
   app.setErrorHandler((err: FastifyError, request, reply) => {

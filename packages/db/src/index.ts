@@ -104,3 +104,7 @@ export {
   countPendingCatalogs,
 } from "./repositories/pricing-catalogs.js";
 export type { PricingCatalogRow } from "./repositories/pricing-catalogs.js";
+// M12 search: only the repo functions are surfaced — the `searchDocuments` TABLE
+// shares its name with the query fn, so the table stays internal (repo + migration
+// reference it via `./schema.js`); the barrel exports the FUNCTION `searchDocuments`.
+export { rebuildSearchIndex, searchDocuments } from "./repositories/search.js";
