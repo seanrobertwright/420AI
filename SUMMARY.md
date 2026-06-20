@@ -194,6 +194,33 @@ bullet listed for planning:
   the gitignored OneDrive `target-dir` redirect + `cargo tauri icon` regeneration) lives in
   [`apps/desktop/README.md`](./apps/desktop/README.md).
 
+### V1 close-out — scope reconciliation & decisions (2026-06-19)
+A **code-vs-PRD reconciliation** (not a plan re-read) surfaced four V1-scope items the milestone
+plans had quietly stopped carrying forward. The plans had become the de-facto source of truth, so
+anything not re-listed in them dropped from view even while the PRD still required it. Findings +
+decisions:
+- **Custom file/log watcher connector (§10.1, MVP Success Criteria)** — *silently dropped*: **zero**
+  mention anywhere in `.agents/`, yet named twice in the PRD/README as MVP-required.
+  ✅ **KEEP in V1 — thin slice.** A minimal config-driven file/log connector on the existing framework
+  (`parse` + `watchGlobs`); no schema change. The MVP success criteria stands as written — V1 is **not**
+  narrowed to the three first-party connectors.
+- **Git Outcome Tracking + Outcome Attribution (§11.3/§11.4)** — *deferred-by-drift*: punted M4 → M6 →
+  "its own later slice" and never landed; M6 ships **empty git-field projection plumbing** waiting for
+  `git.commit.detected`/`git.diff.detected` events that no connector emits.
+  ✅ **KEEP in V1 — FULL (§11.3/§11.4).** Commit + diff capture, changed-file/line stats, and the
+  attribution heuristic (manual link + one time-window+file-overlap suggestion, always carrying
+  **Attribution Confidence** — see Q4). Restores the README's headline "correlate AI activity with Git
+  outcomes" value prop to V1.
+- **Basic search (§21)** — *tracked deferral*: M8 deliberately built the redaction engine as its
+  substrate. Stays in V1 close-out scope (redacted plaintext projection + Postgres FTS).
+- **Dashboard surfaces beyond Live Monitor (§8.4)** — *tracked deferral* (M9 plan + exec report):
+  reports/projects/search/catalog/settings UIs. Stay in V1 close-out scope.
+
+**Consequence:** "V1 ~90% built" held only under that silent narrowing. With both features kept,
+**V1 close-out completes to full written scope** — a multi-slice effort (sequenced in §6) of which the
+original M10 "hardening bundle" (exports, catalog signing, replay metadata, persisted alert engine) is
+**one part**, not the whole.
+
 ---
 
 ## 5. Key principles to keep in your head
@@ -209,10 +236,37 @@ bullet listed for planning:
 
 ## 6. Immediate next steps
 
-- [ ] **M10 (hardening)** — exports, catalog signing, operational alerts, replay metadata → completes V1.
-      It's a *bundle*, not one feature; scope the slice up front (operational alerts is the natural first
-      cut — M9 ships the `online`/`stale`/`offline` + `backlogHigh` states as its inputs). See the M10
-      forward-guidance in [`.agents/system-reviews/m7-m9-review.md`](./.agents/system-reviews/m7-m9-review.md).
+- [ ] **V1 close-out** (scope confirmed 2026-06-19 — see §4) — completed to **full written scope**.
+      Sequenced slices, each run through the build loop (§2). Recommended order is value/dependency-first:
+      1. **Git Outcomes & Attribution** (§11.3/§11.4, full) — capture commits (hash/author/time/branch +
+         changed-file/line stats, reverts) per repo into **dedicated `git_commits`/`git_commit_files`
+         tables** via a new machine-authed `POST /v1/git` (M7-style: dedicated tables, NOT `events`-table
+         rows — `/v1/ingest` + the fingerprint stay untouched; the commit SHA is the idempotency key).
+         Plus a `session_git_links` side-table + the attribution heuristic (manual link + one suggestion,
+         Q4) carrying **Attribution Confidence**, reusing M8 decrypt-for-render for file-overlap. (M6's
+         git-*branch* projection already works off tool events — commits are genuinely NEW data, not
+         "empty plumbing.") Plan + Phase-0 spike done →
+         [`.agents/plans/m10-slice1-git-outcomes-attribution.md`](./.agents/plans/m10-slice1-git-outcomes-attribution.md).
+         *Headline value + unblocks richer reports/search/dashboard — do first.*
+      2. **Custom file/log connector** (thin) — config-driven connector on the existing framework; no
+         schema change. Restores the MVP-criteria connector. *Small, independent — quick win.*
+      3. **M10 hardening bundle** — itself four sub-slices (recommended internal order **3b → 3a → 3c → 3d**):
+         - **3a — Exports** (§22) — MD/JSON/JSONL/CSV, scoped by project/time/session/report/connector;
+           **redact before anything leaves the archive**; decrypt-for-render only when the scope includes
+           raw content. *No schema change. Parquet + full restore-UI deferred. Size: M.*
+         - **3b — Replay metadata** (§23) — stamp catalog/report/analysis versions alongside the stored
+           `parser_version` + a re-derive path; **fingerprint unchanged, raw sacred**. *Small additive
+           column. Do first — de-risks every later re-parse. Size: S–M.*
+         - **3c — Persisted alert engine** — firing history/ack + heartbeat **time-series** so "backlog
+           growing" is a real trend, not a point read; layers around the M10 `deriveAlerts` contract
+           (does NOT change it). *New tables + migration. Size: M–L.*
+         - **3d — Catalog signing** (§10.4) — signed catalog updates + signature verify before apply +
+           a capture-surface **approval gate**. *Needs a key-management decision (ed25519: bundled public
+           key, offline private). Lowest cross-dependency — last or in parallel. Size: M.*
+      4. **Basic search** (§21) — redacted plaintext projection (reuse M8 `redact()`) + Postgres FTS
+         over sessions/reports/events/tool-calls/projects.
+      5. **Dashboard surfaces** (§8.4) — reports/projects/search/catalog/settings UIs over the existing
+         ingest APIs (today Live-Monitor-only). Presentation layer — comes last.
 - [ ] **Resolve CI enforcement:** branch protection needs **GitHub Pro** (private repo). Until then, treat the
       `repo-health` check as advisory — **don't merge red**. (Alternative: make repo public, or gate the
       automated-merge step on the check.)
