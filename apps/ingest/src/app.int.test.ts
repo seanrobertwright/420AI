@@ -1020,7 +1020,7 @@ describe.skipIf(!TEST_URL)("ingest API (HTTP e2e via inject)", () => {
     });
     expect(snap.statusCode).toBe(200);
     const body = snap.json() as LiveMonitorSnapshot;
-    expect(body.monitorVersion).toBe("m10-monitor-v1");
+    expect(body.monitorVersion).toBe("m10-monitor-v2");
     expect(body.machines).toHaveLength(1);
     const m = body.machines[0]!;
     expect(m.id).toBe(machineId);
@@ -1035,6 +1035,13 @@ describe.skipIf(!TEST_URL)("ingest API (HTTP e2e via inject)", () => {
     // M10: alerts ride the snapshot — a fresh-heartbeat machine raises no liveness alert.
     expect(Array.isArray(body.alerts)).toBe(true);
     expect(body.alerts.some((a) => a.code === "collector.offline" && a.machineId === machineId)).toBe(false);
+    // M10 3c: the persisted firing list rides the snapshot too — no open offline firing for an online machine.
+    expect(Array.isArray(body.alertFirings)).toBe(true);
+    expect(
+      body.alertFirings.some(
+        (f) => f.code === "collector.offline" && f.machineId === machineId && f.status === "open",
+      ),
+    ).toBe(false);
   });
 
   it("GET /v1/monitor: a machine with an old heartbeat raises a critical collector.offline alert (M10)", async () => {
@@ -1060,6 +1067,72 @@ describe.skipIf(!TEST_URL)("ingest API (HTTP e2e via inject)", () => {
     const offline = body.alerts.find((a) => a.code === "collector.offline" && a.machineId === machineId);
     expect(offline).toBeDefined();
     expect(offline!.severity).toBe("critical");
+  });
+
+  it("M10 3c: an offline machine yields a persisted OPEN firing; POST ack sets acked_at; a random uuid → 404", async () => {
+    const { machineId } = await pair(await createCode());
+    // Seed a heartbeat older than offlineMs (5 min) via the injectable clock → deterministic offline.
+    const old = new Date(Date.now() - 10 * 60 * 1000);
+    await recordHeartbeat(dbh.db, machineId, {
+      queuePending: 0,
+      queueInflight: 0,
+      collectorVersion: "0.9.1",
+      now: old,
+    });
+
+    // GET /v1/monitor triggers the evaluate-on-read reconcile → an OPEN collector.offline firing.
+    const snap = await app.inject({
+      method: "GET",
+      url: "/v1/monitor",
+      headers: { authorization: `Bearer ${ADMIN}` },
+    });
+    expect(snap.statusCode).toBe(200);
+    const body = snap.json() as LiveMonitorSnapshot;
+    const firing = body.alertFirings.find(
+      (f) => f.code === "collector.offline" && f.machineId === machineId && f.status === "open",
+    );
+    expect(firing).toBeDefined();
+    expect(firing!.firstFiredAt).toBeTruthy();
+    expect(firing!.ackedAt).toBeNull();
+
+    // A random (well-formed) uuid that is not a firing → 404 (existence-checked, never a 500).
+    const missing = await app.inject({
+      method: "POST",
+      url: "/v1/alerts/firings/00000000-0000-0000-0000-000000000000/ack",
+      headers: { authorization: `Bearer ${ADMIN}` },
+    });
+    expect(missing.statusCode).toBe(404);
+
+    // Ack the real firing → 200, returned firing carries acked_at.
+    const ack = await app.inject({
+      method: "POST",
+      url: `/v1/alerts/firings/${firing!.id}/ack`,
+      headers: { authorization: `Bearer ${ADMIN}` },
+    });
+    expect(ack.statusCode).toBe(200);
+    const acked = ack.json() as LiveMonitorSnapshot["alertFirings"][number];
+    expect(acked.id).toBe(firing!.id);
+    expect(acked.ackedAt).toBeTruthy();
+    expect(acked.status).toBe("open"); // ack does not resolve
+
+    // A follow-up GET shows that firing with acked_at non-null (reconcile preserves it).
+    const after = await app.inject({
+      method: "GET",
+      url: "/v1/monitor",
+      headers: { authorization: `Bearer ${ADMIN}` },
+    });
+    const afterBody = after.json() as LiveMonitorSnapshot;
+    const stillAcked = afterBody.alertFirings.find((f) => f.id === firing!.id);
+    expect(stillAcked).toBeDefined();
+    expect(stillAcked!.ackedAt).toBeTruthy();
+  });
+
+  it("POST /v1/alerts/firings/:id/ack enforces admin auth (401)", async () => {
+    const noAdmin = await app.inject({
+      method: "POST",
+      url: "/v1/alerts/firings/00000000-0000-0000-0000-000000000000/ack",
+    });
+    expect(noAdmin.statusCode).toBe(401);
   });
 
   it("GET /v1/monitor and POST /v1/heartbeat enforce their auth (401)", async () => {
@@ -1111,7 +1184,7 @@ describe.skipIf(!TEST_URL)("ingest API (HTTP e2e via inject)", () => {
     // each frame is a real LiveMonitorSnapshot
     const firstFrame = buf.split("\n\n").find((b) => b.startsWith("data: "))!;
     const parsed = JSON.parse(firstFrame.slice("data: ".length)) as LiveMonitorSnapshot;
-    expect(parsed.monitorVersion).toBe("m10-monitor-v1");
+    expect(parsed.monitorVersion).toBe("m10-monitor-v2");
 
     // disconnect → the server's `request.raw.on("close")` clears the interval (no leak).
     await reader.cancel();

@@ -15,6 +15,7 @@ import exportRoutes from "./routes/exports.js";
 import interpretationRoutes from "./routes/interpretations.js";
 import heartbeatRoutes from "./routes/heartbeat.js";
 import monitorRoutes from "./routes/monitor.js";
+import alertRoutes from "./routes/alerts.js";
 import { AnalysisProviderError, type AnalysisProvider } from "./analysis/provider.js";
 
 const DEFAULT_ANALYSIS_MAX_OUTPUT_TOKENS = 4096;
@@ -69,6 +70,7 @@ export function buildApp(opts: BuildAppOptions): FastifyInstance {
   app.register(interpretationRoutes);
   app.register(heartbeatRoutes);
   app.register(monitorRoutes);
+  app.register(alertRoutes);
 
   // Map known failures to clean status codes; never leak internals on a 500.
   app.setErrorHandler((err: FastifyError, request, reply) => {

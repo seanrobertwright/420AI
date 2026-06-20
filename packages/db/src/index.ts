@@ -14,6 +14,8 @@ export {
   gitCommits,
   gitCommitFiles,
   sessionGitLinks,
+  machineHeartbeats,
+  alertFirings,
 } from "./schema.js";
 export { createDb } from "./client.js";
 export type { Db, Tx, DbClient } from "./client.js";
@@ -28,7 +30,12 @@ export {
   getMachineUserId,
   recordHeartbeat,
 } from "./repositories/machines.js";
-export { machineStatuses, activeSessions } from "./repositories/monitor.js";
+export { machineStatuses, activeSessions, recentBacklogSamples } from "./repositories/monitor.js";
+export {
+  reconcileAlertFirings,
+  listAlertFirings,
+  ackAlertFiring,
+} from "./repositories/alert-firings.js";
 export { findUserIdByEmail, ensureUserByEmail } from "./repositories/users.js";
 export { issueIngestToken, findMachineIdByToken } from "./repositories/tokens.js";
 export { ingestBatch } from "./repositories/ingest.js";

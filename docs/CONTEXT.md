@@ -140,6 +140,18 @@ The confidence level attached to Outcome Attribution, such as high, medium, low,
 
 A notification about system health or data integrity, such as Collector offline, Central Archive unreachable, Connector failing, sync backlog growing, or Catalog Update requiring approval.
 
+## Alert Firing
+
+A persisted record that an Operational Alert is (or was) active: it carries when it first fired, when it was last seen, whether it resolved, and whether it was acknowledged. Reconciled on read against the live-derived alerts (PRD §20).
+
+## Heartbeat Sample
+
+One time-stamped collector sync-backlog reading appended to the heartbeat time-series, the source for the "backlog growing" trend (distinct from the single latest sample on the machine row).
+
+## Backlog Growing
+
+An Operational-Alert condition that fires when a collector's pending sync backlog rises across the recent window — a derivative, vs. "backlog high" which is a point-in-time depth.
+
 ## Efficiency Alert
 
 A notification about cost, token usage, context waste, failed tool call spikes, or other optimization opportunities. Efficiency Alerts are deferred until after the core capture and reporting loop is working.

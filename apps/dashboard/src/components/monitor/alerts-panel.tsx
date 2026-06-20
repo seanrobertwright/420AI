@@ -1,4 +1,7 @@
-import type { OperationalAlert, AlertSeverity } from "@420ai/shared";
+"use client";
+
+import { useState } from "react";
+import type { AlertFiring, AlertSeverity } from "@420ai/shared";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -33,18 +36,45 @@ const SEVERITY_BADGE: Record<AlertSeverity, string> = {
 };
 
 /**
- * The M10 Operational Alerts panel (PRD §20). Presentational — renders the alerts the
- * server already derived (deriveAlerts) and carried on the snapshot. Critical-first
- * ordering is the server's responsibility; this just renders top-down.
+ * The M10 3c persisted Alert Firings panel (PRD §20). Renders the firing history the
+ * server reconciled on read — each row carries when it first fired and when it was last
+ * seen. An OPEN, unacked firing gets an Ack button that POSTs the same-origin proxy
+ * (the admin token stays server-side, D8); the next SSE snapshot (≤3 s) carries
+ * `ackedAt`. Critical-first ordering + the open→acked→resolved precedence are the
+ * server's responsibility; this just renders top-down.
  */
-export function AlertsPanel({ alerts, nowMs }: { alerts: OperationalAlert[]; nowMs: number }) {
+export function AlertsPanel({ firings, nowMs }: { firings: AlertFiring[]; nowMs: number }) {
+  // Optimistic local set of acking ids so the button greys immediately (the reconciled
+  // snapshot then carries the real ackedAt and this can be ignored).
+  const [acking, setAcking] = useState<Set<string>>(new Set());
+
+  const dropOptimistic = (id: string): void =>
+    setAcking((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+
+  async function ack(id: string): Promise<void> {
+    setAcking((prev) => new Set(prev).add(id));
+    try {
+      // fetch resolves (does NOT reject) on a 4xx/5xx — check res.ok so a failed ack
+      // (proxy 502 / ingest 404) reverts the optimistic flag instead of lying "acked".
+      const res = await fetch(`/api/alerts/firings/${id}/ack`, { method: "POST" });
+      if (!res.ok) dropOptimistic(id);
+      // On success the next SSE snapshot (≤3 s) carries ackedAt — the source of truth.
+    } catch {
+      dropOptimistic(id);
+    }
+  }
+
   return (
     <Card>
       <CardHeader>
         <CardTitle>Alerts</CardTitle>
       </CardHeader>
       <CardContent>
-        {alerts.length === 0 ? (
+        {firings.length === 0 ? (
           <p className="text-muted-foreground text-sm">No active alerts.</p>
         ) : (
           <Table>
@@ -53,22 +83,53 @@ export function AlertsPanel({ alerts, nowMs }: { alerts: OperationalAlert[]; now
                 <TableHead>Severity</TableHead>
                 <TableHead>Alert</TableHead>
                 <TableHead>Scope</TableHead>
-                <TableHead>Since</TableHead>
+                <TableHead>First fired</TableHead>
+                <TableHead>Last seen</TableHead>
+                <TableHead>Action</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {alerts.map((a, i) => (
-                <TableRow key={`${a.code}:${a.machineId ?? a.connector ?? i}`}>
-                  <TableCell>
-                    <Badge className={cn(SEVERITY_BADGE[a.severity])}>{a.severity}</Badge>
-                  </TableCell>
-                  <TableCell className="font-medium">{a.message}</TableCell>
-                  <TableCell className="text-muted-foreground text-xs">
-                    {a.machineName ?? a.connector ?? "—"}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">{formatAgo(a.since, nowMs)}</TableCell>
-                </TableRow>
-              ))}
+              {firings.map((f) => {
+                const resolved = f.status === "resolved";
+                const acked = f.ackedAt !== null || acking.has(f.id);
+                return (
+                  <TableRow key={f.id} className={cn(resolved && "opacity-50")}>
+                    <TableCell>
+                      <Badge className={cn(SEVERITY_BADGE[f.severity])}>{f.severity}</Badge>
+                    </TableCell>
+                    <TableCell className={cn("font-medium", resolved && "line-through")}>
+                      {f.message}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground text-xs">
+                      {f.machineName ?? f.connector ?? "—"}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {formatAgo(f.firstFiredAt, nowMs)}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {formatAgo(f.lastSeenAt, nowMs)}
+                    </TableCell>
+                    <TableCell>
+                      {resolved ? (
+                        <span className="text-muted-foreground text-xs">resolved</span>
+                      ) : acked ? (
+                        <span className="text-muted-foreground text-xs">acked</span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => void ack(f.id)}
+                          className={cn(
+                            "rounded-md border px-2.5 py-1 text-xs font-medium",
+                            "border-border hover:bg-muted transition-colors",
+                          )}
+                        >
+                          Ack
+                        </button>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
         )}

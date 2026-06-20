@@ -9,6 +9,7 @@ import {
   index,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import type { NormalizedTokens, CostResult } from "@420ai/shared";
 
 /**
@@ -367,5 +368,56 @@ export const sessionGitLinks = pgTable(
   (t) => [
     uniqueIndex("session_git_links_unique").on(t.userId, t.sessionId, t.commitId),
     index("session_git_links_by_commit").on(t.commitId),
+  ],
+);
+
+/**
+ * M10 3c heartbeat time-series (PRD §20). Append-only sync-backlog samples so
+ * "backlog GROWING" is a real trend (the machines row keeps only the LATEST
+ * sample — schema comment above). recordHeartbeat appends here + prunes beyond
+ * HEARTBEAT_RETENTION_MS. Plain timestamptz (Date) → normalize to ISO on read.
+ */
+export const machineHeartbeats = pgTable(
+  "machine_heartbeats",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    machineId: uuid("machine_id").notNull().references(() => machines.id),
+    ts: timestamp("ts", { withTimezone: true }).notNull().defaultNow(),
+    queuePending: integer("queue_pending").notNull(),
+    queueInflight: integer("queue_inflight").notNull(),
+  },
+  (t) => [index("machine_heartbeats_by_machine_ts").on(t.machineId, t.ts)],
+);
+
+/**
+ * M10 3c persisted Operational-Alert firings (PRD §20). Evaluate-on-read
+ * reconcile (D1) upserts ONE open firing per (user, alert_key) — the PARTIAL
+ * unique index below is the idempotency backbone (D3). first_fired_at records
+ * when the firing opened (the stateless deriveAlerts could not). `since` is an
+ * opaque ISO display label (text — never compared temporally).
+ */
+export const alertFirings = pgTable(
+  "alert_firings",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id").notNull().references(() => users.id),
+    alertKey: text("alert_key").notNull(),
+    code: text("code").notNull(),
+    severity: text("severity").notNull(),
+    message: text("message").notNull(),
+    machineId: uuid("machine_id").references(() => machines.id),
+    machineName: text("machine_name"),
+    connector: text("connector"),
+    since: text("since"),
+    status: text("status").notNull().default("open"),
+    firstFiredAt: timestamp("first_fired_at", { withTimezone: true }).notNull().defaultNow(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    ackedAt: timestamp("acked_at", { withTimezone: true }),
+  },
+  (t) => [
+    // At most ONE open firing per (user, alert_key) — the reconcile idempotency key (D3).
+    uniqueIndex("alert_firings_open_key").on(t.userId, t.alertKey).where(sql`${t.status} = 'open'`),
+    index("alert_firings_by_user_status").on(t.userId, t.status),
   ],
 );

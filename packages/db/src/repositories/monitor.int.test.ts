@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from "vitest";
-import { sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { deriveMachineStatus, isBacklogHigh } from "@420ai/shared";
 import { createDb } from "../index.js";
-import { users, machines, events } from "../schema.js";
+import { users, machines, events, machineHeartbeats } from "../schema.js";
 import { recordHeartbeat } from "./machines.js";
-import { machineStatuses, activeSessions } from "./monitor.js";
+import { machineStatuses, activeSessions, recentBacklogSamples } from "./monitor.js";
 
 const TEST_URL = process.env.DATABASE_URL_TEST;
 const SESSION = "sess-monitor-1";
@@ -27,7 +27,7 @@ describe.skipIf(!TEST_URL)("monitor repository (integration)", () => {
 
   beforeEach(async () => {
     await dbh.db.execute(
-      sql`TRUNCATE workspace_keys, workspaces, projects, raw_source_records, events, ingest_tokens, pairing_codes, machines, users RESTART IDENTITY CASCADE`,
+      sql`TRUNCATE machine_heartbeats, workspace_keys, workspaces, projects, raw_source_records, events, ingest_tokens, pairing_codes, machines, users RESTART IDENTITY CASCADE`,
     );
     const [u] = await dbh.db
       .insert(users)
@@ -142,5 +142,100 @@ describe.skipIf(!TEST_URL)("monitor repository (integration)", () => {
       .returning({ id: users.id });
     const other = await activeSessions(dbh.db, u2!.id, "2026-06-14T11:45:00.000Z");
     expect(other).toEqual([]);
+  });
+
+  it("recordHeartbeat appends a machine_heartbeats sample AND updates the machine latest columns", async () => {
+    await recordHeartbeat(dbh.db, machineId, {
+      queuePending: 42,
+      queueInflight: 1,
+      collectorVersion: "0.9.0",
+      now: NOW,
+    });
+    // The time-series sample was appended.
+    const samples = await dbh.db
+      .select({
+        machineId: machineHeartbeats.machineId,
+        ts: machineHeartbeats.ts,
+        queuePending: machineHeartbeats.queuePending,
+        queueInflight: machineHeartbeats.queueInflight,
+      })
+      .from(machineHeartbeats)
+      .where(eq(machineHeartbeats.machineId, machineId));
+    expect(samples).toHaveLength(1);
+    expect(samples[0]!.queuePending).toBe(42);
+    expect(samples[0]!.queueInflight).toBe(1);
+    expect(samples[0]!.ts.toISOString()).toBe(NOW.toISOString());
+    // The machine latest columns are still updated (M9 read path unchanged).
+    const rows = await machineStatuses(dbh.db, userId);
+    expect(rows[0]!.queuePending).toBe(42);
+    expect(rows[0]!.lastHeartbeatAt).toBe(NOW.toISOString());
+  });
+
+  it("recentBacklogSamples returns the machine's samples sorted asc, ISO ts, grouped, user-scoped, windowed", async () => {
+    // Three samples at NOW-2min / NOW-1min / NOW (rising backlog).
+    await recordHeartbeat(dbh.db, machineId, {
+      queuePending: 10,
+      queueInflight: 0,
+      collectorVersion: "0.9.0",
+      now: new Date(NOW.getTime() - 2 * 60_000),
+    });
+    await recordHeartbeat(dbh.db, machineId, {
+      queuePending: 60,
+      queueInflight: 0,
+      collectorVersion: "0.9.0",
+      now: new Date(NOW.getTime() - 60_000),
+    });
+    await recordHeartbeat(dbh.db, machineId, {
+      queuePending: 110,
+      queueInflight: 0,
+      collectorVersion: "0.9.0",
+      now: NOW,
+    });
+
+    const since = new Date(NOW.getTime() - 10 * 60_000);
+    const byMachine = await recentBacklogSamples(dbh.db, userId, since);
+    const list = byMachine.get(machineId)!;
+    expect(list).toHaveLength(3);
+    // Sorted ascending by ts; queuePending in insertion order.
+    expect(list.map((s) => s.queuePending)).toEqual([10, 60, 110]);
+    expect(typeof list[0]!.ts).toBe("string");
+    expect(list[2]!.ts).toBe(NOW.toISOString());
+
+    // A `since` after all samples excludes them.
+    const empty = await recentBacklogSamples(dbh.db, userId, new Date(NOW.getTime() + 60_000));
+    expect(empty.get(machineId)).toBeUndefined();
+
+    // Another user's view does not leak this machine's samples.
+    const [u2] = await dbh.db
+      .insert(users)
+      .values({ email: "other@example.com" })
+      .returning({ id: users.id });
+    const other = await recentBacklogSamples(dbh.db, u2!.id, since);
+    expect(other.get(machineId)).toBeUndefined();
+  });
+
+  it("recordHeartbeat prunes samples older than the retention window", async () => {
+    // Insert an OLD sample directly (well beyond the 24h retention window).
+    const old = new Date(NOW.getTime() - 48 * 60 * 60_000);
+    await dbh.db.insert(machineHeartbeats).values({
+      machineId,
+      ts: old,
+      queuePending: 1,
+      queueInflight: 0,
+    });
+    // A fresh heartbeat at NOW appends + prunes anything older than retention.
+    await recordHeartbeat(dbh.db, machineId, {
+      queuePending: 5,
+      queueInflight: 0,
+      collectorVersion: "0.9.0",
+      now: NOW,
+    });
+    const remaining = await dbh.db
+      .select({ ts: machineHeartbeats.ts })
+      .from(machineHeartbeats)
+      .where(and(eq(machineHeartbeats.machineId, machineId)));
+    // Only the fresh sample survives; the 48h-old one is pruned.
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0]!.ts.toISOString()).toBe(NOW.toISOString());
   });
 });
