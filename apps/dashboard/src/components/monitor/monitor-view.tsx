@@ -11,21 +11,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
+import { formatAgo } from "@/lib/format";
 import { AlertsPanel } from "@/components/monitor/alerts-panel";
-
-/** Honest relative time (PRD §10.1.1) — computed from an ISO ts + an injected now (ms). */
-function formatAgo(iso: string | null, nowMs: number): string {
-  if (!iso) return "—";
-  const deltaMs = nowMs - Date.parse(iso);
-  if (!Number.isFinite(deltaMs)) return "—";
-  const s = Math.max(0, Math.round(deltaMs / 1000));
-  if (s < 60) return `${s}s ago`;
-  const m = Math.round(s / 60);
-  if (m < 60) return `${m}m ago`;
-  const h = Math.round(m / 60);
-  if (h < 24) return `${h}h ago`;
-  return `${Math.round(h / 24)}d ago`;
-}
 
 const STATUS_BADGE: Record<MonitorStatus, string> = {
   online: "border-transparent bg-emerald-500/15 text-emerald-400",
