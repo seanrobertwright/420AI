@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { redact, REDACTION_VERSION, type RedactionFinding } from "./redaction.js";
+import { redact, redactJson, REDACTION_VERSION, type RedactionFinding } from "./redaction.js";
 
 /** Helper: the finding for a given kind, or undefined. */
 function find(findings: RedactionFinding[], kind: string): RedactionFinding | undefined {
@@ -165,5 +165,77 @@ describe("redact — invariants", () => {
 
   it("exports a stable REDACTION_VERSION", () => {
     expect(REDACTION_VERSION).toBe("m8-redact-v1");
+  });
+});
+
+describe("redactJson — the deep §18 export gate", () => {
+  const SECRET = "sk-ant-api03-DEEPNESTEDSECRETKEY0123456789";
+
+  it("masks secrets/paths/keys in nested strings while preserving structure and non-strings", () => {
+    const input = {
+      a: `use ${SECRET} please`,
+      b: { path: "C:\\Users\\alice\\x" },
+      n: 42,
+      flag: true,
+      nil: null,
+      list: ["plain", "AKIAIOSFODNN7EXAMPLE"],
+    };
+    const { value, findings } = redactJson(input);
+
+    // Structure + non-string values preserved.
+    expect(value.n).toBe(42);
+    expect(value.flag).toBe(true);
+    expect(value.nil).toBeNull();
+    expect(value.list[0]).toBe("plain");
+    expect(Object.keys(value)).toEqual(["a", "b", "n", "flag", "nil", "list"]);
+
+    // Strings masked.
+    expect(value.a).toContain("[REDACTED:anthropic_key]");
+    expect(value.a).not.toContain(SECRET);
+    expect(value.b.path).toBe("C:\\Users\\[REDACTED:home_user_path]\\x");
+    expect(value.list[1]).toBe("[REDACTED:aws_access_key]");
+
+    // Findings merged per kind; NO finding carries a raw secret.
+    const kinds = findings.map((f) => f.kind);
+    expect(kinds).toContain("anthropic_key");
+    expect(kinds).toContain("home_user_path");
+    expect(kinds).toContain("aws_access_key");
+    expect(JSON.stringify(findings)).not.toContain(SECRET);
+    expect(JSON.stringify(findings)).not.toContain("alice");
+  });
+
+  it("does NOT mutate the input and does NOT redact object keys", () => {
+    const input = { secret: `sk-ant-api03-KEEPKEYNAMEINTACT0123456789` };
+    const { value } = redactJson(input);
+    // The KEY "secret" is a field name, untouched.
+    expect(Object.keys(value)).toEqual(["secret"]);
+    // The original object is not mutated.
+    expect(input.secret).toContain("sk-ant-");
+  });
+
+  it("merges repeated findings across the tree with summed counts", () => {
+    const input = { x: "a@b.com", y: { z: "c@d.org" }, w: ["e@f.net"] };
+    const { findings } = redactJson(input);
+    const email = findings.find((f) => f.kind === "email");
+    expect(email?.count).toBe(3);
+  });
+
+  it("is idempotent: re-running adds no new findings and changes nothing", () => {
+    const input = {
+      a: `key ${SECRET} at /home/alice/x`,
+      b: ["mail a@b.com", { tok: "Z9x2Qw7Lp4Rt8Vn3Bm6Kc1Df5Gh0Js7" }],
+      n: 7,
+    };
+    const first = redactJson(input);
+    const second = redactJson(first.value);
+    expect(second.findings).toEqual([]);
+    expect(second.value).toEqual(first.value);
+  });
+
+  it("passes a bare primitive through redact unchanged when benign", () => {
+    expect(redactJson(42).value).toBe(42);
+    expect(redactJson(true).value).toBe(true);
+    expect(redactJson(null).value).toBeNull();
+    expect(redactJson("plain text").value).toBe("plain text");
   });
 });

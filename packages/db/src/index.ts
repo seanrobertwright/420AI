@@ -70,6 +70,8 @@ export {
   DEFAULT_TRANSCRIPT_CAPS,
 } from "./repositories/transcript.js";
 export type { TranscriptEntry, TranscriptCaps } from "./repositories/transcript.js";
+export { exportEvents, EXPORT_MAX_ROWS } from "./repositories/exports.js";
+export type { EventExportRow, EventExportFilters } from "./repositories/exports.js";
 export {
   recordGitCommits,
   gitCommitsByProject,

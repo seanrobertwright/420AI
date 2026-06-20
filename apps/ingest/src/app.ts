@@ -11,6 +11,7 @@ import workspaceRoutes from "./routes/workspaces.js";
 import gitRoutes from "./routes/git.js";
 import projectionRoutes from "./routes/projections.js";
 import reportRoutes from "./routes/reports.js";
+import exportRoutes from "./routes/exports.js";
 import interpretationRoutes from "./routes/interpretations.js";
 import heartbeatRoutes from "./routes/heartbeat.js";
 import monitorRoutes from "./routes/monitor.js";
@@ -64,6 +65,7 @@ export function buildApp(opts: BuildAppOptions): FastifyInstance {
   app.register(gitRoutes);
   app.register(projectionRoutes);
   app.register(reportRoutes);
+  app.register(exportRoutes);
   app.register(interpretationRoutes);
   app.register(heartbeatRoutes);
   app.register(monitorRoutes);

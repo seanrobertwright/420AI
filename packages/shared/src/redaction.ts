@@ -232,3 +232,55 @@ export function redact(text: string): RedactionResult {
 
   return { redacted: out, findings };
 }
+
+/** Combine findings into one entry per (kind, ruleId, placeholder), counts summed. */
+function mergeFindings(findings: RedactionFinding[]): RedactionFinding[] {
+  const byKey = new Map<string, RedactionFinding>();
+  for (const f of findings) {
+    const key = `${f.kind} ${f.ruleId} ${f.placeholder}`;
+    const existing = byKey.get(key);
+    if (existing) existing.count += f.count;
+    else byKey.set(key, { ...f });
+  }
+  return [...byKey.values()].sort((a, b) => a.kind.localeCompare(b.kind));
+}
+
+/**
+ * The §18 "redact before external export" gate generalized to ANY JSON value: deep
+ * copy `value`, run `redact()` over every string (anywhere in the tree), and return
+ * the redacted copy plus the merged per-kind findings. Numbers, booleans, and null
+ * pass through unchanged. Object KEYS are NOT redacted — they are schema field names,
+ * not data. The input is not mutated.
+ *
+ * Idempotent: `redactJson(redactJson(x).value)` adds no new findings, because
+ * `redact()`'s placeholders are digit-free and structure-preserving (they match no
+ * rule on a second pass). This is THE gate every export payload passes through; the
+ * transcript route additionally runs per-entry `redact()` exactly like the M8
+ * AI-interpretation path. Findings are METADATA ONLY — they never carry a raw value.
+ */
+export function redactJson<T>(value: T): { value: T; findings: RedactionFinding[] } {
+  const findings: RedactionFinding[] = [];
+
+  function walk(node: unknown): unknown {
+    if (typeof node === "string") {
+      const r = redact(node);
+      findings.push(...r.findings);
+      return r.redacted;
+    }
+    if (Array.isArray(node)) {
+      return node.map(walk);
+    }
+    if (node !== null && typeof node === "object") {
+      const out: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(node)) {
+        out[k] = walk(v); // redact VALUES only; keys are field names, left intact
+      }
+      return out;
+    }
+    // number | boolean | null | undefined | bigint | symbol | function → as-is
+    return node;
+  }
+
+  const redacted = walk(value) as T;
+  return { value: redacted, findings: mergeFindings(findings) };
+}
