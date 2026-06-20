@@ -15,6 +15,13 @@ import type { CostResult } from "./cost.js";
  *   "session.resumed", "message.system", "tool.result.received",
  *   "permission.requested", "permission.decided", "file.snapshot",
  *   "title.generated", "error.raised".
+ *
+ * The §12 git taxonomy ("git.commit.detected"/"git.diff.detected") is
+ * intentionally NOT in this union. M10 materializes git outcomes as a DEDICATED
+ * projection (the `git_commits`/`git_commit_files` tables + see `git.ts`), exactly
+ * as M7 stores reports in `report_artifacts` rather than as `report.generated`
+ * events (Scope Decision 2). No connector emits git outcomes as `NormalizedEvent`s,
+ * so `/v1/ingest`, the `events` table, and the fingerprint stay untouched (D2).
  */
 export type EventType =
   | "session.started"
