@@ -20,9 +20,14 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatDate, formatTokens, formatUsd } from "@/lib/format";
+import { ProjectReportActions } from "@/components/projects/project-report-actions";
+import { SessionReportActions } from "@/components/projects/session-report-actions";
+import { ProjectRename } from "@/components/projects/project-rename";
 
 /**
- * Per-project detail (M12 12.2a, read-only). Pure-render Server Component: usage tiles
+ * Per-project detail (M12; 12.2a read-only, 12.2b adds report generation + rename). The page
+ * stays a Server Component; mutations are small client islands (rename, generate report/AI per
+ * project and per session). Usage tiles
  * (cost/tokens/activity), a by-model table, an over-time list, a sessions table, and the git
  * block. All figures arrive pre-coerced from the M6 projections (numbers + ISO strings) — no
  * re-coercion here. `project === null` (unknown id) renders a friendly not-found state.
@@ -67,12 +72,18 @@ export function ProjectDetailView({
       title={project.name}
       subtitle={project.gitRemote ?? "no git remote"}
       actions={
-        <Link href="/projects" className="text-muted-foreground hover:text-foreground text-sm">
-          ← Projects
-        </Link>
+        <div className="flex flex-col items-end gap-2">
+          <Link href="/projects" className="text-muted-foreground hover:text-foreground text-sm">
+            ← Projects
+          </Link>
+          <ProjectReportActions projectId={project.id} />
+        </div>
       }
     >
       <div className="space-y-8">
+        {/* Rename */}
+        <ProjectRename projectId={project.id} currentName={project.name} />
+
         {/* Usage tiles */}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           <DataCard
@@ -184,6 +195,7 @@ export function ProjectDetailView({
                     <TableHead>Events</TableHead>
                     <TableHead>Cost</TableHead>
                     <TableHead>Started</TableHead>
+                    <TableHead>Generate</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -197,6 +209,9 @@ export function ProjectDetailView({
                       <TableCell>{s.eventCount}</TableCell>
                       <TableCell>{formatUsd(s.costUsd)}</TableCell>
                       <TableCell className="text-muted-foreground">{formatDate(s.startedAt)}</TableCell>
+                      <TableCell>
+                        <SessionReportActions sessionId={s.sessionId} />
+                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>

@@ -2,7 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 import Link from "next/link";
-import type { SearchEntityType, SearchHit, SearchResults } from "@420ai/shared";
+import type { ReindexCounts, SearchEntityType, SearchHit, SearchResults } from "@420ai/shared";
 import { PageShell } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -43,6 +43,28 @@ export function SearchView() {
   const [results, setResults] = useState<SearchResults | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [reindexing, setReindexing] = useState(false);
+  const [reindexMsg, setReindexMsg] = useState<string | null>(null);
+
+  // Full index rebuild (M12 12.2b). POST the same-origin proxy (token server-side, D8); CHECK
+  // res.ok; disable in-flight (a full rebuild can be slow on a big archive); show the counts.
+  async function reindex(): Promise<void> {
+    setReindexing(true);
+    setReindexMsg(null);
+    try {
+      const res = await fetch("/api/search/reindex", { method: "POST" });
+      if (!res.ok) {
+        setReindexMsg(`Reindex failed (${res.status}).`);
+        return;
+      }
+      const c = (await res.json()) as ReindexCounts;
+      setReindexMsg(`Reindexed ${c.total} (${c.projects} projects, ${c.sessions} sessions, ${c.reports} reports).`);
+    } catch {
+      setReindexMsg("Ingest unreachable.");
+    } finally {
+      setReindexing(false);
+    }
+  }
 
   async function runSearch(e: FormEvent): Promise<void> {
     e.preventDefault();
@@ -111,6 +133,19 @@ export function SearchView() {
           >
             {loading ? "Searching…" : "Search"}
           </button>
+          <button
+            type="button"
+            onClick={() => void reindex()}
+            disabled={reindexing}
+            title="Rebuild the full-text index from the archive"
+            className={cn(
+              "rounded-md border px-4 py-2 text-sm font-medium transition-colors",
+              "border-border hover:bg-muted disabled:opacity-50",
+            )}
+          >
+            {reindexing ? "Reindexing…" : "Reindex"}
+          </button>
+          {reindexMsg ? <span className="text-muted-foreground text-xs">{reindexMsg}</span> : null}
         </form>
 
         <Card>

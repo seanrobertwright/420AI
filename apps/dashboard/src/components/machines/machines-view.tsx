@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { formatAgo } from "@/lib/format";
+import { WorkspaceRemap, type ProjectOption } from "@/components/machines/workspace-remap";
 
 type MachineRow = LiveMonitorSnapshot["machines"][number];
 
@@ -24,17 +25,20 @@ const STATUS_BADGE: Record<MonitorStatus, string> = {
 };
 
 /**
- * Machines + workspaces (M12 12.2a, read-only). Pure-render Server Component over the live
- * monitor snapshot's `machines` and the workspace mapping. No mutations this slice — token
- * revoke has no endpoint (deferred) and workspace→project remap is 12.2b.
+ * Machines + workspaces (M12; 12.2a read-only, 12.2b adds workspace→project remap). Server
+ * Component over the live monitor snapshot's `machines` and the workspace mapping; each
+ * workspace row gets a small `WorkspaceRemap` client island. Token revoke has no endpoint
+ * (deferred).
  */
 export function MachinesView({
   machines,
   workspaces,
+  projects,
   nowMs,
 }: {
   machines: MachineRow[];
   workspaces: WorkspaceRow[];
+  projects: ProjectOption[];
   nowMs: number;
 }) {
   return (
@@ -107,6 +111,7 @@ export function MachinesView({
                     <TableHead>Branch</TableHead>
                     <TableHead>Project</TableHead>
                     <TableHead>Last seen</TableHead>
+                    <TableHead>Remap</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -121,6 +126,13 @@ export function MachinesView({
                       </TableCell>
                       <TableCell className="font-mono text-xs">{w.projectId ?? "—"}</TableCell>
                       <TableCell className="text-muted-foreground">{formatAgo(w.lastSeenAt, nowMs)}</TableCell>
+                      <TableCell>
+                        <WorkspaceRemap
+                          workspaceId={w.id}
+                          currentProjectId={w.projectId}
+                          projects={projects}
+                        />
+                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>

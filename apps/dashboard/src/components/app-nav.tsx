@@ -19,6 +19,10 @@ const LINKS: { href: string; label: string }[] = [
   { href: "/reports", label: "Reports" },
   { href: "/search", label: "Search" },
   { href: "/machines", label: "Machines" },
+  { href: "/catalog", label: "Catalog" },
+  { href: "/pairing", label: "Pairing" },
+  { href: "/export", label: "Export" },
+  { href: "/settings", label: "Settings" },
 ];
 
 export function AppNav() {

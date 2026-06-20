@@ -15,13 +15,14 @@ import {
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { formatDate } from "@/lib/format";
+import { ReportCompare } from "@/components/reports/report-compare";
 
 /**
- * Reports list + read (M12 12.2a, read-only). Client component only because selecting a row
- * is local state — no fetch on select: the list endpoint already returns each artifact's
- * `markdown` inline. Markdown is shown as PREFORMATTED text this slice (a rich Markdown/Mermaid
- * renderer is deferred to keep deps frozen). `metrics`/`params` are `unknown` → not rendered
- * structurally yet (the compare view is 12.2b). Generate/compare are 12.2b.
+ * Reports list + read + compare (M12; 12.2a list/read, 12.2b compare). Client component
+ * because selecting a row is local state — no fetch on select: the list endpoint already
+ * returns each artifact's `markdown` inline. Markdown is shown as PREFORMATTED text this slice
+ * (a rich Markdown/Mermaid renderer is deferred). Generation lives on the project/session
+ * surfaces (those carry the scope id); this view adds the two-version Compare (12.2b).
  */
 export function ReportsView({ reports }: { reports: ReportArtifactRow[] }) {
   const [selectedId, setSelectedId] = useState<string | null>(reports[0]?.id ?? null);
@@ -99,6 +100,8 @@ export function ReportsView({ reports }: { reports: ReportArtifactRow[] }) {
             </CardContent>
           </Card>
         ) : null}
+
+        <ReportCompare reports={reports} />
       </div>
     </PageShell>
   );
