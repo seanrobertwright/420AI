@@ -16,6 +16,8 @@ import interpretationRoutes from "./routes/interpretations.js";
 import heartbeatRoutes from "./routes/heartbeat.js";
 import monitorRoutes from "./routes/monitor.js";
 import alertRoutes from "./routes/alerts.js";
+import catalogRoutes from "./routes/catalog.js";
+import { CATALOG_PUBLIC_KEY } from "@420ai/shared";
 import { AnalysisProviderError, type AnalysisProvider } from "./analysis/provider.js";
 
 const DEFAULT_ANALYSIS_MAX_OUTPUT_TOKENS = 4096;
@@ -24,6 +26,8 @@ const DEFAULT_MONITOR_STREAM_INTERVAL_MS = 3000;
 export interface BuildAppOptions {
   db: Db;
   adminToken: string;
+  /** M10 3d ed25519 public key for catalog verify (defaults to the bundled CATALOG_PUBLIC_KEY; tests inject ephemeral). */
+  catalogPublicKey?: string;
   /** M8 injected analysis provider (real client in server.ts; deterministic stub in tests). */
   analysisProvider: AnalysisProvider;
   /** M8 resolved max output tokens for an interpretation call (default 4096). */
@@ -46,6 +50,7 @@ export function buildApp(opts: BuildAppOptions): FastifyInstance {
 
   app.decorate("db", opts.db);
   app.decorate("adminToken", opts.adminToken);
+  app.decorate("catalogPublicKey", opts.catalogPublicKey ?? CATALOG_PUBLIC_KEY);
   app.decorate("analysisProvider", opts.analysisProvider);
   app.decorate(
     "analysisMaxOutputTokens",
@@ -71,6 +76,7 @@ export function buildApp(opts: BuildAppOptions): FastifyInstance {
   app.register(heartbeatRoutes);
   app.register(monitorRoutes);
   app.register(alertRoutes);
+  app.register(catalogRoutes);
 
   // Map known failures to clean status codes; never leak internals on a 500.
   app.setErrorHandler((err: FastifyError, request, reply) => {

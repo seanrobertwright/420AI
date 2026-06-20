@@ -99,7 +99,15 @@ export const PRICING_CATALOG: Record<string, ModelPricing> = {
   },
 };
 
-/** Look up pricing by exact model id; undefined if the model is not catalogued. */
-export function getPricing(model: string): ModelPricing | undefined {
-  return PRICING_CATALOG[model];
+/**
+ * Look up pricing by exact model id; undefined if the model is not catalogued.
+ * `catalog` defaults to the bundled offline baseline `PRICING_CATALOG` (§10.4); the
+ * server passes an ACTIVE uploaded catalog to re-price under it (M10 3d, back-compat —
+ * every existing caller omits it).
+ */
+export function getPricing(
+  model: string,
+  catalog: Record<string, ModelPricing> = PRICING_CATALOG,
+): ModelPricing | undefined {
+  return catalog[model];
 }

@@ -1,5 +1,5 @@
 import type { NormalizedTokens } from "./tokens.js";
-import { getPricing } from "./pricing.js";
+import { getPricing, type ModelPricing } from "./pricing.js";
 
 /**
  * Cost confidence ladder (PRD §13.3), most → least trustworthy:
@@ -60,12 +60,13 @@ export function lowestConfidence(labels: CostConfidence[]): CostConfidence {
 export function computeCost(
   model: string | undefined,
   tokens: NormalizedTokens,
+  catalog?: Record<string, ModelPricing>,
 ): CostResult {
   if (!model) {
     return { usd: 0, confidence: "unknown" };
   }
 
-  const pricing = getPricing(model);
+  const pricing = getPricing(model, catalog);
   if (!pricing) {
     return { usd: 0, confidence: "estimated-model-unknown", model };
   }

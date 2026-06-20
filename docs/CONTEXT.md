@@ -108,6 +108,10 @@ An independently delivered update to Connector Catalog metadata, connector defin
 
 A Connector Catalog whose updates are cryptographically verified before the app applies them.
 
+## Signed Catalog Update
+
+A pricing-catalog update delivered as a detached ed25519-signed bundle (`{version, payload, signature}`). The server verifies the signature against a bundled public key, stores the update as `pending`, and applies it only after explicit admin approval (PRD §10.4/§18/§20). An active update re-prices subsequent ingests going forward (historical rows are re-priced only by the deferred replay engine).
+
 ## Capture Surface Change
 
 A catalog or connector change that expands or alters what local data may be captured, such as new watched paths, new file types, new logs, or changed redaction behavior.

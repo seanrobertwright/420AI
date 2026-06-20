@@ -5,6 +5,7 @@ import {
   deriveAlerts,
   deriveBacklogTrend,
   deriveBacklogTrendAlerts,
+  deriveCatalogAlerts,
   sortAlerts,
   ALERT_THRESHOLDS,
   ALERT_VERSION,
@@ -223,6 +224,31 @@ describe("deriveBacklogTrendAlerts", () => {
   it("a machine with no samples → no alert", () => {
     const m = machineRow({ id: "m1", name: "box", status: "online" });
     expect(deriveBacklogTrendAlerts([m], new Map())).toEqual([]);
+  });
+});
+
+describe("deriveCatalogAlerts", () => {
+  it("zero pending → no alert", () => {
+    expect(deriveCatalogAlerts(0)).toEqual([]);
+    expect(deriveCatalogAlerts(-1)).toEqual([]);
+  });
+
+  it("one pending → one catalog.update_requires_approval warning, since null, singular message", () => {
+    const alerts = deriveCatalogAlerts(1);
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]!.code).toBe("catalog.update_requires_approval");
+    expect(alerts[0]!.severity).toBe("warning");
+    expect(alerts[0]!.since).toBeNull();
+    expect(alerts[0]!.message).toContain("1 signed pricing-catalog update awaiting approval");
+  });
+
+  it("multiple pending → pluralized message", () => {
+    expect(deriveCatalogAlerts(3)[0]!.message).toContain("3 signed pricing-catalog updates awaiting approval");
+  });
+
+  it("keys on neither machine nor connector → alertKey catalog.update_requires_approval:*", () => {
+    const [a] = deriveCatalogAlerts(2);
+    expect(alertKey(a!)).toBe("catalog.update_requires_approval:*");
   });
 });
 

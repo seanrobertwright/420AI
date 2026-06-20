@@ -10,7 +10,7 @@ import {
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
-import type { NormalizedTokens, CostResult } from "@420ai/shared";
+import type { NormalizedTokens, CostResult, ModelPricing } from "@420ai/shared";
 
 /**
  * The Central Archive schema (PRD §8.2). This is the Postgres translation of the
@@ -419,5 +419,32 @@ export const alertFirings = pgTable(
     // At most ONE open firing per (user, alert_key) — the reconcile idempotency key (D3).
     uniqueIndex("alert_firings_open_key").on(t.userId, t.alertKey).where(sql`${t.status} = 'open'`),
     index("alert_firings_by_user_status").on(t.userId, t.status),
+  ],
+);
+
+/**
+ * M10 3d signed pricing-catalog updates (PRD §10.4/§18/§20/§23). A catalog uploaded
+ * via POST /v1/catalog after ed25519 signature verify, held `pending` until an admin
+ * approves it → `active` (the prior active is `superseded`). The PARTIAL unique index
+ * enforces ≤1 active (mirrors alert_firings_open_key). GLOBAL (no user_id) — pricing
+ * applies to everyone. `payload` is the model→ModelPricing map (the signed content);
+ * an active row re-prices ingests going forward (cost computed server-side at ingest).
+ * `version` is unique so a re-upload of the same version is an idempotent no-op (D6).
+ */
+export const pricingCatalogs = pgTable(
+  "pricing_catalogs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    version: text("version").notNull(), // self-declared catalog version (e.g. "m10-catalog-v2")
+    payload: jsonb("payload").$type<Record<string, ModelPricing>>().notNull(),
+    signature: text("signature").notNull(), // base64 ed25519 over canonicalizeCatalog({version,payload})
+    status: text("status").notNull().default("pending"), // "pending" | "active" | "superseded" | "rejected"
+    uploadedAt: timestamp("uploaded_at", { withTimezone: true }).notNull().defaultNow(),
+    approvedAt: timestamp("approved_at", { withTimezone: true }),
+    approvedBy: text("approved_by"),
+  },
+  (t) => [
+    uniqueIndex("pricing_catalogs_version").on(t.version), // idempotent upload (re-upload same version = no-op)
+    uniqueIndex("pricing_catalogs_one_active").on(t.status).where(sql`${t.status} = 'active'`),
   ],
 );

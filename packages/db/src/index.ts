@@ -16,6 +16,7 @@ export {
   sessionGitLinks,
   machineHeartbeats,
   alertFirings,
+  pricingCatalogs,
 } from "./schema.js";
 export { createDb } from "./client.js";
 export type { Db, Tx, DbClient } from "./client.js";
@@ -94,3 +95,12 @@ export {
   listProjectLinks,
   projectSessionIds,
 } from "./repositories/attribution.js";
+export {
+  insertPendingCatalog,
+  getActiveCatalog,
+  listCatalogs,
+  approveCatalog,
+  rejectCatalog,
+  countPendingCatalogs,
+} from "./repositories/pricing-catalogs.js";
+export type { PricingCatalogRow } from "./repositories/pricing-catalogs.js";
