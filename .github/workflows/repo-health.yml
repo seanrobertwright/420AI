@@ -17,6 +17,11 @@ concurrency:
   group: repo-health-${{ github.ref }}
   cancel-in-progress: true
 
+# Least privilege: this gate only checks out + runs tests — it never writes to the
+# repo, so drop the default write-scoped GITHUB_TOKEN to read-only (M12 12.4a).
+permissions:
+  contents: read
+
 jobs:
   repo-health:
     runs-on: ubuntu-latest

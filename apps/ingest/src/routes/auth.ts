@@ -22,7 +22,13 @@ interface LoginBody {
 export default async function authRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Body: LoginBody }>(
     "/v1/auth/login",
-    { schema: { body: loginBodySchema } },
+    {
+      schema: { body: loginBodySchema },
+      // M12 12.4c: brute-force guard (deferred here from 12.3). app.rateLimitLogin is decorated
+      // in buildApp BEFORE this route registers — {max,timeWindow} when opted in (server.ts /
+      // the int test), or false when off (→ no limit; the plugin isn't even registered then).
+      config: { rateLimit: app.rateLimitLogin },
+    },
     async (request, reply) => {
       const { email, password } = request.body;
       const cred = await findAdminCredential(app.db, email);

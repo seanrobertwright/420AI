@@ -57,6 +57,27 @@ const monitorStreamIntervalMs = parsePositiveInt(
   3000,
 );
 
+// M12 12.4b structured-logging level (pino: trace|debug|info|warn|error|fatal).
+const logLevel = process.env.LOG_LEVEL ?? "info";
+
+// M12 12.4c rate limiting. ON by default (RATE_LIMIT_ENABLED=false is the escape hatch).
+// The login limit is the brute-force guard 12.3 deferred; the global limit is generous so
+// the ingest hot path isn't throttled in normal single-user use.
+const rateLimitEnabled = process.env.RATE_LIMIT_ENABLED !== "false";
+const rateLimit = rateLimitEnabled
+  ? {
+      global: {
+        max: parsePositiveInt(process.env.RATE_LIMIT_GLOBAL_MAX, "RATE_LIMIT_GLOBAL_MAX", 1000),
+        // `||` (not `??`) so an empty-string env falls back to the default, like ANALYSIS_BASE_URL.
+        timeWindow: process.env.RATE_LIMIT_WINDOW || "1 minute",
+      },
+      login: {
+        max: parsePositiveInt(process.env.RATE_LIMIT_LOGIN_MAX, "RATE_LIMIT_LOGIN_MAX", 10),
+        timeWindow: process.env.RATE_LIMIT_LOGIN_WINDOW || "15 minutes",
+      },
+    }
+  : undefined;
+
 const { db } = createDb(databaseUrl);
 
 // Seed the single admin's password (scrypt) from env. Idempotent: re-running on every boot
@@ -76,6 +97,8 @@ const app = buildApp({
   analysisProvider: createAnalysisProvider(analysisConfig),
   analysisMaxOutputTokens,
   monitorStreamIntervalMs,
+  logLevel,
+  rateLimit,
 });
 
 await app.listen({ port: Number(process.env.INGEST_PORT ?? 8420), host: "0.0.0.0" });

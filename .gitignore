@@ -57,3 +57,6 @@ Thumbs.db
 exports/
 *.parquet
 .gstack/
+
+# M12 12.4d archive backups — dumps contain ciphertext + plaintext metadata; NEVER commit.
+backups/
