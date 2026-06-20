@@ -328,8 +328,8 @@ original M10 "hardening bundle" (exports, catalog signing, replay metadata, pers
          **Deferred (NOT covered):** incremental/at-ingest index maintenance (manual reindex only);
          per-event/per-tool-call result granularity (session-grained only); advanced semantic/vector
          search (**V2**); search UI (**12.2**).
-      2. **12.2 Dashboard surfaces** (§8.4) — UIs over the existing ingest APIs (was Live-Monitor-only);
-         keep the token-never-in-browser proxy discipline. Sub-sliced:
+      2. **12.2 Dashboard surfaces** (§8.4) — **DONE** (2026-06-20). UIs over the existing ingest APIs
+         (was Live-Monitor-only); keep the token-never-in-browser proxy discipline. Sub-sliced:
          - **12.2a Foundation + read surfaces** — **DONE** (2026-06-20). A generalized server-only proxy
            (`lib/proxy.ts`: `proxyJson`/`proxyStream`, forwards upstream status; 502 only on an unreachable
            hop), dashboard-local wire types (db `Date`→ISO `string`), shared formatters, a persistent nav +
@@ -339,7 +339,19 @@ original M10 "hardening bundle" (exports, catalog signing, replay metadata, pers
            served HTML (grep==0, verified). **Deferred → 12.2b:** all mutations (report generate/**compare**
            via the stored `metrics` seam, project create/rename, catalog approve/reject, workspace remap,
            reindex, pairing, export, settings); rich Markdown/Mermaid render; `ts_headline` bold-highlight.
-         - **12.2b Mutations/admin surfaces** — pending (depends on the 12.2a foundation).
+         - **12.2b Mutations/admin surfaces** — **DONE** (2026-06-20). Additive `apps/dashboard` only
+           (zero backend change). Report **generate** (project + session cost/AI, billable-call guarded with
+           confirm + distinct 503/502) and **compare** two versions via a pure unit-tested `diffMetrics`
+           over the stored `metrics` seam; project **create/rename**; workspace→project **remap** (picker of
+           real uuids); pricing-catalog **approve/reject** (upload stays offline-signed CLI); search
+           **reindex** (shows counts); **pairing**-code generate (expiry + copy); **export** redacted
+           events/report/transcript via `proxyStream` (download with no token client-side, redaction headers
+           forwarded); **read-only Settings** (health + monitor/catalog versions; env shown as "configured",
+           never the value). Every mutation checks `res.ok`, disables in-flight, refreshes. `ADMIN_TOKEN`
+           never in served HTML (grep==0 on every page, verified live) and 0 in `.next/static`.
+           **Deferred → later M12:** rich Markdown/Mermaid render; catalog **upload** UI + pricing diff;
+           machine/token **revoke**; **editable** settings (→ 12.3+); typed per-report-type metrics diff;
+           `ts_headline` bold-highlight; list/search pagination.
       3. **12.3 Auth hardening** — real single-user admin login; retire static `ADMIN_TOKEN` + hardcoded
          `DEFAULT_EMAIL`. No RBAC/multi-user (V2).
       4. **12.4 Ops baseline** — make `repo-health` a **blocking** required CI check (the old "Resolve CI

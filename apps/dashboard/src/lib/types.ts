@@ -58,3 +58,20 @@ export interface ProjectEventSummary {
   eventCount: number;
   lastActivity: string | null;
 }
+
+/**
+ * Mirror of `@420ai/db` PricingCatalogRow (pricing-catalogs.ts). Timestamps already arrive as
+ * ISO `string` on the wire (the repo normalizes the Date columns on read). `payload` is the
+ * signed pricing blob — typed `Record<string, unknown>` here because the dashboard never renders
+ * its internals (the catalog surface manages the approval gate only; upload is offline-signed).
+ */
+export interface PricingCatalogRow {
+  id: string;
+  version: string;
+  payload: Record<string, unknown>;
+  signature: string;
+  status: "pending" | "active" | "superseded" | "rejected";
+  uploadedAt: string;
+  approvedAt: string | null;
+  approvedBy: string | null;
+}

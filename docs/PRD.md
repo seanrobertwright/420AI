@@ -747,10 +747,16 @@ Requirements:
           projects (list + detail), reports (list + Markdown view), search (the 12.1 redacted index), and
           machines (status/backlog/heartbeat + workspaces). Zero backend change; `ADMIN_TOKEN` never reaches
           the browser (grep==0, verified).
-        - **12.2b Mutations/admin surfaces — pending:** report generate + the report-comparison view the
-          stored `metrics` snapshot was the seam for, project create/rename + workspace remap, catalog
-          approve/reject, search reindex, machine management + pairing, settings, and export; plus rich
-          Markdown/Mermaid rendering and `ts_headline` bold-highlight. Depends on the 12.2a foundation.
+        - **12.2b Mutations/admin surfaces — DONE (2026-06-20):** report generate (project + session,
+          cost + billable AI interpretation with confirm + distinct 503/502) and the report-comparison view
+          the stored `metrics` snapshot was the seam for (pure unit-tested `diffMetrics`), project
+          create/rename + workspace remap, catalog approve/reject (upload stays offline-signed CLI), search
+          reindex, pairing-code generate, read-only settings, and redacted export (events/report/transcript
+          via `proxyStream`, no token client-side). Additive `apps/dashboard` only (zero backend change);
+          `ADMIN_TOKEN` never in served HTML (grep==0 on every page, verified live) and 0 in `.next/static`.
+          **Deferred → later M12:** rich Markdown/Mermaid rendering, `ts_headline` bold-highlight, catalog
+          upload UI, machine/token revoke, editable settings (→ 12.3+), and a typed per-report-type diff.
+          With 12.2a + 12.2b landed, **Slice 12.2 is complete.**
     - **Slice 12.3 — Auth hardening.** Replace the static `ADMIN_TOKEN` + hardcoded `DEFAULT_EMAIL` with a
       real **single-user admin login** (sessions/credentials), so a self-hosted deployment is not gated by
       a shared bearer string. Touches every admin route. **No multi-user/RBAC** (that is V2) — this only

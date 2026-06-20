@@ -181,16 +181,43 @@ from the persistent top nav:
 - **Projects** (`/projects`) — every project, each linking to a detail page with usage tiles (cost,
   tokens, events), a by-model breakdown, usage over time, the session list, and git metadata.
 - **Reports** (`/reports`) — the versioned report artifacts; select one to read its Markdown (shown as
-  preformatted text in this slice).
+  preformatted text in this slice). The **Compare versions** panel diffs two versions of the same report.
 - **Search** (`/search`) — the redacted full-text index (12.1): query box plus entity-type and project
   filters; snippets are content-safe (masked before storage).
 - **Machines** (`/machines`) — collector health, sync backlog, heartbeat, and the workspace→project
   mapping.
 
 The browser never holds `ADMIN_TOKEN`: every page renders server-side and every browser→ingest call goes
-through a same-origin proxy Route Handler that adds the admin bearer on the server→ingest hop only. All
-**mutations** (generate/compare reports, create/rename projects, catalog approve/reject, workspace remap,
-reindex, pairing, export, settings) and **rich Markdown/Mermaid rendering** land in a later slice.
+through a same-origin proxy Route Handler that adds the admin bearer on the server→ingest hop only.
+
+### Dashboard mutating surfaces (12.2b)
+
+The same proxy discipline backs the admin **mutation** surfaces — each control POSTs/PATCHes a same-origin
+Route Handler, checks the result, disables in-flight to avoid duplicate writes, and refreshes the page:
+
+- **Reports** — on a project's detail page, **Generate cost report** / **Generate AI interpretation**; each
+  session row has **Autopsy** / **AI** generate buttons. AI interpretation calls a **billable** provider, so
+  it confirms first and surfaces "provider not configured" (503) vs "provider error" (502) distinctly.
+  **Compare versions** (on `/reports`) renders two versions of one report side-by-side plus a numeric delta
+  table over the `metrics` blob.
+- **Projects** — **New project** form on `/projects`; inline **Rename** on the detail page.
+- **Machines** — each workspace row has a **Remap** picker to move it to another project (chosen from the
+  project list, so the id is always valid).
+- **Catalog** (`/catalog`) — pricing-catalog versions with **Approve** / **Reject** on pending rows.
+  Approve atomically supersedes the current active version. **Upload is offline-signed (CLI) only** — there
+  is deliberately no upload form; the dashboard manages the approval gate.
+- **Search** (`/search`) — a **Reindex** button rebuilds the full-text index and reports the row counts.
+- **Pairing** (`/pairing`) — **Generate pairing code** mints a short-lived code (with expiry + copy) to
+  pair a new collector machine.
+- **Export** (`/export`) — download **redacted** events (JSON/JSONL/CSV), a report artifact (MD/JSON), or a
+  session transcript (MD/JSON/JSONL). Downloads stream through the proxy, so the file saves with no token in
+  the browser and the bytes are already redaction-versioned.
+- **Settings** (`/settings`) — **read-only** system status: ingest health, the monitor version, the active
+  pricing-catalog version, and whether the server env is configured (shown as "configured", never the
+  value). Editable settings arrive in a later M12 slice.
+
+Deferred to a later slice: rich Markdown/Mermaid report rendering, catalog **upload** UI, machine/token
+**revoke**, and a typed per-report-type metrics diff.
 
 ### Reports, projections & AI insight (ingest API)
 
