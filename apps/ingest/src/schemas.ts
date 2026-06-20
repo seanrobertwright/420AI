@@ -61,6 +61,7 @@ const eventSchema = {
     fingerprint: { type: "string" },
     sourceConnector: { type: "string" },
     parserVersion: { type: "string" },
+    catalogVersion: { type: "string" }, // optional; NOT in `required` (back-compat)
     rawRecordId: { type: "string" },
     eventIndex: { type: "integer" },
     eventType: { type: "string" },

@@ -55,6 +55,7 @@ export async function ingestBatch(
           fingerprint: e.fingerprint,
           sourceConnector: e.sourceConnector,
           parserVersion: e.parserVersion,
+          catalogVersion: e.catalogVersion,
           rawRecordId: e.rawRecordId,
           eventIndex: e.eventIndex,
           eventType: e.eventType,
@@ -74,6 +75,9 @@ export async function ingestBatch(
           target: events.fingerprint,
           set: {
             parserVersion: e.parserVersion,
+            // §23 replay re-stamp: a re-ingest updates catalog_version alongside
+            // parser_version (omit this and a replay silently leaves it stale).
+            catalogVersion: e.catalogVersion ?? null,
             machineId,
             tokens: e.tokens ?? null,
             cost: e.cost ?? null,

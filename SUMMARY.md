@@ -254,9 +254,15 @@ original M10 "hardening bundle" (exports, catalog signing, replay metadata, pers
          - **3a — Exports** (§22) — MD/JSON/JSONL/CSV, scoped by project/time/session/report/connector;
            **redact before anything leaves the archive**; decrypt-for-render only when the scope includes
            raw content. *No schema change. Parquet + full restore-UI deferred. Size: M.*
-         - **3b — Replay metadata** (§23) — stamp catalog/report/analysis versions alongside the stored
-           `parser_version` + a re-derive path; **fingerprint unchanged, raw sacred**. *Small additive
-           column. Do first — de-risks every later re-parse. Size: S–M.*
+         - ✅ **3b — Replay metadata** (§23) — **DONE.** Shipped `PRICING_CATALOG_VERSION="m10-catalog-v1"`
+           + nullable `catalog_version` (events + report_artifacts) and `analysis_version` (report_artifacts)
+           columns (migration `0005`), stamped through the existing ingest path + the M7/M8 report
+           generators. The **fingerprint is unchanged** and replay **re-stamps in place** (proven by an int
+           test: re-ingesting the same fingerprints with bumped versions upserts with 0 duplicates). The
+           built-in connectors stamp the catalog version; the custom connector leaves it NULL (prices
+           nothing). The **archive-replay engine** (read-back/decrypt/re-parse stored raw records) remains
+           **deferred** to its own slice — the re-derive path here is the existing ingest upsert.
+           *Small additive column. Done first — de-risks every later re-parse. Size: S–M.*
          - **3c — Persisted alert engine** — firing history/ack + heartbeat **time-series** so "backlog
            growing" is a real trend, not a point read; layers around the M10 `deriveAlerts` contract
            (does NOT change it). *New tables + migration. Size: M–L.*

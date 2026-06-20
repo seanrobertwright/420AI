@@ -280,6 +280,8 @@ export function makeCustomConnector(def: CustomConnectorDef): Connector {
         fingerprint: eventFingerprint(def.id, rawId, 0, eventType),
         sourceConnector: def.id,
         parserVersion: CUSTOM_CONNECTOR_CONFIG_VERSION,
+        // catalogVersion intentionally UNSET — a custom connector prices nothing
+        // (cost: "none"), so its catalog_version is honestly NULL (D2).
         rawRecordId: rawId,
         eventIndex: 0,
         eventType,

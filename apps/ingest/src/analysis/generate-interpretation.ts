@@ -13,6 +13,7 @@ import {
   redact,
   buildAnalysisPrompt,
   AI_REPORT_VERSION,
+  PRICING_CATALOG_VERSION,
   REDACTION_VERSION,
   type RedactionFinding,
   type SessionBundle,
@@ -88,7 +89,9 @@ export async function generateSessionInterpretation(
     reportType: "session.ai_interpretation",
     scopeKind: "session",
     scopeId: sessionId,
-    reportVersion: AI_REPORT_VERSION,
+    reportVersion: AI_REPORT_VERSION, // unchanged (D3): overloaded renderer-id slot
+    catalogVersion: PRICING_CATALOG_VERSION,
+    analysisVersion: AI_REPORT_VERSION, // normalized §23 analysis-version field
     params: { model: result.model, maxOutputTokens },
     metrics: {
       kind: "session",
@@ -142,7 +145,9 @@ export async function generateProjectInterpretation(
     reportType: "project.ai_interpretation",
     scopeKind: "project",
     scopeId: projectId,
-    reportVersion: AI_REPORT_VERSION,
+    reportVersion: AI_REPORT_VERSION, // unchanged (D3): overloaded renderer-id slot
+    catalogVersion: PRICING_CATALOG_VERSION,
+    analysisVersion: AI_REPORT_VERSION, // normalized §23 analysis-version field
     params: { model: result.model, maxOutputTokens },
     metrics: {
       kind: "project",

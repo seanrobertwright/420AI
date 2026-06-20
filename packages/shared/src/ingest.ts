@@ -27,6 +27,7 @@ export interface EventPayload {
   fingerprint: string;
   sourceConnector: string;
   parserVersion: string;
+  catalogVersion?: string; // pricing-catalog version (PRD §23); NOT a fingerprint input
   rawRecordId: string;
   eventIndex: number;
   eventType: EventType;
@@ -103,6 +104,7 @@ export function toEventPayload(e: NormalizedEvent): EventPayload {
     fingerprint: e.fingerprint,
     sourceConnector: e.sourceConnector,
     parserVersion: e.parserVersion,
+    catalogVersion: e.catalogVersion,
     rawRecordId: e.rawRecordId,
     eventIndex: e.eventIndex,
     eventType: e.eventType,

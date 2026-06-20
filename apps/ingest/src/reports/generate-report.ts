@@ -12,6 +12,7 @@ import {
   renderCostOverTimeReport,
   renderSessionAutopsyReport,
   REPORT_VERSION,
+  PRICING_CATALOG_VERSION,
 } from "@420ai/shared";
 
 /**
@@ -55,6 +56,8 @@ export async function generateProjectCostReport(
     scopeKind: "project",
     scopeId: projectId,
     reportVersion: REPORT_VERSION,
+    catalogVersion: PRICING_CATALOG_VERSION,
+    analysisVersion: null, // deterministic report — no AI pipeline (D3)
     params: { bucket },
     metrics,
     markdown,
@@ -81,6 +84,8 @@ export async function generateSessionAutopsyReport(
     scopeKind: "session",
     scopeId: sessionId,
     reportVersion: REPORT_VERSION,
+    catalogVersion: PRICING_CATALOG_VERSION,
+    analysisVersion: null, // deterministic report — no AI pipeline (D3)
     params: null,
     metrics: session,
     markdown,

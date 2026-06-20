@@ -41,6 +41,8 @@ describe.skipIf(!TEST_URL)("report-artifacts repository (integration)", () => {
       scopeKind: "session" as const,
       scopeId,
       reportVersion: "m7-report-v1",
+      catalogVersion: "m10-catalog-v1", // deterministic report stamps the catalog version
+      analysisVersion: null, // no AI pipeline for a deterministic report (D3)
       params: { bucket: "day" },
       metrics: { eventCount: 1, costUsd: 0.5 },
       markdown,
@@ -79,6 +81,32 @@ describe.skipIf(!TEST_URL)("report-artifacts repository (integration)", () => {
   it("getReportArtifact returns undefined for an unknown id", async () => {
     const miss = await getReportArtifact(dbh.db, "00000000-0000-4000-8000-000000000000");
     expect(miss).toBeUndefined();
+  });
+
+  it("round-trips catalog_version + analysis_version per artifact kind (PRD §23)", async () => {
+    // A deterministic report: catalog stamped, analysis NULL.
+    const det = await insertReportArtifact(dbh.db, artifact("sess-det", "# deterministic"));
+    const detFetched = await getReportArtifact(dbh.db, det.id);
+    expect(detFetched!.catalogVersion).toBe("m10-catalog-v1");
+    expect(detFetched!.analysisVersion).toBeNull();
+
+    // An AI interpretation: BOTH catalog + analysis stamped (D3/D4).
+    const ai = await insertReportArtifact(dbh.db, {
+      userId,
+      projectId: null,
+      reportType: "session.ai_interpretation",
+      scopeKind: "session" as const,
+      scopeId: "sess-ai",
+      reportVersion: "m8-ai-v1",
+      catalogVersion: "m10-catalog-v1",
+      analysisVersion: "m8-ai-v1",
+      params: { model: "claude-opus-4-8" },
+      metrics: { kind: "session" },
+      markdown: "# ai",
+    });
+    const aiFetched = await getReportArtifact(dbh.db, ai.id);
+    expect(aiFetched!.catalogVersion).toBe("m10-catalog-v1");
+    expect(aiFetched!.analysisVersion).toBe("m8-ai-v1");
   });
 
   it("listReportArtifacts returns a scope's history newest-first and filters", async () => {

@@ -65,6 +65,12 @@ describe("parseClaudeCodeSession", () => {
     expect(tools).toHaveLength(1);
   });
 
+  it("stamps PRICING_CATALOG_VERSION on every emitted event (PRD §23)", () => {
+    const { events } = parseClaudeCodeSession(fixture, { ingestedAt: "2026-06-13T00:00:00Z" });
+    expect(events.length).toBeGreaterThan(0);
+    expect(events.every((e) => e.catalogVersion === "m10-catalog-v1")).toBe(true);
+  });
+
   it("produces identical fingerprints when parsing the same text twice", () => {
     const a = parseClaudeCodeSession(fixture, { ingestedAt: "2026-06-13T00:00:00Z" });
     const b = parseClaudeCodeSession(fixture, { ingestedAt: "2099-01-01T00:00:00Z" });
