@@ -30,6 +30,14 @@ const OPENAI_SOURCE = "https://openai.com/api/pricing/";
 const GEMINI_SOURCE = "https://ai.google.dev/gemini-api/docs/pricing";
 const AS_OF = "2026-06-13";
 
+/**
+ * Pricing-catalog identity stamped on events + report artifacts (PRD §23). Bump
+ * when `PRICING_CATALOG` rates change so a replay can distinguish records priced
+ * under an older catalog. Independent of `AS_OF` (the human date) and of the
+ * event fingerprint (PRD §12 — a metadata column, never a fingerprint input).
+ */
+export const PRICING_CATALOG_VERSION = "m10-catalog-v1" as const;
+
 export const PRICING_CATALOG: Record<string, ModelPricing> = {
   // Opus 4.8 — $5 / $25 per MTok; cache_read 0.1× input; cache_write 1.25× input.
   "claude-opus-4-8": {

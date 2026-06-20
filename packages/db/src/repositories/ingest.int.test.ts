@@ -85,6 +85,60 @@ describe.skipIf(!TEST_URL)("ingestBatch (integration)", () => {
     expect(n).toBe(2);
   });
 
+  it("re-stamps parser_version + catalog_version on replay, upserting in place (PRD §23)", async () => {
+    // (1) First ingest: stamp catalog v1 / parser X on both events.
+    const v1: IngestBatch = {
+      records: makeBatch().records,
+      events: makeBatch().events.map((e) => ({
+        ...e,
+        parserVersion: "X",
+        catalogVersion: "m10-catalog-v1",
+      })),
+    };
+    await ingestBatch(dbh.db, machineId, v1);
+    const after1 = (
+      await dbh.db.execute(
+        sql`SELECT fingerprint, parser_version, catalog_version FROM events ORDER BY fingerprint`,
+      )
+    ).rows as { fingerprint: string; parser_version: string; catalog_version: string }[];
+    expect(after1).toHaveLength(2);
+    expect(after1.every((r) => r.catalog_version === "m10-catalog-v1")).toBe(true);
+    expect(after1.every((r) => r.parser_version === "X")).toBe(true);
+    const fps1 = after1.map((r) => r.fingerprint);
+
+    // (2) Re-ingest the SAME fingerprints with bumped parser Y / catalog v2.
+    const v2: IngestBatch = {
+      records: makeBatch().records,
+      events: makeBatch().events.map((e) => ({
+        ...e,
+        parserVersion: "Y",
+        catalogVersion: "m10-catalog-v2",
+      })),
+    };
+    await ingestBatch(dbh.db, machineId, v2);
+    const after2 = (
+      await dbh.db.execute(
+        sql`SELECT fingerprint, parser_version, catalog_version FROM events ORDER BY fingerprint`,
+      )
+    ).rows as { fingerprint: string; parser_version: string; catalog_version: string }[];
+
+    // Row count UNCHANGED (upsert in place, no duplicates).
+    expect(after2).toHaveLength(2);
+    // Both version columns RE-STAMPED to the new values (the §23 re-stamp).
+    expect(after2.every((r) => r.catalog_version === "m10-catalog-v2")).toBe(true);
+    expect(after2.every((r) => r.parser_version === "Y")).toBe(true);
+    // The fingerprint PKs never moved (the dedup key is independent of both versions).
+    expect(after2.map((r) => r.fingerprint)).toEqual(fps1);
+  });
+
+  it("leaves catalog_version NULL when the event carries none (custom connector / back-compat)", async () => {
+    await ingestBatch(dbh.db, machineId, makeBatch()); // makeBatch() stamps no catalogVersion
+    const rows = (
+      await dbh.db.execute(sql`SELECT catalog_version FROM events`)
+    ).rows as { catalog_version: string | null }[];
+    expect(rows.every((r) => r.catalog_version === null)).toBe(true);
+  });
+
   it("encrypts raw payloads at rest and round-trips via decryptField (PRD §18.1)", async () => {
     await ingestBatch(dbh.db, machineId, makeBatch());
     const [row] = await dbh.db

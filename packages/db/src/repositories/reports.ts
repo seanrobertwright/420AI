@@ -20,6 +20,8 @@ export interface ReportArtifactRow {
   scopeId: string;
   version: number;
   reportVersion: string;
+  catalogVersion: string | null; // pricing catalog the cost metrics were rendered under (PRD §23)
+  analysisVersion: string | null; // AI Interpretation Pipeline identity (AI artifacts only; else NULL)
   params: unknown;
   metrics: unknown;
   markdown: string;

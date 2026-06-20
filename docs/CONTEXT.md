@@ -152,6 +152,10 @@ The original captured data from an AI Coding Tool, log, file, database, telemetr
 
 The version of the Connector parser that transformed a Raw Source Record into Normalized Events.
 
+## Catalog Version
+
+The identity of the pricing/connector-catalog snapshot used to compute an Event's or Report's cost metrics. Stamped on Normalized Events and Report Artifacts (PRD §23) so a replay can re-price records produced under an older catalog.
+
 ## Replay Support
 
 The ability to reprocess retained Raw Source Records with newer parsers, catalog metadata, pricing data, or analysis logic to improve historical metrics and reports.
@@ -299,6 +303,10 @@ An analysis step that computes factual metrics from the Event Log before any AI 
 ## AI Interpretation Pipeline
 
 An analysis step where a configurable AI provider reviews deterministic metrics and redacted supporting context to generate Markdown Reports, recommendations, and Mermaid Diagrams.
+
+## Analysis Version
+
+The identity of the AI Interpretation Pipeline that produced a Report Artifact, stamped alongside the deterministic renderer version (PRD §23). Deterministic-only artifacts leave it unset.
 
 ## Analysis Provider
 

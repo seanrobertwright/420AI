@@ -58,6 +58,9 @@ export interface NormalizedEvent {
   fingerprint: string;
   sourceConnector: string;
   parserVersion: string;
+  // Pricing-catalog version (PRD §23); NOT a fingerprint input. Optional —
+  // connectors that price nothing (e.g. custom) leave it unset (→ NULL).
+  catalogVersion?: string;
   rawRecordId: string;
   eventIndex: number;
   eventType: EventType;

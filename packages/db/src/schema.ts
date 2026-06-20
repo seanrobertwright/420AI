@@ -111,6 +111,9 @@ export const events = pgTable(
     fingerprint: text("fingerprint").primaryKey(),
     sourceConnector: text("source_connector").notNull(),
     parserVersion: text("parser_version").notNull(),
+    // Pricing-catalog version (PRD §23). NULLABLE — captured before replay-metadata
+    // existed → NULL (honest); custom connector prices nothing → NULL. NOT a fingerprint input.
+    catalogVersion: text("catalog_version"),
     rawRecordId: text("raw_record_id").notNull(),
     eventIndex: integer("event_index").notNull(),
     eventType: text("event_type").notNull(),
@@ -245,6 +248,11 @@ export const reportArtifacts = pgTable(
     scopeId: text("scope_id").notNull(), // project uuid (as text) OR connector session_id (text)
     version: integer("version").notNull(), // 1-based; bumps per (user, report_type, scope_id)
     reportVersion: text("report_version").notNull(), // REPORT_VERSION (renderer identity, PRD §23)
+    // §23 replay metadata (NULLABLE, additive). catalog_version: pricing catalog the
+    // cost metrics were rendered under; analysis_version: AI Interpretation Pipeline
+    // identity (AI artifacts only; deterministic reports leave it NULL).
+    catalogVersion: text("catalog_version"),
+    analysisVersion: text("analysis_version"),
     params: jsonb("params"), // generation params, e.g. {bucket:"day"} (reproducibility)
     metrics: jsonb("metrics").notNull(), // snapshot of the projection JSON rendered (replay/compare seam)
     markdown: text("markdown").notNull(), // the rendered report (plaintext — derived metrics only)

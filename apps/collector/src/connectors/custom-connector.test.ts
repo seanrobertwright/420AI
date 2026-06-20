@@ -69,6 +69,8 @@ describe("custom-connector factory", () => {
       ts: "2026-06-19T00:00:00.000Z",
     });
     expect(result.events[0]?.tokens).toMatchObject({ input: 10, output: 20, total: 30 });
+    // A custom connector prices nothing → catalog_version is honestly NULL/undefined (D2).
+    expect(result.events[0]?.catalogVersion).toBeUndefined();
   });
 
   it("(b) regex named-capture mapping → mapped fields from match.groups", () => {

@@ -21,6 +21,16 @@ describe("eventFingerprint", () => {
     expect(eventFingerprint("claude-code", "rec-1", 0, "usage.reported")).not.toBe(base);
   });
 
+  it("matches a pinned value for a fixed input (regression — no drift)", () => {
+    // PINNED: proves the fingerprint algorithm (fields, order, `|` delimiter) is
+    // byte-stable. The m10 replay-metadata columns (catalog_version, etc.) are
+    // metadata and MUST NOT perturb this — if this hash changes, dedup/idempotency
+    // (PRD §12/§23) silently breaks across parser versions.
+    expect(eventFingerprint("claude-code", "sess:0", 0, "message.assistant")).toBe(
+      "3a1be7e87fef8bdb8dc6cfdb2b755868ce6c9449aea1ffb877cb025b710813ec",
+    );
+  });
+
   it("does not collide across delimiter boundaries", () => {
     // "a" + "|" + "b" must differ from "a|b" + "|" + "" — the | delimiter guards this.
     const x = eventFingerprint("a", "b", 0, "t");
