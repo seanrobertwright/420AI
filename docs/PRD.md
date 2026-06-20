@@ -738,11 +738,19 @@ Requirements:
       built):** incremental/at-ingest index maintenance (manual reindex only — hot ingest path untouched);
       per-event/per-tool-call granularity (session-grained docs only); advanced semantic/vector search
       (V2); the search **UI** (Slice 12.2).
-    - **Slice 12.2 — Dashboard surfaces (§8.4).** The other V1 hole — today the dashboard is Live-Monitor-
-      only. Build the remaining UIs over the **existing** ingest APIs (mostly presentation): reports
-      (incl. generate + the report-comparison view the stored `metrics` snapshot was the seam for),
-      projects/workspaces + mapping, search, connector catalog, machine management + pairing, settings,
-      and export. Likely **sub-sliced**; keeps the token-never-in-browser proxy-Route-Handler discipline.
+    - **Slice 12.2 — Dashboard surfaces (§8.4).** The other V1 hole — the dashboard was Live-Monitor-
+      only. Build the remaining UIs over the **existing** ingest APIs (mostly presentation), keeping the
+      token-never-in-browser proxy-Route-Handler discipline. **Sub-sliced:**
+        - **12.2a Foundation + read surfaces — DONE (2026-06-20):** a generalized server-only proxy
+          (`proxyJson`/`proxyStream`, forwards upstream status; 502 only on an unreachable hop), dashboard-
+          local wire types, shared formatters, a persistent nav + page shell, and **read-only** surfaces —
+          projects (list + detail), reports (list + Markdown view), search (the 12.1 redacted index), and
+          machines (status/backlog/heartbeat + workspaces). Zero backend change; `ADMIN_TOKEN` never reaches
+          the browser (grep==0, verified).
+        - **12.2b Mutations/admin surfaces — pending:** report generate + the report-comparison view the
+          stored `metrics` snapshot was the seam for, project create/rename + workspace remap, catalog
+          approve/reject, search reindex, machine management + pairing, settings, and export; plus rich
+          Markdown/Mermaid rendering and `ts_headline` bold-highlight. Depends on the 12.2a foundation.
     - **Slice 12.3 — Auth hardening.** Replace the static `ADMIN_TOKEN` + hardcoded `DEFAULT_EMAIL` with a
       real **single-user admin login** (sessions/credentials), so a self-hosted deployment is not gated by
       a shared bearer string. Touches every admin route. **No multi-user/RBAC** (that is V2) — this only

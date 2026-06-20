@@ -16,6 +16,12 @@ export default defineConfig({
         new URL("./packages/shared/src/index.ts", import.meta.url),
       ),
       "@420ai/db": fileURLToPath(new URL("./packages/db/src/index.ts", import.meta.url)),
+      // The dashboard uses the `@/*` → `apps/dashboard/src/*` path alias (its tsconfig
+      // `paths`); vitest resolves via Vite aliases, not tsconfig paths, so mirror it here so
+      // dashboard `*.test.ts` that pull in `@/`-importing source (e.g. lib/proxy.ts → @/lib/ingest)
+      // resolve. Safe beside `@420ai/*`: @rollup/plugin-alias requires a `/` right after the key,
+      // and `@420ai/...` has `4` there, so `@` only matches `@/...`.
+      "@": fileURLToPath(new URL("./apps/dashboard/src", import.meta.url)),
     },
   },
   test: {

@@ -169,9 +169,28 @@ Re-running discovery preserves a manual remap.
 
 ### Live Monitor (dashboard UI)
 
-The only graphical view today. Run the dashboard ([install B](./install.md#optional-the-web-dashboard-live-monitor)),
-open it, and it lands on `/monitor`: machines (online/stale/offline), connector health, active
-sessions, backlog, and operational alerts — updating live over SSE.
+Run the dashboard ([install B](./install.md#optional-the-web-dashboard-live-monitor)), open it, and it
+lands on `/monitor`: machines (online/stale/offline), connector health, active sessions, backlog, and
+operational alerts — updating live over SSE.
+
+### Dashboard read surfaces
+
+Beyond the Live Monitor, the dashboard adds **read-only** pages over the same admin ingest APIs, reached
+from the persistent top nav:
+
+- **Projects** (`/projects`) — every project, each linking to a detail page with usage tiles (cost,
+  tokens, events), a by-model breakdown, usage over time, the session list, and git metadata.
+- **Reports** (`/reports`) — the versioned report artifacts; select one to read its Markdown (shown as
+  preformatted text in this slice).
+- **Search** (`/search`) — the redacted full-text index (12.1): query box plus entity-type and project
+  filters; snippets are content-safe (masked before storage).
+- **Machines** (`/machines`) — collector health, sync backlog, heartbeat, and the workspace→project
+  mapping.
+
+The browser never holds `ADMIN_TOKEN`: every page renders server-side and every browser→ingest call goes
+through a same-origin proxy Route Handler that adds the admin bearer on the server→ingest hop only. All
+**mutations** (generate/compare reports, create/rename projects, catalog approve/reject, workspace remap,
+reindex, pairing, export, settings) and **rich Markdown/Mermaid rendering** land in a later slice.
 
 ### Reports, projections & AI insight (ingest API)
 
