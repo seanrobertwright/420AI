@@ -4,7 +4,10 @@
 
 Build a self-hosted application that captures, archives, analyzes, and reports on AI Coding Tool usage across projects and machines. The system preserves full session history, tracks real and estimated token/cost usage, correlates AI activity with Git outcomes, identifies inefficient context behavior, and generates Markdown reports with recommendations for improving AI implementation efficiency.
 
-V1 focuses on AI Coding Tools. General AI Chat capture for ChatGPT, Claude, Gemini web/desktop sessions is deferred to V2.
+V1 focuses on AI Coding Tools and runs as a **self-hosted, single-user** system. General AI Chat
+capture (ChatGPT, Claude, Gemini web/desktop sessions) **and** a multi-user / cloud-hosted SaaS
+product experience are both deferred to V2. (The archive schema is already multi-user-capable; only
+the V1 *product experience* is single-user.)
 
 ## 2. Problem
 
@@ -31,6 +34,8 @@ AI coding tools produce valuable but fragmented operational data. Sessions live 
 
 - ChatGPT, Claude, or Gemini web/app session capture.
 - Cloud-hosted SaaS version.
+- **Multi-user product experience / RBAC / tenancy** (the schema is multi-user-capable, but the V1
+  *and* M12-GA product experience stay single-user self-hosted; multi-user is a V2 concern).
 - Mobile application.
 - macOS or Linux collectors.
 - Browser extension capture.
@@ -712,3 +717,66 @@ Requirements:
       `std::process::Command`, **not** `tauri-plugin-shell` — injecting keychain secrets as the child
       process env (no `.env` written). Settings manages **server** config only; collector-config
       management is deferred.
+
+12. **Production Readiness / GA (post-V1).** **Planned.** Closes every item the V1/M11 build deliberately
+    deferred, taking the product from "feature-built" to **shippable, self-hosted, single-user GA**. This
+    is a *single* milestone built in thin slices (each through the build loop in `SUMMARY.md` §2), in the
+    dependency order below. It targets the **self-hosted single-user** product experience — **multi-user /
+    RBAC / tenancy and cloud SaaS remain V2** (§4). Origin: the 2026-06-20 deferral audit (recorded in
+    `SUMMARY.md`) that swept every `defer`/`deferred`/non-goal note across the docs, plans, and code.
+
+    **Scope decisions (settled 2026-06-20):** (1) target = self-hosted single-user GA, multi-user/SaaS → V2;
+    (2) one milestone, sliced; (3) the archive-replay engine is **in** this milestone (Slice 12.5);
+    (4) no V2/non-goal items pulled forward.
+
+    - **Slice 12.1 — Basic Search (§21). DONE (2026-06-20).** The last V1 *functional* hole. A redacted
+      plaintext search projection (`search_documents`: redact-then-store via the M8 `redact()` engine —
+      never index encrypted originals; session content decrypted, redacted, then indexed; rows stamp
+      `REDACTION_VERSION`) with a DB-`GENERATED` `tsvector` + GIN index, served by PostgreSQL full-text
+      search (`websearch_to_tsquery`/`ts_rank`/`ts_headline`) over sessions, reports, and projects behind
+      an admin-gated `GET /v1/search` + a manual `POST /v1/search/reindex`. **Deferred (named, NOT
+      built):** incremental/at-ingest index maintenance (manual reindex only — hot ingest path untouched);
+      per-event/per-tool-call granularity (session-grained docs only); advanced semantic/vector search
+      (V2); the search **UI** (Slice 12.2).
+    - **Slice 12.2 — Dashboard surfaces (§8.4).** The other V1 hole — today the dashboard is Live-Monitor-
+      only. Build the remaining UIs over the **existing** ingest APIs (mostly presentation): reports
+      (incl. generate + the report-comparison view the stored `metrics` snapshot was the seam for),
+      projects/workspaces + mapping, search, connector catalog, machine management + pairing, settings,
+      and export. Likely **sub-sliced**; keeps the token-never-in-browser proxy-Route-Handler discipline.
+    - **Slice 12.3 — Auth hardening.** Replace the static `ADMIN_TOKEN` + hardcoded `DEFAULT_EMAIL` with a
+      real **single-user admin login** (sessions/credentials), so a self-hosted deployment is not gated by
+      a shared bearer string. Touches every admin route. **No multi-user/RBAC** (that is V2) — this only
+      makes the single-user model genuinely securable.
+    - **Slice 12.4 — Operations baseline.** The genuinely-"production" slice the original PRD never modeled
+      (single-user self-hosted framing): make `repo-health` a **blocking** required CI check (needs GitHub
+      Pro on the private repo, or make it public / gate the merge step); an **automated archive backup +
+      retention/pruning** job (the PRD names volume/retention numbers but ships no backup); **server-side
+      observability** for ingest/archive themselves (structured logs/metrics — distinct from the M9
+      collector→monitor heartbeat); **ingest rate limiting**; a documented **encryption-key rotation**
+      story (`ARCHIVE_ENCRYPTION_KEY` lives only in env today); and a **migration rollback** path.
+    - **Slice 12.5 — Archive-replay engine (§23).** The keystone deferred *capability*: a read-back →
+      decrypt → re-parse path over the immutable raw records, so a newer parser or an approved pricing
+      catalog can **retroactively** re-derive/re-price historical rows (today catalog signing re-prices
+      *going forward only*). Re-derived events **upsert in place by the unchanged fingerprint** (§12) and
+      re-stamp `parser_version`/`catalog_version`/`analysis_version` (§23) — zero duplicates. Makes the
+      "raw sacred, projections disposable" promise fully real. Large but fairly independent.
+    - **Slice 12.6 — Alert delivery + remaining §20 conditions.** Alerts today are derived/persisted/acked
+      but never *delivered*. Add a delivery channel (email and/or webhook) over the existing 3c firing
+      surface, plus the still-deferred conditions: `ingest.auth_failure` (401 tracking),
+      `archive.unreachable`, and a **windowed** connector-failure rate (the current `connector.failing` is
+      a lifetime ratio). Proactive cost/context **Efficiency Alerts** stay out (§20 V1 non-goal).
+    - **Slice 12.7 — Connector hardening.** Close the connector gaps: Codex CLI **tool-call failure
+      classification** (currently a `knownGap` — no structured `is_error`); **per-connector permission
+      scopes** (§8.1, deferred since M3); **connector-catalog-as-data** (M10 catalog signing is pricing-
+      only — make connector definitions/locations catalog-driven too); and resolve the **Cursor**
+      (`%APPDATA%\Cursor`) + **Antigravity** research gates (ship if feasible, never block GA).
+    - **Slice 12.8 — Export & distribution polish.** **Parquet** export (deferred past V1); a **restore/
+      import** path (V1 exports are inspection-grade only); and desktop distribution: a **signed installer
+      + auto-update** and the **MSI/WiX** target (both need a code-signing certificate — the gating cost).
+      Last because it is refinement and unblocks nothing else.
+
+    **Deferred from M12 (kept as V2 / explicit non-goals — do NOT pull in):** General AI Chat capture;
+    multi-user product experience / RBAC / tenancy; cloud-hosted SaaS; mobile; browser-extension capture;
+    in-tool context-rule *enforcement* (V1 recommends only); full local-model lifecycle management;
+    script/plugin custom-connector runtime; advanced semantic/vector search; subscription cost
+    amortization; scheduled report generation / scheduled analysis (manual-first stays the default).

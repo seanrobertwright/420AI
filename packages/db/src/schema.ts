@@ -8,8 +8,21 @@ import {
   jsonb,
   index,
   uniqueIndex,
+  customType,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
+
+/**
+ * Postgres `tsvector` is not a built-in Drizzle column type — declare it once so
+ * the M12 search projection can hold a DB-GENERATED full-text vector. The app
+ * never reads/writes the value directly (it is `generatedAlwaysAs` + GIN-indexed);
+ * `customType` only exists so drizzle-kit emits the right column DDL.
+ */
+const tsvector = customType<{ data: string }>({
+  dataType() {
+    return "tsvector";
+  },
+});
 import type { NormalizedTokens, CostResult, ModelPricing } from "@420ai/shared";
 
 /**
@@ -446,5 +459,43 @@ export const pricingCatalogs = pgTable(
   (t) => [
     uniqueIndex("pricing_catalogs_version").on(t.version), // idempotent upload (re-upload same version = no-op)
     uniqueIndex("pricing_catalogs_one_active").on(t.status).where(sql`${t.status} = 'active'`),
+  ],
+);
+
+/**
+ * M12 §21 redacted search projection (PRD §18.1/§21). Every row's `title`/`body`
+ * is ALREADY redacted (REDACTION_VERSION stamped) — we NEVER index encrypted
+ * originals. `search_vector` is DB-GENERATED from title (weight A) + body
+ * (weight B) and GIN-indexed; the app never writes it (inserting it errors).
+ *
+ * A DISPOSABLE projection: rebuilt wholesale by `rebuildSearchIndex()` (delete-
+ * then-insert from reports + projects + sessions), never a source of truth —
+ * consistent with "raw sacred, projections disposable". The unique index on
+ * (entity_type, entity_id) makes a re-reindex idempotent.
+ */
+export const searchDocuments = pgTable(
+  "search_documents",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
+    entityType: text("entity_type").notNull(), // 'session' | 'report' | 'project'
+    entityId: text("entity_id").notNull(), // sessionId (text) | report uuid | project uuid
+    projectId: uuid("project_id"), // nullable filter key (unattributed sessions → null)
+    title: text("title"),
+    body: text("body").notNull(),
+    redactionVersion: text("redaction_version").notNull(), // REDACTION_VERSION stamp (§23)
+    indexedAt: timestamp("indexed_at", { withTimezone: true }).notNull().defaultNow(),
+    // DB-maintained: recomputed from title (A) + body (B) on every write. NEVER inserted.
+    searchVector: tsvector("search_vector").generatedAlwaysAs(
+      sql`setweight(to_tsvector('english', coalesce(title, '')), 'A') || setweight(to_tsvector('english', coalesce(body, '')), 'B')`,
+    ),
+  },
+  (t) => [
+    // One doc per logical entity — the re-reindex idempotency key.
+    uniqueIndex("search_documents_entity").on(t.entityType, t.entityId),
+    index("search_documents_gin").using("gin", t.searchVector),
+    index("search_documents_by_project").on(t.projectId),
   ],
 );

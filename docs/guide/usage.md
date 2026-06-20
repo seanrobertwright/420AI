@@ -216,6 +216,24 @@ curl -s -X POST "$BASE/v1/projects/<id>/interpretations"        -H "authorizatio
 Content is **redacted** (regex + entropy secret-masking) before anything leaves the archive. With no
 provider configured these return `503 not_configured`; an empty scope returns `404`.
 
+**Full-text search (admin):**
+
+```bash
+# Reindex first — builds the redacted search projection from reports, projects, and
+# sessions (decrypts session content, redacts it, then indexes). Run after capture
+# to refresh; reindex is manual in this slice and is idempotent (full rebuild).
+curl -s -X POST "$BASE/v1/search/reindex"                 -H "authorization: Bearer $ADMIN"
+# → {"reports":N,"projects":N,"sessions":N,"total":N}
+
+# Search — ranked hits across sessions/reports/projects:
+curl -s "$BASE/v1/search?q=anthropic%20spend"             -H "authorization: Bearer $ADMIN"
+# Optional filters: &type=session|report|project  &projectId=<uuid>  &limit=1..100
+```
+
+Hits come from a **redacted projection** — every title and snippet was masked before it was stored, so
+search never exposes a secret and never touches the encrypted originals. Supports plain terms,
+`"quoted phrases"`, and `-negation` (`websearch_to_tsquery`). Advanced semantic/vector search is V2.
+
 ---
 
 ## 6. Stopping & maintenance

@@ -32,6 +32,12 @@ local **NSIS** installer. See the slice plans under
 [`.agents/plans/`](./.agents/plans/) (`m11-tauri-desktop.md` for the bundle + Slices 1–2, then
 `m11-slice{2,3,4,5}-*.md`).
 
+**M12 (Production Readiness / GA)** is the **active milestone** (planned 2026-06-20 from a deferral
+audit). It closes every deferred V1/M11 item — Basic Search + dashboard surfaces (the two V1 functional
+holes), real admin auth, an ops baseline, the archive-replay engine, alert delivery, connector
+hardening, and export/distribution polish — taking the product to **shippable, self-hosted, single-user
+GA**. Multi-user/RBAC/SaaS is V2. Sliced 12.1–12.8 in dependency order; see §3, §6, and PRD §25 M12.
+
 **CI gate:** a `repo-health` GitHub Actions check (repo-root `tsc -b` + NUL/stray scans + the full
 vitest suite **including the Postgres integration layer**) runs on every PR to `main`
 (`.github/workflows/repo-health.yml`).
@@ -121,6 +127,16 @@ flowchart TD
     sync/health + GUI pairing + run-on-login autostart + Windows Credential Manager secrets + Settings
     that supervises the local server-stack (Docker archive + ingest via Rust `std::process::Command`);
     local **NSIS** installer (`npm run build:desktop`). MSI/signed installer + auto-update deferred (§25).
+12. ⏳ **Production Readiness / GA** — **PLANNED** (origin: 2026-06-20 deferral audit). One milestone in
+    thin slices that takes the product from feature-built to **shippable, self-hosted, single-user GA**.
+    Target = self-hosted single-user; **multi-user/RBAC/SaaS → V2**. Slices (dependency order):
+    **12.1** Basic Search (§21) · **12.2** Dashboard surfaces (§8.4) · **12.3** Auth hardening (real admin
+    login, retire static `ADMIN_TOKEN`/`DEFAULT_EMAIL`) · **12.4** Ops baseline (CI blocking gate, backups
+    + retention, server observability, rate limiting, key rotation, migration rollback) · **12.5**
+    Archive-replay engine (§23, retroactive re-derive/re-price) · **12.6** Alert delivery + remaining §20
+    conditions · **12.7** Connector hardening (Codex failure classification, per-connector permission
+    scopes, connector-catalog-as-data, Cursor/Antigravity) · **12.8** Export/distribution polish (Parquet,
+    restore UI, signed installer/auto-update/MSI). See PRD §25 M12.
 
 > **Principle:** nothing shows value until the pipe is whole — so make the *thinnest* end-to-end
 > pipe first (milestone 1), then thicken each stage.
@@ -296,13 +312,39 @@ original M10 "hardening bundle" (exports, catalog signing, replay metadata, pers
            so int tests sign with an ephemeral key. **Fingerprint untouched, no new event type, no raw-record
            change.** *Deferred: the archive-replay engine (retroactive re-pricing of historical rows) and
            making connectors catalog-driven (this bundle is pricing-only).*
-      4. **Basic search** (§21) — redacted plaintext projection (reuse M8 `redact()`) + Postgres FTS
-         over sessions/reports/events/tool-calls/projects.
-      5. **Dashboard surfaces** (§8.4) — reports/projects/search/catalog/settings UIs over the existing
-         ingest APIs (today Live-Monitor-only). Presentation layer — comes last.
-- [ ] **Resolve CI enforcement:** branch protection needs **GitHub Pro** (private repo). Until then, treat the
-      `repo-health` check as advisory — **don't merge red**. (Alternative: make repo public, or gate the
-      automated-merge step on the check.)
+      4. **Basic search** (§21) — *not built in V1 close-out; reclassified to **M12 Slice 12.1**.*
+      5. **Dashboard surfaces** (§8.4) — *not built in V1 close-out; reclassified to **M12 Slice 12.2**.*
+
+      The 2026-06-20 deferral audit confirmed slices 1–3 above shipped, but 4 (search) and 5 (dashboard)
+      never landed — so V1 close-out completed to **feature-built**, not full written scope. Those two
+      holes, plus every other deferred item swept by the audit, now live in **M12** below.
+- [ ] **M12 — Production Readiness / GA** (planned 2026-06-20; see PRD §25 M12) — the **active milestone**.
+      Self-hosted single-user GA; multi-user/SaaS → V2. Built in thin slices via the build loop (§2), in
+      dependency order:
+      1. **12.1 Basic Search** (§21) — **DONE** (2026-06-20). Redacted plaintext projection
+         (`search_documents`: redact-then-store via M8 `redact()`, DB-`GENERATED` `tsvector` + GIN) + Postgres
+         FTS (`websearch_to_tsquery`/`ts_rank`/`ts_headline`) over sessions/reports/projects behind an
+         admin-gated `GET /v1/search` + `POST /v1/search/reindex`. *The last V1 functional hole.*
+         **Deferred (NOT covered):** incremental/at-ingest index maintenance (manual reindex only);
+         per-event/per-tool-call result granularity (session-grained only); advanced semantic/vector
+         search (**V2**); search UI (**12.2**).
+      2. **12.2 Dashboard surfaces** (§8.4) — reports (+ comparison via the stored `metrics` seam)/projects/
+         search/catalog/settings/machines/pairing/export UIs over the existing ingest APIs (today
+         Live-Monitor-only); keep the token-never-in-browser proxy discipline. *Likely sub-sliced.*
+      3. **12.3 Auth hardening** — real single-user admin login; retire static `ADMIN_TOKEN` + hardcoded
+         `DEFAULT_EMAIL`. No RBAC/multi-user (V2).
+      4. **12.4 Ops baseline** — make `repo-health` a **blocking** required CI check (the old "Resolve CI
+         enforcement" item — needs GitHub Pro / public repo / gated merge); automated archive backup +
+         retention/pruning; server-side observability for ingest/archive; ingest rate limiting; documented
+         `ARCHIVE_ENCRYPTION_KEY` rotation; migration rollback path.
+      5. **12.5 Archive-replay engine** (§23) — read-back → decrypt → re-parse over immutable raw records;
+         retroactive re-derive/re-price; upsert in place by the unchanged fingerprint, re-stamp versions.
+      6. **12.6 Alert delivery + remaining §20 conditions** — email/webhook delivery over the 3c firing
+         surface; `ingest.auth_failure`, `archive.unreachable`, windowed connector-failure rate.
+      7. **12.7 Connector hardening** — Codex tool-call failure classification; per-connector permission
+         scopes (§8.1); connector-catalog-as-data; resolve Cursor (`%APPDATA%\Cursor`) + Antigravity gates.
+      8. **12.8 Export & distribution polish** — Parquet export; restore/import path; signed installer +
+         auto-update + MSI/WiX (needs a code-signing cert). *Last — refinement, unblocks nothing.*
 - [x] **M11 (Tauri desktop)** — built across Slices 1–5; both open design points resolved (see the M11
       subsection in §4): JSON-lines control protocol (`m11-control-v2`) and Rust `std::process::Command`
       server-stack supervision. Signed off 2026-06-16.

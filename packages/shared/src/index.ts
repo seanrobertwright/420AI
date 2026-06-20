@@ -13,6 +13,7 @@ export * from "./alert-firings.js";
 export * from "./control-protocol.js";
 export * from "./reports.js";
 export * from "./redaction.js";
+export * from "./search.js";
 export * from "./serialize.js";
 export * from "./analysis.js";
 export * from "./git.js";
