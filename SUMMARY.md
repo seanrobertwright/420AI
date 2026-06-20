@@ -41,9 +41,10 @@ GA**. Multi-user/RBAC/SaaS is V2. Sliced 12.1–12.8 in dependency order; see §
 **CI gate:** a `repo-health` GitHub Actions check (repo-root `tsc -b` + NUL/stray scans + the full
 vitest suite **including the Postgres integration layer**) runs on every PR to `main`
 (`.github/workflows/repo-health.yml`).
-⚠️ It is **not yet a hard *blocking* required check** — branch protection on a **private** repo needs
-**GitHub Pro**. Until that's resolved: **never merge a PR whose `repo-health` check is red.** (One red
-merge already slipped through — M8 / PR #7 merged with a typecheck error — and needed hotfix PR #8.)
+✅ `repo-health` is a **required** status check on `main` (M12 12.4a) — red PRs **cannot** merge. The
+repo is **public**, so branch protection (Settings → Branches → require `repo-health` + require a PR +
+no bypass) is free; see `docs/guide/operations.md`. (This closes the gap from M8 / PR #7, which merged
+with a typecheck error on the old honor-system rule and needed hotfix PR #8.)
 
 ---
 
@@ -354,10 +355,12 @@ original M10 "hardening bundle" (exports, catalog signing, replay metadata, pers
            `ts_headline` bold-highlight; list/search pagination.
       3. **12.3 Auth hardening** — real single-user admin login; retire static `ADMIN_TOKEN` + hardcoded
          `DEFAULT_EMAIL`. No RBAC/multi-user (V2).
-      4. **12.4 Ops baseline** — make `repo-health` a **blocking** required CI check (the old "Resolve CI
-         enforcement" item — needs GitHub Pro / public repo / gated merge); automated archive backup +
-         retention/pruning; server-side observability for ingest/archive; ingest rate limiting; documented
-         `ARCHIVE_ENCRYPTION_KEY` rotation; migration rollback path.
+      4. ✅ **12.4 Ops baseline** — `repo-health` is a **blocking** required CI check (public-repo branch
+         protection); automated gzipped `pg_dump` backup + file-retention prune + documented restore;
+         server observability (env `LOG_LEVEL` + auth/cookie redaction, admin-gated `GET /v1/metrics`);
+         ingest rate limiting (`@fastify/rate-limit`, strict login limit); encryption-key rotation
+         (keyring + `db:rotate-key`); migration rollback path (`down/` SQL + `db:rollback`). See
+         `docs/guide/operations.md`.
       5. **12.5 Archive-replay engine** (§23) — read-back → decrypt → re-parse over immutable raw records;
          retroactive re-derive/re-price; upsert in place by the unchanged fingerprint, re-stamp versions.
       6. **12.6 Alert delivery + remaining §20 conditions** — email/webhook delivery over the 3c firing

@@ -1,10 +1,13 @@
 import { randomBytes } from "node:crypto";
 import Fastify, { type FastifyError, type FastifyInstance } from "fastify";
+import rateLimit from "@fastify/rate-limit";
 import type { Db } from "@420ai/db";
 import { PairingError } from "@420ai/db";
+import { createMetrics, registerMetricsHook } from "./metrics.js";
 import authPlugin from "./plugins/auth.js";
 import authRoutes from "./routes/auth.js";
 import healthRoutes from "./routes/health.js";
+import metricsRoutes from "./routes/metrics.js";
 import pairingCodeRoutes from "./routes/pairing-codes.js";
 import pairRoutes from "./routes/pair.js";
 import ingestRoutes from "./routes/ingest.js";
@@ -46,6 +49,18 @@ export interface BuildAppOptions {
   /** M9 SSE push cadence for GET /v1/monitor/stream (default 3000; tests inject 50). */
   monitorStreamIntervalMs?: number;
   logger?: boolean;
+  /** M12 12.4b pino level (default "info"); ignored when logger:false. */
+  logLevel?: string;
+  /** M12 12.4b metrics: false disables the store+hook+route (tests may omit → enabled with
+   * an injected now, harmless). */
+  metrics?: boolean;
+  /** M12 12.4c when present, registers @fastify/rate-limit with these limits. Omitted → no rate
+   * limiting (the existing buildApp callers run unthrottled; only server.ts + the dedicated int
+   * test opt in). */
+  rateLimit?: {
+    global?: { max: number; timeWindow: string };
+    login?: { max: number; timeWindow: string };
+  };
 }
 
 /**
@@ -57,7 +72,18 @@ export interface BuildAppOptions {
  * the ingest route wires it as a preHandler.
  */
 export function buildApp(opts: BuildAppOptions): FastifyInstance {
-  const app = Fastify({ logger: opts.logger ?? true });
+  const app = Fastify({
+    // M12 12.4b: structured logging at an env-tunable level, with the auth/cookie headers
+    // REMOVED from every log line (defense-in-depth — pino's default serializers don't log
+    // arbitrary headers, but a bearer/cookie must never leak even if a serializer changes).
+    logger:
+      opts.logger === false
+        ? false
+        : {
+            level: opts.logLevel ?? "info",
+            redact: { paths: ["req.headers.authorization", "req.headers.cookie"], remove: true },
+          },
+  });
 
   app.decorate("db", opts.db);
   app.decorate("adminToken", opts.adminToken);
@@ -75,6 +101,33 @@ export function buildApp(opts: BuildAppOptions): FastifyInstance {
     "monitorStreamIntervalMs",
     opts.monitorStreamIntervalMs ?? DEFAULT_MONITOR_STREAM_INTERVAL_MS,
   );
+
+  // M12 12.4b metrics: decorate the store BEFORE registering the hook (the hook reads
+  // app.metrics) and the route. Default-on so the 7 existing callers get counters for free;
+  // opts.metrics:false opts out.
+  if (opts.metrics !== false) {
+    app.decorate("metrics", createMetrics(Date.now()));
+    registerMetricsHook(app);
+    app.register(metricsRoutes);
+  }
+
+  // M12 12.4c rate limiting (opt-in via opts.rateLimit). Register the plugin + decorate
+  // app.rateLimitLogin BOTH before the route registrations so routes/auth.ts's per-route
+  // config.rateLimit resolves. global:false → only opted-in routes (login) are limited; the
+  // ingest hot path stays unthrottled unless a global is chosen. When unset, decorate
+  // rateLimitLogin=false so the login route's `config.rateLimit` is valid (a falsy per-route
+  // config + an unregistered plugin = no limit) — existing tests run unthrottled.
+  if (opts.rateLimit) {
+    const rl = opts.rateLimit;
+    app.register(rateLimit, {
+      global: false,
+      max: rl.global?.max ?? 1000,
+      timeWindow: rl.global?.timeWindow ?? "1 minute",
+    });
+    app.decorate("rateLimitLogin", rl.login ?? false);
+  } else {
+    app.decorate("rateLimitLogin", false);
+  }
 
   app.register(authPlugin);
   app.register(authRoutes);

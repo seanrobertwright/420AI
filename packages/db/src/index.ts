@@ -20,7 +20,7 @@ export {
 } from "./schema.js";
 export { createDb } from "./client.js";
 export type { Db, Tx, DbClient } from "./client.js";
-export { encryptField, decryptField } from "./crypto.js";
+export { encryptField, decryptField, activeKeyId } from "./crypto.js";
 export type { EncryptedField } from "./crypto.js";
 export { generateToken, hashToken } from "./tokens.js";
 export { runMigrations } from "./migrate.js";
@@ -113,3 +113,5 @@ export type { PricingCatalogRow } from "./repositories/pricing-catalogs.js";
 // shares its name with the query fn, so the table stays internal (repo + migration
 // reference it via `./schema.js`); the barrel exports the FUNCTION `searchDocuments`.
 export { rebuildSearchIndex, searchDocuments } from "./repositories/search.js";
+export { reencryptAll } from "./repositories/key-rotation.js";
+export type { RotationCounts } from "./repositories/key-rotation.js";

@@ -22,6 +22,11 @@ declare module "fastify" {
     analysisMaxOutputTokens: number;
     /** M9 SSE push cadence for GET /v1/monitor/stream (default 3000; tests inject 50). */
     monitorStreamIntervalMs: number;
+    /** M12 12.4b in-memory request/error counter store (GET /v1/metrics). */
+    metrics: import("../metrics.js").MetricsStore;
+    /** M12 12.4c per-route login rate limit ({max,timeWindow}) or false when off. Decorated
+     * BEFORE routes so routes/auth.ts's `config.rateLimit` resolves either way. */
+    rateLimitLogin: { max: number; timeWindow: string } | false;
     /** preHandler that 401s unless a valid bearer token resolves to a machine. */
     authenticate: preHandlerHookHandler;
   }
