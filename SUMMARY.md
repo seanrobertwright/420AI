@@ -395,8 +395,7 @@ original M10 "hardening bundle" (exports, catalog signing, replay metadata, pers
       it onto the registry, bundled-baseline fallback when none. **Parsers stay code** (PRD §39 — overlay
       metadata only; data-only entries reuse the custom-connector factory). Biggest sub-slice — recommend
       internal **12.7c-1** (server+shared, a near-exact pricing mirror) then **12.7c-2** (collector
-      overlay). _Recommended order: 12.7b before 12.7c (12.7c feeds 12.7b's capture-surface fingerprint)._
-      - **12.7d — Cursor + Antigravity gates** (`m12-slice7d-cursor-antigravity-connectors.md`) —
+      overlay). _Recommended order: 12.7b before 12.7c (12.7c feeds 12.7b's capture-surface fingerprint)._ - **12.7d — Cursor + Antigravity gates** (`m12-slice7d-cursor-antigravity-connectors.md`) —
       **RESEARCH GATE RESOLVED → DEFER BOTH (per §25 "ship if feasible, never block GA")**. A live spike
       located Cursor's chat in `%APPDATA%\Cursor\…\state.vscdb` (`cursorDiskKV`: 22k message bubbles,
       partial token data, model in `composerData.modelConfig`, **secret keys to avoid**) — recoverable but
