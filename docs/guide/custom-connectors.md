@@ -207,3 +207,23 @@ same enable/disable toggle as the built-ins.
    inspect the archive: a raw record + event under your `id` should appear.
 4. Break the JSON (delete a brace) → `collector custom` still runs, reports 0 connectors, and
    `collector watch` still captures the built-ins.
+
+---
+
+## 8. Local vs. signed custom connectors (M12 12.7c)
+
+There are now **two** ways to add a custom connector — same factory, different trust model:
+
+|           | **Local** (`~/.420ai/custom-connectors.json`)                                                                                      | **Signed** (connector catalog)              |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
+| Authoring | hand-edit the file on the machine                                                                                                  | a signed catalog entry's `def`              |
+| Trust     | unsigned; whoever can write the file                                                                                               | ed25519-signed + admin-approved             |
+| Scope     | that one machine                                                                                                                   | every machine that pulls the active catalog |
+| Approval  | the §10.4 capture-surface gate (12.7b) applies to both — a new/widened scope is `needs-approval` until approved in the desktop app |                                             |
+
+A signed catalog can also **overlay metadata onto a built-in** (a corrected glob, a new fidelity label,
+a tightened permission scope, an enable/disable) — something a local `custom-connectors.json` cannot do
+(it only **adds** connectors). The connector's **parser stays in code** either way (PRD §39); a catalog
+`def` with no built-in id compiles through the **same** factory documented above. See
+[`scripts/CATALOG-SIGNING.md`](../../scripts/CATALOG-SIGNING.md#signing--applying-a-connector-catalog-update-m12-127c--prd-104)
+and [operations.md](./operations.md#127c--connector-catalog-management) for the sign → approve → pull flow.

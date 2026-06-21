@@ -18,6 +18,7 @@ export {
   alertFirings,
   ingestAuthFailures,
   pricingCatalogs,
+  connectorCatalogs,
 } from "./schema.js";
 export { createDb } from "./client.js";
 export type { Db, Tx, DbClient } from "./client.js";
@@ -105,6 +106,15 @@ export {
   countPendingCatalogs,
 } from "./repositories/pricing-catalogs.js";
 export type { PricingCatalogRow } from "./repositories/pricing-catalogs.js";
+export {
+  insertPendingConnectorCatalog,
+  getActiveConnectorCatalog,
+  listConnectorCatalogs,
+  approveConnectorCatalog,
+  rejectConnectorCatalog,
+  countPendingConnectorCatalogs,
+} from "./repositories/connector-catalogs.js";
+export type { ConnectorCatalogRow } from "./repositories/connector-catalogs.js";
 // M12 search: only the repo functions are surfaced — the `searchDocuments` TABLE
 // shares its name with the query fn, so the table stays internal (repo + migration
 // reference it via `./schema.js`); the barrel exports the FUNCTION `searchDocuments`.

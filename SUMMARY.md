@@ -388,14 +388,19 @@ original M10 "hardening bundle" (exports, catalog signing, replay metadata, pers
       drift ⇒ `needs-approval` ⇒ withheld until `connectors.approve`) + desktop surfacing. Resolves
       default-on-vs-consent: approval gates a CHANGE, not initial capture (§10.4). No DB/Rust/migration
       (the Rust relay is opaque). _Owns the `requiredPermissions` field shape 12.7c sources from data._ -
-      **12.7c — Connector-catalog-as-data (§10.4)** (`m12-slice7c-connector-catalog-as-data.md`). Extend
-      the M10 ed25519 signing + `pending→active` approval lifecycle (pricing-only today) to a signed
-      `connector_catalogs` document (migration `0011`) carrying connector metadata/locations/permissions;
-      collector pulls the active catalog (machine-authed `GET /v1/connector-catalog/active`) and overlays
-      it onto the registry, bundled-baseline fallback when none. **Parsers stay code** (PRD §39 — overlay
-      metadata only; data-only entries reuse the custom-connector factory). Biggest sub-slice — recommend
-      internal **12.7c-1** (server+shared, a near-exact pricing mirror) then **12.7c-2** (collector
-      overlay). _Recommended order: 12.7b before 12.7c (12.7c feeds 12.7b's capture-surface fingerprint)._ - **12.7d — Cursor + Antigravity gates** (`m12-slice7d-cursor-antigravity-connectors.md`) —
+      **12.7c — Connector-catalog-as-data (§10.4)** (`m12-slice7c-connector-catalog-as-data.md`) —
+      **IMPLEMENTED 2026-06-21**. Generalized the M10 ed25519 signer over the payload type (default stays
+      pricing — zero ripple) and extended the `pending→active` approval lifecycle to a signed
+      `connector_catalogs` document (migration `0011`, repo mirroring `pricing-catalogs.ts`) carrying
+      per-connector metadata/locations/permissions/active + data-only defs. Five endpoints
+      (`POST/GET /v1/connector-catalog`, `:id/approve|reject` admin; `GET /v1/connector-catalog/active`
+      **machine-authed**). The collector pulls + signature-re-verifies + caches the active catalog
+      (`~/.420ai/connector-catalog.json`) and overlays it onto the registry via the pure
+      `mergeConnectorCatalog` (in `@420ai/shared`, operating on a leaf-side `ConnectorLike`); **no active
+      catalog ⇒ registry byte-identical to today**, offline-first. **Parsers stay code** (PRD §39 — overlay
+      metadata only; data-only entries reuse the custom-connector factory). Catalog-overlaid scope flows
+      through 12.7b's `captureSurfaceFingerprint`, so a widening update ⇒ `needs-approval`. Offline signer
+      gained a `--connector` mode. _Done after 12.7b, as recommended._ - **12.7d — Cursor + Antigravity gates** (`m12-slice7d-cursor-antigravity-connectors.md`) —
       **RESEARCH GATE RESOLVED → DEFER BOTH (per §25 "ship if feasible, never block GA")**. A live spike
       located Cursor's chat in `%APPDATA%\Cursor\…\state.vscdb` (`cursorDiskKV`: 22k message bubbles,
       partial token data, model in `composerData.modelConfig`, **secret keys to avoid**) — recoverable but

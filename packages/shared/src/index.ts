@@ -3,6 +3,7 @@ export * from "./events.js";
 export * from "./fingerprint.js";
 export * from "./pricing.js";
 export * from "./catalog-signing.js";
+export * from "./connector-catalog.js";
 export * from "./cost.js";
 export * from "./ingest.js";
 export * from "./discovery.js";

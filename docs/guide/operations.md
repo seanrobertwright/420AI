@@ -205,6 +205,47 @@ curl -X POST localhost:8420/v1/replay/reprice -H "authorization: Bearer $ADMIN_T
 
 ---
 
+## 12.7c — Connector catalog management
+
+The **connector catalog** updates connector **metadata + watch locations** (a corrected glob, a new
+fidelity label, a tightened/loosened permission scope, an enable/disable, or a whole new data-only
+custom connector) **without an app release** — the same signed-and-approved channel as the pricing
+catalog, but for connector definitions. Parsers stay in code (PRD §39); the catalog overlays metadata
+and locations by connector `id`, and a data-only entry compiles through the custom-connector factory.
+
+Full workflow (sign → upload → approve → collector pull) is in
+[`scripts/CATALOG-SIGNING.md`](../../scripts/CATALOG-SIGNING.md#signing--applying-a-connector-catalog-update-m12-127c--prd-104).
+In short:
+
+```sh
+# 1. sign offline with the CONNECTOR private key (note --connector)
+npx tsx scripts/sign-catalog.ts --connector connector-catalog.json --key .secrets/connector-catalog-private-key.pem > signed.json
+# 2. upload (admin) → pending; a bad/tampered signature → 400
+curl -X POST "$INGEST_URL/v1/connector-catalog" -H "authorization: Bearer $ADMIN_TOKEN" -H "content-type: application/json" -d @signed.json
+# 3. approve (admin) → active (prior active atomically superseded)
+curl -X POST "$INGEST_URL/v1/connector-catalog/<id>/approve" -H "authorization: Bearer $ADMIN_TOKEN"
+```
+
+The collector pulls the active catalog at startup via the **machine-authed** `GET
+/v1/connector-catalog/active` (its ingest token), re-verifies the ed25519 signature against the bundled
+key, caches it at `~/.420ai/connector-catalog.json`, and overlays it onto the registry.
+
+**Caveats:**
+
+- **No active catalog ⇒ the registry is byte-identical to today** (the bundled
+  `CONNECTOR_CATALOG_BASELINE` is the floor). **Offline-first:** a failed pull falls back to the cache,
+  then the baseline — capture never blocks.
+- A catalog update that **widens** a connector's `watchGlobs`/`requiredPermissions` flips it to
+  **`needs-approval`** (the §10.4 capture-surface-change gate, 12.7b) until the user approves it in the
+  desktop app. A narrowing/disable needs no approval (a capture-surface reduction).
+- The collector **re-verifies** the signature even though the server only serves approved catalogs — a
+  tampered local cache file is ignored (defense-in-depth).
+- The connector catalog uses a **separate** ed25519 keypair from pricing
+  (`.secrets/connector-catalog-private-key.pem`); losing it has the same recovery path as the pricing
+  key (regenerate + re-bundle the public PEM + ship).
+
+---
+
 ## 12.6 — Alerts & delivery
 
 Operational alerts (PRD §20) are derived on every read of the Live Monitor and persisted as **Alert

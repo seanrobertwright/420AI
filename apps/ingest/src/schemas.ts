@@ -379,6 +379,22 @@ export const catalogUploadBodySchema = {
   },
 } as const;
 
+// --- M12 12.7c signed connector-catalog upload (PRD §10.4). Same shape as the pricing
+// upload — `payload` stays permissive (`type:"object"`); the ed25519 signature is the
+// real integrity check, not the JSON schema. ---
+
+/** POST /v1/connector-catalog body — a signed connector-catalog update (version + payload + base64 ed25519 signature). */
+export const connectorCatalogUploadBodySchema = {
+  type: "object",
+  required: ["version", "payload", "signature"],
+  additionalProperties: false,
+  properties: {
+    version: { type: "string", minLength: 1 },
+    payload: { type: "object" },
+    signature: { type: "string", minLength: 1 },
+  },
+} as const;
+
 // --- M12 §21 search querystring. `q` is REQUIRED + `minLength:1` so an empty
 // query is a 400 (via the err.validation branch) before the handler runs;
 // `type`/`projectId`/`limit` are optional filters. ---
