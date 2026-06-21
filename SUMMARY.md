@@ -361,8 +361,15 @@ original M10 "hardening bundle" (exports, catalog signing, replay metadata, pers
          ingest rate limiting (`@fastify/rate-limit`, strict login limit); encryption-key rotation
          (keyring + `db:rotate-key`); migration rollback path (`down/` SQL + `db:rollback`). See
          `docs/guide/operations.md`.
-      5. **12.5 Archive-replay engine** (§23) — read-back → decrypt → re-parse over immutable raw records;
-         retroactive re-derive/re-price; upsert in place by the unchanged fingerprint, re-stamp versions.
+      5. **12.5 Archive-replay engine** (§23) — re-derive projections over immutable raw records; re-stamp
+         versions; the fingerprint is unchanged. **✅ 12.5a retroactive re-PRICE DONE** — `repriceAll`
+         over `events` + admin-gated `POST /v1/replay/reprice` + `db:reprice` CLI applies the **active**
+         pricing catalog to events already in the archive (the going-forward ingest path only re-prices on
+         re-ingest). Pure data pass: no decrypt, no re-parse, fingerprint untouched, no schema change;
+         shape-preserving (never adds a cost) and idempotent by catalog version. See
+         `docs/guide/operations.md` (12.5a). **Deferred → 12.5b:** re-PARSE (server-side decrypt + re-parse
+         of raw records under an improved parser → upsert in place by fingerprint), which needs the
+         fingerprint-bearing parsers relocated `apps/collector` → `packages/shared`.
       6. **12.6 Alert delivery + remaining §20 conditions** — email/webhook delivery over the 3c firing
          surface; `ingest.auth_failure`, `archive.unreachable`, windowed connector-failure rate.
       7. **12.7 Connector hardening** — Codex tool-call failure classification; per-connector permission
