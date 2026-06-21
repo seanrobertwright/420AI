@@ -1,11 +1,13 @@
 <a id="readme-top"></a>
 
 <!-- Badges derived from the git remote (seanrobertwright/420AI). -->
+
 [![Contributors][contributors-shield]][contributors-url]
 [![Forks][forks-shield]][forks-url]
 [![Stargazers][stars-shield]][stars-url]
 [![Issues][issues-shield]][issues-url]
 [![MIT License][license-shield]][license-url]
+
 <!-- TODO: add [![LinkedIn][linkedin-shield]][linkedin-url] once you have a profile URL -->
 
 <br />
@@ -57,8 +59,8 @@
 AI coding tools produce valuable but fragmented operational data — sessions live in vendor-specific
 local stores, CLIs, and logs that can crash, change format, or lose history. **420AI** captures that
 data across machines, archives it with maximum fidelity, and turns it into Markdown reports and a live
-dashboard so you can answer questions like *which projects/tools/models are worth the spend* and *where
-context is wasted*.
+dashboard so you can answer questions like _which projects/tools/models are worth the spend_ and _where
+context is wasted_.
 
 It is **local-first and self-hosted** (nothing leaves your home server), **event-sourced** (raw records
 are the permanent truth; everything else is a re-buildable projection), and **deterministic-metrics-first,
@@ -186,6 +188,7 @@ Distributed under the **MIT License**. See `LICENSE` for more information.
 ## Contact
 
 <!-- TODO: confirm public contact details -->
+
 Sean Wright — <!-- TODO: email / social handle -->
 
 Project Link: [https://github.com/seanrobertwright/420AI](https://github.com/seanrobertwright/420AI)
@@ -200,6 +203,7 @@ Project Link: [https://github.com/seanrobertwright/420AI](https://github.com/sea
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 <!-- MARKDOWN LINKS & IMAGES -->
+
 [contributors-shield]: https://img.shields.io/github/contributors/seanrobertwright/420AI.svg?style=for-the-badge
 [contributors-url]: https://github.com/seanrobertwright/420AI/graphs/contributors
 [forks-shield]: https://img.shields.io/github/forks/seanrobertwright/420AI.svg?style=for-the-badge
