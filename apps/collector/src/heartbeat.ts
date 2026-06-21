@@ -25,6 +25,9 @@ export interface HeartbeatDeps {
   collectorVersion: string;
   intervalMs: number;
   now: () => Date;
+  /** M12 12.6 archive.unreachable signal — consecutive sync failures the loop has seen
+   * (default 0 when the loop doesn't track it / older callers). */
+  consecutiveSyncFailures?: number;
   /** Injectable for tests; defaults to the real fetch-based client. */
   post?: typeof postHeartbeat;
 }
@@ -49,6 +52,7 @@ export async function maybeSendHeartbeat(deps: HeartbeatDeps, state: HeartbeatSt
       queuePending: pending,
       queueInflight: inflight,
       collectorVersion: deps.collectorVersion,
+      consecutiveSyncFailures: deps.consecutiveSyncFailures ?? 0,
     });
   } catch {
     /* best-effort liveness ping — never crash/stall/queue the loop (residual risk e). */

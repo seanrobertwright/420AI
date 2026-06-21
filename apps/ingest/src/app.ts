@@ -26,6 +26,7 @@ import replayRoutes from "./routes/replay.js";
 import searchRoutes from "./routes/search.js";
 import { CATALOG_PUBLIC_KEY } from "@420ai/shared";
 import { AnalysisProviderError, type AnalysisProvider } from "./analysis/provider.js";
+import type { AlertDeliverer } from "./delivery/alert-deliverer.js";
 
 const DEFAULT_ANALYSIS_MAX_OUTPUT_TOKENS = 4096;
 const DEFAULT_MONITOR_STREAM_INTERVAL_MS = 3000;
@@ -62,6 +63,9 @@ export interface BuildAppOptions {
     global?: { max: number; timeWindow: string };
     login?: { max: number; timeWindow: string };
   };
+  /** M12 12.6 injected alert deliverer. Omitted → null → delivery disabled (mirrors rateLimit
+   * opt-in): every existing buildApp caller is unchanged; only server.ts builds a webhook one. */
+  alertDeliverer?: AlertDeliverer | null;
 }
 
 /**
@@ -102,6 +106,9 @@ export function buildApp(opts: BuildAppOptions): FastifyInstance {
     "monitorStreamIntervalMs",
     opts.monitorStreamIntervalMs ?? DEFAULT_MONITOR_STREAM_INTERVAL_MS,
   );
+  // M12 12.6 alert delivery: omitted → null → disabled (no webhook). The monitor route's
+  // deliverFirings early-returns when null, so the default no-webhook path adds no query.
+  app.decorate("alertDeliverer", opts.alertDeliverer ?? null);
 
   // M12 12.4b metrics: decorate the store BEFORE registering the hook (the hook reads
   // app.metrics) and the route. Default-on so the 7 existing callers get counters for free;

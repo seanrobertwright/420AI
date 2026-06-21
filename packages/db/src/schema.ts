@@ -72,6 +72,9 @@ export const machines = pgTable("machines", {
   queuePending: integer("queue_pending"),
   queueInflight: integer("queue_inflight"),
   collectorVersion: text("collector_version"),
+  // M12 12.6 archive.unreachable signal — the latest collector-reported count of
+  // consecutive sync failures (nullable; older collectors don't send it → null → 0).
+  consecutiveSyncFailures: integer("consecutive_sync_failures"),
 });
 
 export const pairingCodes = pgTable("pairing_codes", {
@@ -407,6 +410,21 @@ export const machineHeartbeats = pgTable(
 );
 
 /**
+ * M12 12.6 ingest auth-failure audit (PRD §20). Append-only; recordIngestAuthFailure
+ * appends + prunes. GLOBAL (no user_id — the token never resolved to a machine/user).
+ * Feeds the windowed `ingest.auth_failure` alert via countRecentAuthFailures.
+ */
+export const ingestAuthFailures = pgTable(
+  "ingest_auth_failures",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    ts: timestamp("ts", { withTimezone: true }).notNull().defaultNow(),
+    remoteIp: text("remote_ip"),
+  },
+  (t) => [index("ingest_auth_failures_by_ts").on(t.ts)],
+);
+
+/**
  * M10 3c persisted Operational-Alert firings (PRD §20). Evaluate-on-read
  * reconcile (D1) upserts ONE open firing per (user, alert_key) — the PARTIAL
  * unique index below is the idempotency backbone (D3). first_fired_at records
@@ -431,6 +449,9 @@ export const alertFirings = pgTable(
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
     resolvedAt: timestamp("resolved_at", { withTimezone: true }),
     ackedAt: timestamp("acked_at", { withTimezone: true }),
+    // M12 12.6 alert delivery: at-most-one delivery ATTEMPT per firing — stamped on
+    // success OR failure by deliverPendingFirings (nullable; null = not yet attempted).
+    deliveryAttemptedAt: timestamp("delivery_attempted_at", { withTimezone: true }),
   },
   (t) => [
     // At most ONE open firing per (user, alert_key) — the reconcile idempotency key (D3).

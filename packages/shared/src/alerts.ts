@@ -40,7 +40,9 @@ export type AlertCode =
   | "connector.failing"
   | "sync.backlog_high"
   | "sync.backlog_growing"
-  | "catalog.update_requires_approval";
+  | "catalog.update_requires_approval"
+  | "ingest.auth_failure"
+  | "archive.unreachable";
 
 /** Stamps the alert derivation shape (sibling of MONITOR_VERSION; D11, PRD §23). */
 export const ALERT_VERSION = "m10-alerts-v1" as const;
@@ -225,4 +227,55 @@ export function deriveCatalogAlerts(pendingCount: number): OperationalAlert[] {
       since: null,
     },
   ];
+}
+
+/** Windowed ingest-auth-failure alert (PRD §20). Window + threshold tunable. */
+export const AUTH_FAILURE_ALERT = { windowMs: 15 * 60_000, minFailures: 3 } as const;
+
+/**
+ * Emit a GLOBAL `ingest.auth_failure` (warning) when ≥ minFailures invalid/revoked-token
+ * ingest attempts occurred in the window (M12 12.6, PRD §20). Pure + clock-free — the
+ * route computes the count via countRecentAuthFailures. Keys on neither machine nor
+ * connector → alertKey "ingest.auth_failure:*" (one firing). Sibling of deriveCatalogAlerts;
+ * `deriveAlerts` stays frozen — merged + re-sorted by sortAlerts in the route.
+ */
+export function deriveAuthFailureAlerts(recentCount: number): OperationalAlert[] {
+  if (recentCount < AUTH_FAILURE_ALERT.minFailures) return [];
+  return [
+    {
+      code: "ingest.auth_failure",
+      severity: "warning",
+      message: `${recentCount} ingest authentication failures in the last ${AUTH_FAILURE_ALERT.windowMs / 60_000} min`,
+      since: null, // a count, not a timestamp (like sync.backlog_high / catalog)
+    },
+  ];
+}
+
+/** Consecutive collector→archive sync failures before we alert (collector-reported). */
+export const ARCHIVE_UNREACHABLE_MIN_FAILURES = 3;
+
+/**
+ * Emit a per-machine `archive.unreachable` (warning) when a collector reports ≥ N consecutive
+ * sync failures (M12 12.6, PRD §20). Reads the already-projected `consecutiveSyncFailures`;
+ * offline machines are SUPPRESSED (mirrors the backlog-high offline suppression in deriveAlerts
+ * — `collector.offline` already covers them, and the reported count is stale once heartbeats
+ * stop). `since` = lastHeartbeatAt/lastSeenAt (display label). Sibling of deriveBacklogTrendAlerts.
+ */
+export function deriveArchiveUnreachableAlerts(
+  machines: LiveMonitorSnapshot["machines"],
+): OperationalAlert[] {
+  const alerts: OperationalAlert[] = [];
+  for (const m of machines) {
+    if (m.status === "offline") continue;
+    if ((m.consecutiveSyncFailures ?? 0) < ARCHIVE_UNREACHABLE_MIN_FAILURES) continue;
+    alerts.push({
+      code: "archive.unreachable",
+      severity: "warning",
+      message: `Collector "${m.name}" cannot reach the archive (${m.consecutiveSyncFailures} consecutive sync failures)`,
+      machineId: m.id,
+      machineName: m.name,
+      since: m.lastHeartbeatAt ?? m.lastSeenAt,
+    });
+  }
+  return alerts;
 }

@@ -4,6 +4,7 @@ import { createDb, setUserPassword } from "@420ai/db";
 import { buildApp } from "./app.js";
 import { hashPassword } from "./password.js";
 import { createAnalysisProvider, type AnalysisProviderConfig } from "./analysis/provider.js";
+import { createWebhookDeliverer } from "./delivery/alert-deliverer.js";
 
 // Load the repo-root .env (this runs from apps/ingest/ via npm -w).
 config({ path: fileURLToPath(new URL("../../../.env", import.meta.url)) });
@@ -78,6 +79,18 @@ const rateLimit = rateLimitEnabled
     }
   : undefined;
 
+// M12 12.6 alert delivery. Disabled unless ALERT_WEBHOOK_URL is set (mirrors ANALYSIS_PROVIDER):
+// the firing row in the dashboard is the durable record; the webhook is a convenience push.
+const alertWebhookUrl = process.env.ALERT_WEBHOOK_URL;
+const alertDeliverer = createWebhookDeliverer(
+  alertWebhookUrl
+    ? {
+        url: alertWebhookUrl,
+        timeoutMs: parsePositiveInt(process.env.ALERT_WEBHOOK_TIMEOUT_MS, "ALERT_WEBHOOK_TIMEOUT_MS", 5000),
+      }
+    : null,
+);
+
 const { db } = createDb(databaseUrl);
 
 // Seed the single admin's password (scrypt) from env. Idempotent: re-running on every boot
@@ -99,6 +112,7 @@ const app = buildApp({
   monitorStreamIntervalMs,
   logLevel,
   rateLimit,
+  alertDeliverer,
 });
 
 await app.listen({ port: Number(process.env.INGEST_PORT ?? 8420), host: "0.0.0.0" });

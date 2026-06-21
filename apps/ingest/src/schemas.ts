@@ -112,6 +112,9 @@ export const heartbeatBodySchema = {
     queuePending: { type: "integer", minimum: 0 },
     queueInflight: { type: "integer", minimum: 0 },
     collectorVersion: { type: "string", minLength: 1 },
+    // M12 12.6 archive.unreachable signal — optional (NOT in required) so an older collector
+    // omits it; additionalProperties:false means it MUST be declared or a sender 400s.
+    consecutiveSyncFailures: { type: "integer", minimum: 0 },
   },
 } as const;
 

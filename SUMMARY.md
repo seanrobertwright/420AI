@@ -370,8 +370,15 @@ original M10 "hardening bundle" (exports, catalog signing, replay metadata, pers
          `docs/guide/operations.md` (12.5a). **Deferred → 12.5b:** re-PARSE (server-side decrypt + re-parse
          of raw records under an improved parser → upsert in place by fingerprint), which needs the
          fingerprint-bearing parsers relocated `apps/collector` → `packages/shared`.
-      6. **12.6 Alert delivery + remaining §20 conditions** — email/webhook delivery over the 3c firing
-         surface; `ingest.auth_failure`, `archive.unreachable`, windowed connector-failure rate.
+      6. ✅ **12.6 Alert delivery + remaining §20 conditions DONE** — **webhook** delivery over the 3c
+         firing surface (injected `AlertDeliverer`, disabled unless `ALERT_WEBHOOK_URL` set, at-most-once
+         ATTEMPT per firing via `delivery_attempted_at` on the read-time reconcile — no new background
+         loop); `ingest.auth_failure` (windowed ≥3 invalid/revoked-token attempts in 15 min, recorded in
+         `ingest_auth_failures`) and `archive.unreachable` (per-machine ≥3 consecutive collector sync
+         failures, ridden on the heartbeat, offline-suppressed). All three render unchanged in `AlertsPanel`
+         (switches on severity, not code). See `docs/guide/operations.md` (12.6). **Deferred → 12.6b:**
+         windowed connector-failure rate (needs a time-bucketed projection), SMTP/email delivery,
+         deliver-on-resolve.
       7. **12.7 Connector hardening** — Codex tool-call failure classification; per-connector permission
          scopes (§8.1); connector-catalog-as-data; resolve Cursor (`%APPDATA%\Cursor`) + Antigravity gates.
       8. **12.8 Export & distribution polish** — Parquet export; restore/import path; signed installer +

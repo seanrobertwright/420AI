@@ -20,6 +20,7 @@ export default async function heartbeatRoutes(app: FastifyInstance): Promise<voi
         queuePending: request.body.queuePending,
         queueInflight: request.body.queueInflight,
         collectorVersion: request.body.collectorVersion,
+        consecutiveSyncFailures: request.body.consecutiveSyncFailures,
       });
       return reply.code(200).send({ ok: true } satisfies HeartbeatResponse);
     },

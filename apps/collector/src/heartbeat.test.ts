@@ -58,6 +58,22 @@ describe("maybeSendHeartbeat", () => {
       queuePending: 12,
       queueInflight: 3,
       collectorVersion: "1.2.3",
+      consecutiveSyncFailures: 0, // M12 12.6 — defaults to 0 when the loop doesn't track it
+    });
+  });
+
+  it("carries the consecutiveSyncFailures count when set (M12 12.6 archive.unreachable signal)", async () => {
+    const nowRef = { ms: T0 };
+    const post = vi.fn().mockResolvedValue({ ok: true });
+    const deps = { ...makeDeps({ nowRef, post, pending: 1, inflight: 0 }), consecutiveSyncFailures: 4 };
+
+    await maybeSendHeartbeat(deps, newHeartbeatState());
+
+    expect(post).toHaveBeenCalledWith("http://ingest", "machine-token", {
+      queuePending: 1,
+      queueInflight: 0,
+      collectorVersion: "1.2.3",
+      consecutiveSyncFailures: 4,
     });
   });
 

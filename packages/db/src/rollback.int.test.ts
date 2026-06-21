@@ -32,25 +32,25 @@ describe.skipIf(!TEST_URL)("migration rollback (rollbackLast, integration)", () 
     return Number(r.rows[0]!.n);
   }
 
-  async function passwordHashExists(): Promise<boolean> {
+  async function authFailuresTableExists(): Promise<boolean> {
     const r = await pool.query(
-      "select 1 from information_schema.columns where table_name = 'users' and column_name = 'password_hash'",
+      "select 1 from information_schema.tables where table_name = 'ingest_auth_failures'",
     );
     return r.rowCount === 1;
   }
 
-  it("rolls back the latest migration (0009) and a re-migrate restores it", async () => {
-    expect(await trackedCount()).toBe(10);
-    expect(await passwordHashExists()).toBe(true);
+  it("rolls back the latest migration (0010) and a re-migrate restores it", async () => {
+    expect(await trackedCount()).toBe(11);
+    expect(await authFailuresTableExists()).toBe(true);
 
     const result = await rollbackLast(TEST_URL!, { downDir, journalPath });
-    expect(result).toEqual({ rolledBack: "0009_exotic_ben_grimm" });
-    expect(await trackedCount()).toBe(9);
-    expect(await passwordHashExists()).toBe(false); // down SQL dropped the column
-
-    // Re-apply: an idempotent re-migrate brings 0009 back + restores the tracking row.
-    await runMigrations(TEST_URL!);
+    expect(result).toEqual({ rolledBack: "0010_watery_spencer_smythe" });
     expect(await trackedCount()).toBe(10);
-    expect(await passwordHashExists()).toBe(true);
+    expect(await authFailuresTableExists()).toBe(false); // down SQL dropped the table
+
+    // Re-apply: an idempotent re-migrate brings 0010 back + restores the tracking row.
+    await runMigrations(TEST_URL!);
+    expect(await trackedCount()).toBe(11);
+    expect(await authFailuresTableExists()).toBe(true);
   });
 });

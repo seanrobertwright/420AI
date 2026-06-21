@@ -6,9 +6,13 @@ import {
   deriveBacklogTrend,
   deriveBacklogTrendAlerts,
   deriveCatalogAlerts,
+  deriveAuthFailureAlerts,
+  deriveArchiveUnreachableAlerts,
   sortAlerts,
   ALERT_THRESHOLDS,
   ALERT_VERSION,
+  AUTH_FAILURE_ALERT,
+  ARCHIVE_UNREACHABLE_MIN_FAILURES,
   BACKLOG_TREND_THRESHOLDS,
   type BacklogSample,
   type OperationalAlert,
@@ -30,6 +34,7 @@ function machine(over: Partial<MachineRow> & { status: MonitorStatus }): Machine
     queuePending: 0,
     queueInflight: 0,
     collectorVersion: "0.9.1",
+    consecutiveSyncFailures: null,
     backlogHigh: false,
     ...over,
   };
@@ -249,6 +254,62 @@ describe("deriveCatalogAlerts", () => {
   it("keys on neither machine nor connector → alertKey catalog.update_requires_approval:*", () => {
     const [a] = deriveCatalogAlerts(2);
     expect(alertKey(a!)).toBe("catalog.update_requires_approval:*");
+  });
+});
+
+describe("deriveAuthFailureAlerts", () => {
+  it("below minFailures → no alert", () => {
+    expect(deriveAuthFailureAlerts(AUTH_FAILURE_ALERT.minFailures - 1)).toEqual([]);
+    expect(deriveAuthFailureAlerts(0)).toEqual([]);
+  });
+
+  it("at minFailures → one ingest.auth_failure warning, since null, count in the message", () => {
+    const alerts = deriveAuthFailureAlerts(AUTH_FAILURE_ALERT.minFailures);
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]!.code).toBe("ingest.auth_failure");
+    expect(alerts[0]!.severity).toBe("warning");
+    expect(alerts[0]!.since).toBeNull();
+    expect(alerts[0]!.message).toContain(`${AUTH_FAILURE_ALERT.minFailures} ingest authentication failures`);
+    expect(alerts[0]!.message).toContain(`${AUTH_FAILURE_ALERT.windowMs / 60_000} min`);
+  });
+
+  it("keys on neither machine nor connector → alertKey ingest.auth_failure:*", () => {
+    const [a] = deriveAuthFailureAlerts(5);
+    expect(alertKey(a!)).toBe("ingest.auth_failure:*");
+  });
+});
+
+describe("deriveArchiveUnreachableAlerts", () => {
+  it("an online machine at the threshold → one archive.unreachable warning; since = lastHeartbeatAt", () => {
+    const m = machine({
+      id: "m1",
+      name: "box",
+      status: "online",
+      consecutiveSyncFailures: ARCHIVE_UNREACHABLE_MIN_FAILURES,
+    });
+    const alerts = deriveArchiveUnreachableAlerts([m]);
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]!.code).toBe("archive.unreachable");
+    expect(alerts[0]!.severity).toBe("warning");
+    expect(alerts[0]!.machineId).toBe("m1");
+    expect(alerts[0]!.message).toContain(`${ARCHIVE_UNREACHABLE_MIN_FAILURES} consecutive sync failures`);
+    expect(alerts[0]!.since).toBe(HB);
+    expect(alertKey(alerts[0]!)).toBe("archive.unreachable:m1");
+  });
+
+  it("below the threshold → no alert", () => {
+    const m = machine({ status: "online", consecutiveSyncFailures: ARCHIVE_UNREACHABLE_MIN_FAILURES - 1 });
+    expect(deriveArchiveUnreachableAlerts([m])).toEqual([]);
+  });
+
+  it("null consecutiveSyncFailures (older collector) → treated as 0 → no alert", () => {
+    const m = machine({ status: "online", consecutiveSyncFailures: null });
+    expect(deriveArchiveUnreachableAlerts([m])).toEqual([]);
+  });
+
+  it("an offline machine over the threshold → suppressed (collector.offline covers it)", () => {
+    const m = machine({ status: "offline", consecutiveSyncFailures: 10 });
+    expect(deriveArchiveUnreachableAlerts([m])).toEqual([]);
   });
 });
 

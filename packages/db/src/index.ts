@@ -16,6 +16,7 @@ export {
   sessionGitLinks,
   machineHeartbeats,
   alertFirings,
+  ingestAuthFailures,
   pricingCatalogs,
 } from "./schema.js";
 export { createDb } from "./client.js";
@@ -36,7 +37,12 @@ export {
   reconcileAlertFirings,
   listAlertFirings,
   ackAlertFiring,
+  deliverPendingFirings,
 } from "./repositories/alert-firings.js";
+export {
+  recordIngestAuthFailure,
+  countRecentAuthFailures,
+} from "./repositories/auth-failures.js";
 export {
   findUserIdByEmail,
   ensureUserByEmail,

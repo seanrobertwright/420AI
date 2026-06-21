@@ -41,6 +41,7 @@ export interface MachineStatusRow {
   queuePending: number | null;
   queueInflight: number | null;
   collectorVersion: string | null;
+  consecutiveSyncFailures: number | null; // M12 12.6 archive.unreachable signal (collector-reported)
 }
 
 /** One currently-active tool session (recent activity window), projected over `events`. */

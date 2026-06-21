@@ -6,8 +6,8 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { QueueStore } from "../queue/queue-store.js";
 import { IngestHttpError } from "../ingest-client.js";
-import { syncOnce } from "./sync-worker.js";
-import type { IngestBatch } from "@420ai/shared";
+import { syncOnce, runSyncLoop } from "./sync-worker.js";
+import type { HeartbeatRequest, IngestBatch } from "@420ai/shared";
 
 let dir: string | undefined;
 let server: Server | undefined;
@@ -95,6 +95,52 @@ describe("syncOnce (injected post)", () => {
       // Still pending, immediately claimable (no backoff bump) — ready for re-pair.
       expect(queue.stats().pending).toBe(1);
       expect(queue.claimBatch(10)).toHaveLength(1);
+    } finally {
+      queue.close();
+    }
+  });
+});
+
+describe("runSyncLoop (M12 12.6 consecutive-sync-failure counter → heartbeat)", () => {
+  it("reports an increasing count across retries, then resets to 0 on a successful drain", async () => {
+    // A queue clock we advance each heartbeat so a backed-off item is re-claimable next loop.
+    let nowMs = Date.parse("2026-06-13T00:00:00.000Z");
+    const queue = tmpQueue(() => new Date(nowMs));
+    // ingest post: fail (retry) twice, then succeed (ok) → drives count 0→1→2 then reset to 0.
+    let failuresRemaining = 2;
+    const post = vi.fn(async () => {
+      if (failuresRemaining-- > 0) throw new IngestHttpError(503, "down");
+      return { recordsInserted: 0, eventsUpserted: 0 };
+    });
+    // Capture the consecutiveSyncFailures each heartbeat reports; advance the clock + abort after 4.
+    const reported: Array<number | undefined> = [];
+    const controller = new AbortController();
+    const postHeartbeat = vi.fn(async (_url: string, _token: string, body: HeartbeatRequest) => {
+      reported.push(body.consecutiveSyncFailures);
+      nowMs += 60_000; // past any backoff so the item is claimable on the upcoming drain
+      if (reported.length >= 4) controller.abort();
+      return { ok: true } as const;
+    });
+    try {
+      queue.enqueue("raw", "r1", { a: 1 });
+      const reason = await runSyncLoop(
+        {
+          queue,
+          url: "http://x",
+          token: "t",
+          post,
+          postHeartbeat,
+          collectorVersion: "1.2.3",
+          heartbeatIntervalMs: 0, // never throttle — one heartbeat per loop iteration
+          idleMs: 1,
+          retryMs: 1,
+          now: () => new Date(nowMs),
+        },
+        controller.signal,
+      );
+      expect(reason).toBe("aborted");
+      // HB(before any sync)=0, after 1st retry=1, after 2nd retry=2, after the ok-drain reset=0.
+      expect(reported.slice(0, 4)).toEqual([0, 1, 2, 0]);
     } finally {
       queue.close();
     }

@@ -201,3 +201,44 @@ curl -X POST localhost:8420/v1/replay/reprice -H "authorization: Bearer $ADMIN_T
   complete catalog.
 - It is **idempotent** — safe to re-run; rows already at the active version are skipped (so a second
   run reprices 0). Run it after each catalog approval.
+
+---
+
+## 12.6 — Alerts & delivery
+
+Operational alerts (PRD §20) are derived on every read of the Live Monitor and persisted as **Alert
+Firings** (M10 3c). 12.6 adds **push delivery** of newly-opened firings plus two new conditions.
+
+### Webhook delivery
+
+Set `ALERT_WEBHOOK_URL` and the ingest server POSTs the firing JSON to it the moment a firing newly
+opens (a Slack/Discord/n8n/email-bridge target). The body is `{"kind":"alert.firing","firing":{…}}`.
+
+```sh
+ALERT_WEBHOOK_URL=https://hooks.example.com/420ai
+ALERT_WEBHOOK_TIMEOUT_MS=5000   # optional; per-delivery timeout, defaults to 5000
+```
+
+- **Disabled by default** — unset `ALERT_WEBHOOK_URL` and delivery is off (no behavior change; the
+  firing still appears in the dashboard). The dashboard firing is the **durable record**; the webhook
+  is a convenience notification.
+- **At-most-one ATTEMPT per firing.** `alert_firings.delivery_attempted_at` is stamped on success OR
+  failure, so a misconfigured/dead webhook is never retried on the 3 s monitor tick. (Retry-with-cap is
+  a future option.) **Open-only**: a firing that opens and resolves within one tick is not delivered.
+- **No new background loop** — delivery rides the existing evaluate-on-read reconcile (a webhook
+  problem never 500s `GET /v1/monitor` or breaks the SSE stream; it is logged and swallowed).
+
+### New §20 conditions
+
+- **`ingest.auth_failure`** (global warning) — fires when **≥3** invalid/revoked-token ingest attempts
+  occur within **15 min** (a revoked collector still POSTing, or a probe). Each 401 records an
+  `ingest_auth_failures` row (best-effort — recording never alters the 401); the count is windowed and
+  resolves as failures age out.
+- **`archive.unreachable`** (per-machine warning) — fires when a collector reports **≥3 consecutive
+  sync failures** (it can reach ingest but its batch POSTs keep failing). The collector's sync worker is
+  the only component that observes this, so the count rides the heartbeat. **Suppressed when the machine
+  is offline** (`collector.offline` already covers a total outage), and back-compat with older collectors
+  that don't send the field (treated as 0).
+
+**Deferred → 12.6b:** the windowed connector-failure *rate* (the existing `connector.failing` stays a
+lifetime ratio), SMTP/email delivery, and deliver-on-resolve.
