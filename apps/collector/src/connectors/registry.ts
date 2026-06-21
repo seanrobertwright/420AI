@@ -1,3 +1,8 @@
+import {
+  mergeConnectorCatalog,
+  type ConnectorCatalogPayload,
+  type ConnectorCatalogCustomDef,
+} from "@420ai/shared";
 import { connectors as defaultConnectors, type Connector } from "./connector.js";
 import {
   loadCustomConnectors,
@@ -7,10 +12,10 @@ import {
 
 /**
  * The single merge point (D5): the built-in registry plus every VALID, non-colliding
- * custom connector compiled from `~/.420ai/custom-connectors.json`. Used by
- * `runWatch`, `runDiscover`, and `runServe` so `filterConnectors`,
- * `connectors.list`/`connectors.set`, the watcher, and sync all work for free —
- * the M3/M4 capture core is untouched.
+ * custom connector compiled from `~/.420ai/custom-connectors.json`, then OVERLAID with
+ * the signed connector catalog (M12 12.7c) when one is provided. Used by `runWatch`,
+ * `runDiscover`, and `runServe` so `filterConnectors`, `connectors.list`/`connectors.set`,
+ * the watcher, and sync all work for free — the M3/M4 capture core is untouched.
  *
  * Library file (CLAUDE.md process boundaries): it NEVER logs. It RETURNS the merged
  * registry AND the dropped-def reasons so the entrypoint (cli/serve) can surface
@@ -24,12 +29,30 @@ export interface RegistryResult {
 }
 
 /**
+ * Compile a catalog data-only entry into a `Connector` via the SAME sanctioned factory
+ * the local custom-connectors path uses (decision A: no plugin runtime). The signed
+ * catalog is trusted, but the def is STILL re-validated (defense-in-depth — a bad regex
+ * is caught here, never at capture time). Returns `{ error }` so the merge can drop it
+ * with a surfaced reason.
+ */
+function compileCatalogDef(def: ConnectorCatalogCustomDef): Connector | { error: string } {
+  const result = validateCustomDef(def);
+  if ("error" in result) return { error: result.error };
+  return makeCustomConnector(result.ok);
+}
+
+/**
  * Build the merged connector registry. `home` is accepted for call-site symmetry
  * with the rest of the capture core but is not consulted here — custom connectors
  * return absolute `watchGlobs` (they ignore `home`), and built-ins resolve `home`
- * later, at watch time. `opts.customPath` is the testability seam for the config file.
+ * later, at watch time. `opts.customPath` is the testability seam for the config file;
+ * `opts.catalog` is the signed connector catalog (from the cache) to overlay — absent ⇒
+ * the registry is byte-identical to today (the §10.4 default-on regression guarantee).
  */
-export function loadRegistry(home: string, opts?: { customPath?: string }): RegistryResult {
+export function loadRegistry(
+  home: string,
+  opts?: { customPath?: string; catalog?: ConnectorCatalogPayload },
+): RegistryResult {
   void home;
   const connectors: Connector[] = [...defaultConnectors];
   const dropped: { id: string; reason: string }[] = [];
@@ -57,5 +80,8 @@ export function loadRegistry(home: string, opts?: { customPath?: string }): Regi
     connectors.push(makeCustomConnector(def));
   }
 
-  return { connectors, dropped };
+  // Overlay the signed connector catalog onto the assembled registry (metadata/locations
+  // by id; data-only entries compiled via the factory). No catalog ⇒ unchanged (decision A).
+  const merged = mergeConnectorCatalog(connectors, opts?.catalog, compileCatalogDef);
+  return { connectors: merged.connectors, dropped: [...dropped, ...merged.dropped] };
 }

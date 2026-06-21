@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { ConnectorCatalogPayload } from "@420ai/shared";
 import { connectors as defaultConnectors } from "./connector.js";
 import { saveCustomConnectors, type CustomConnectorDef } from "./custom-connector.js";
 import { loadRegistry } from "./registry.js";
@@ -73,6 +74,78 @@ describe("loadRegistry", () => {
     expect(connectors.map((c) => c.id)).toEqual(BUILTIN_IDS);
     expect(dropped[0]).toMatchObject({ id: "custom-bad" });
     expect(dropped[0]?.reason).toMatch(/watchGlobs/);
+  });
+
+  it("no catalog ⇒ the registry is byte-identical to today (regression guard)", () => {
+    const path = tempCustomPath();
+    const withoutCatalog = loadRegistry("/fake/home", { customPath: path });
+    const withUndefinedCatalog = loadRegistry("/fake/home", {
+      customPath: path,
+      catalog: undefined,
+    });
+    expect(withUndefinedCatalog.connectors.map((c) => c.id)).toEqual(
+      withoutCatalog.connectors.map((c) => c.id),
+    );
+    expect(withUndefinedCatalog.connectors.map((c) => c.id)).toEqual(BUILTIN_IDS);
+  });
+
+  it("a catalog overlays watchGlobs + permissions onto a built-in by id (parser preserved)", () => {
+    const catalog: ConnectorCatalogPayload = {
+      connectors: [
+        {
+          id: "claude-code",
+          watchGlobs: ["/override/**/*.jsonl"],
+          fidelity: { requiredPermissions: ["Read OVERRIDDEN scope"] },
+        },
+      ],
+    };
+    const { connectors } = loadRegistry("/fake/home", {
+      customPath: tempCustomPath(),
+      catalog,
+    });
+    const claude = connectors.find((c) => c.id === "claude-code")!;
+    expect(claude.watchGlobs("/home")).toEqual(["/override/**/*.jsonl"]);
+    expect(claude.fidelity.requiredPermissions).toEqual(["Read OVERRIDDEN scope"]);
+    // Decision A: the parser stays code — the overlaid connector still parses.
+    expect(typeof claude.parse).toBe("function");
+    expect(claude.fidelity.captureMethod).toBe("tail-jsonl"); // untouched field survives
+  });
+
+  it("a catalog data-only entry compiles via the custom-connector factory", () => {
+    const catalog: ConnectorCatalogPayload = {
+      connectors: [
+        {
+          id: "catalog-syslog",
+          def: {
+            id: "catalog-syslog",
+            watchGlobs: ["/var/log/app.jsonl"],
+            format: "jsonl",
+            eventType: "message.user",
+          },
+        },
+      ],
+    };
+    const { connectors, dropped } = loadRegistry("/fake/home", {
+      customPath: tempCustomPath(),
+      catalog,
+    });
+    expect(connectors.map((c) => c.id)).toEqual([...BUILTIN_IDS, "catalog-syslog"]);
+    expect(dropped).toEqual([]);
+    const syslog = connectors.find((c) => c.id === "catalog-syslog")!;
+    expect(syslog.watchGlobs("/home")).toEqual(["/var/log/app.jsonl"]);
+    expect(syslog.fidelity.status).toBe("experimental");
+  });
+
+  it("a catalog enabled:false drops a built-in (catalog-level disable)", () => {
+    const catalog: ConnectorCatalogPayload = {
+      connectors: [{ id: "gemini-cli", enabled: false }],
+    };
+    const { connectors, dropped } = loadRegistry("/fake/home", {
+      customPath: tempCustomPath(),
+      catalog,
+    });
+    expect(connectors.map((c) => c.id)).not.toContain("gemini-cli");
+    expect(dropped).toContainEqual({ id: "gemini-cli", reason: "disabled by connector catalog" });
   });
 
   it("a null / non-object entry in connectors[] is dropped, never crashes (D4 tolerance)", () => {

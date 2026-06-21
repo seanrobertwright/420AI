@@ -22,9 +22,10 @@ import heartbeatRoutes from "./routes/heartbeat.js";
 import monitorRoutes from "./routes/monitor.js";
 import alertRoutes from "./routes/alerts.js";
 import catalogRoutes from "./routes/catalog.js";
+import connectorCatalogRoutes from "./routes/connector-catalog.js";
 import replayRoutes from "./routes/replay.js";
 import searchRoutes from "./routes/search.js";
-import { CATALOG_PUBLIC_KEY } from "@420ai/shared";
+import { CATALOG_PUBLIC_KEY, CONNECTOR_CATALOG_PUBLIC_KEY } from "@420ai/shared";
 import { AnalysisProviderError, type AnalysisProvider } from "./analysis/provider.js";
 import type { AlertDeliverer } from "./delivery/alert-deliverer.js";
 
@@ -44,6 +45,8 @@ export interface BuildAppOptions {
   sessionSecret?: string;
   /** M10 3d ed25519 public key for catalog verify (defaults to the bundled CATALOG_PUBLIC_KEY; tests inject ephemeral). */
   catalogPublicKey?: string;
+  /** M12 12.7c ed25519 public key for connector-catalog verify (defaults to bundled CONNECTOR_CATALOG_PUBLIC_KEY; tests inject ephemeral). */
+  connectorCatalogPublicKey?: string;
   /** M8 injected analysis provider (real client in server.ts; deterministic stub in tests). */
   analysisProvider: AnalysisProvider;
   /** M8 resolved max output tokens for an interpretation call (default 4096). */
@@ -97,6 +100,10 @@ export function buildApp(opts: BuildAppOptions): FastifyInstance {
   // internally; tokens simply don't survive a restart. server.ts always passes a persistent one.
   app.decorate("sessionSecret", opts.sessionSecret ?? randomBytes(32).toString("base64url"));
   app.decorate("catalogPublicKey", opts.catalogPublicKey ?? CATALOG_PUBLIC_KEY);
+  app.decorate(
+    "connectorCatalogPublicKey",
+    opts.connectorCatalogPublicKey ?? CONNECTOR_CATALOG_PUBLIC_KEY,
+  );
   app.decorate("analysisProvider", opts.analysisProvider);
   app.decorate(
     "analysisMaxOutputTokens",
@@ -154,6 +161,7 @@ export function buildApp(opts: BuildAppOptions): FastifyInstance {
   app.register(monitorRoutes);
   app.register(alertRoutes);
   app.register(catalogRoutes);
+  app.register(connectorCatalogRoutes);
   app.register(replayRoutes);
   app.register(searchRoutes);
 

@@ -17,20 +17,25 @@ import type { ModelPricing } from "./pricing.js";
  */
 
 /**
- * The signed-catalog wire shape: the self-declared `version`, the model→pricing
- * `payload`, and a base64 detached ed25519 `signature` over
- * `canonicalizeCatalog({version, payload})`.
+ * The signed-catalog wire shape: the self-declared `version`, the `payload`, and a
+ * base64 detached ed25519 `signature` over `canonicalizeCatalog({version, payload})`.
+ *
+ * GENERIC over the payload (M12 12.7c): the default `P = Record<string, ModelPricing>`
+ * keeps every existing pricing call site (`SignedCatalog` with no type arg) byte- and
+ * type-identical, while the connector catalog reuses the SAME signer with
+ * `SignedCatalog<ConnectorCatalogPayload>`. `canon` is already payload-agnostic, so
+ * the signed bytes are a pure function of the value — one trust primitive, two payloads.
  */
-export interface SignedCatalog {
+export interface SignedCatalog<P = Record<string, ModelPricing>> {
   version: string;
-  payload: Record<string, ModelPricing>;
+  payload: P;
   signature: string;
 }
 
 /** The signed content (everything the signature covers — i.e. SignedCatalog minus `signature`). */
-export interface CatalogContent {
+export interface CatalogContent<P = Record<string, ModelPricing>> {
   version: string;
-  payload: Record<string, ModelPricing>;
+  payload: P;
 }
 
 /**
@@ -56,7 +61,7 @@ function canon(v: unknown): string {
 }
 
 /** Canonicalize the signed content into the exact bytes the signature covers. */
-export function canonicalizeCatalog(content: CatalogContent): string {
+export function canonicalizeCatalog<P>(content: CatalogContent<P>): string {
   return canon(content);
 }
 
@@ -76,8 +81,8 @@ MCowBQYDK2VwAyEAK98ppeFaQDaKPHNbcNWr6iKLB134hRAURa+Osz4QGcA=
  * signature — so a bad upload is a clean 400, never a 500. Ed25519 REQUIRES the
  * digest algorithm be `null` in `crypto.verify` (passing a hash name throws).
  */
-export function verifyCatalogSignature(
-  content: CatalogContent,
+export function verifyCatalogSignature<P>(
+  content: CatalogContent<P>,
   signatureB64: string,
   publicKeyPem: string = CATALOG_PUBLIC_KEY,
 ): boolean {

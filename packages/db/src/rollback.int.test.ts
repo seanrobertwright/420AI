@@ -32,25 +32,25 @@ describe.skipIf(!TEST_URL)("migration rollback (rollbackLast, integration)", () 
     return Number(r.rows[0]!.n);
   }
 
-  async function authFailuresTableExists(): Promise<boolean> {
+  async function connectorCatalogsTableExists(): Promise<boolean> {
     const r = await pool.query(
-      "select 1 from information_schema.tables where table_name = 'ingest_auth_failures'",
+      "select 1 from information_schema.tables where table_name = 'connector_catalogs'",
     );
     return r.rowCount === 1;
   }
 
-  it("rolls back the latest migration (0010) and a re-migrate restores it", async () => {
-    expect(await trackedCount()).toBe(11);
-    expect(await authFailuresTableExists()).toBe(true);
+  it("rolls back the latest migration (0011) and a re-migrate restores it", async () => {
+    expect(await trackedCount()).toBe(12);
+    expect(await connectorCatalogsTableExists()).toBe(true);
 
     const result = await rollbackLast(TEST_URL!, { downDir, journalPath });
-    expect(result).toEqual({ rolledBack: "0010_watery_spencer_smythe" });
-    expect(await trackedCount()).toBe(10);
-    expect(await authFailuresTableExists()).toBe(false); // down SQL dropped the table
-
-    // Re-apply: an idempotent re-migrate brings 0010 back + restores the tracking row.
-    await runMigrations(TEST_URL!);
+    expect(result).toEqual({ rolledBack: "0011_big_mysterio" });
     expect(await trackedCount()).toBe(11);
-    expect(await authFailuresTableExists()).toBe(true);
+    expect(await connectorCatalogsTableExists()).toBe(false); // down SQL dropped the table
+
+    // Re-apply: an idempotent re-migrate brings 0011 back + restores the tracking row.
+    await runMigrations(TEST_URL!);
+    expect(await trackedCount()).toBe(12);
+    expect(await connectorCatalogsTableExists()).toBe(true);
   });
 });

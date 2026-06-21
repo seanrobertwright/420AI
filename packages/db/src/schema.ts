@@ -23,7 +23,12 @@ const tsvector = customType<{ data: string }>({
     return "tsvector";
   },
 });
-import type { NormalizedTokens, CostResult, ModelPricing } from "@420ai/shared";
+import type {
+  NormalizedTokens,
+  CostResult,
+  ModelPricing,
+  ConnectorCatalogPayload,
+} from "@420ai/shared";
 
 /**
  * The Central Archive schema (PRD §8.2). This is the Postgres translation of the
@@ -485,6 +490,37 @@ export const pricingCatalogs = pgTable(
   (t) => [
     uniqueIndex("pricing_catalogs_version").on(t.version), // idempotent upload (re-upload same version = no-op)
     uniqueIndex("pricing_catalogs_one_active")
+      .on(t.status)
+      .where(sql`${t.status} = 'active'`),
+  ],
+);
+
+/**
+ * M12 12.7c signed CONNECTOR-catalog updates (PRD §10.4). The structural twin of
+ * `pricing_catalogs`: a catalog uploaded via POST /v1/connector-catalog after ed25519
+ * signature verify, held `pending` until an admin approves it → `active` (the prior
+ * active is `superseded`). The PARTIAL unique index enforces ≤1 active (copied verbatim
+ * from pricing_catalogs_one_active). GLOBAL (no user_id) — connector definitions apply
+ * to every machine. `payload` is the ConnectorCatalogPayload (per-connector
+ * metadata/location overlays + data-only defs — the signed content). The collector pulls
+ * the active row via GET /v1/connector-catalog/active and overlays it onto the registry.
+ * `version` is unique so a re-upload of the same version is an idempotent no-op.
+ */
+export const connectorCatalogs = pgTable(
+  "connector_catalogs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    version: text("version").notNull(), // self-declared catalog version (e.g. "m12-connector-catalog-v2")
+    payload: jsonb("payload").$type<ConnectorCatalogPayload>().notNull(),
+    signature: text("signature").notNull(), // base64 ed25519 over canonicalizeCatalog({version,payload})
+    status: text("status").notNull().default("pending"), // "pending" | "active" | "superseded" | "rejected"
+    uploadedAt: timestamp("uploaded_at", { withTimezone: true }).notNull().defaultNow(),
+    approvedAt: timestamp("approved_at", { withTimezone: true }),
+    approvedBy: text("approved_by"),
+  },
+  (t) => [
+    uniqueIndex("connector_catalogs_version").on(t.version), // idempotent upload (re-upload same version = no-op)
+    uniqueIndex("connector_catalogs_one_active")
       .on(t.status)
       .where(sql`${t.status} = 'active'`),
   ],

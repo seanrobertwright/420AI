@@ -107,3 +107,91 @@ archive-replay engine ships.
 
 Lifecycle: `pending → active → superseded` (or `pending → rejected`). At most one `active` at a time
 (enforced by a partial-unique DB index).
+
+---
+
+## Signing & applying a CONNECTOR-catalog update (M12 12.7c — PRD §10.4)
+
+The **connector catalog** (`ConnectorCatalogPayload`) lets you update connector **metadata + watch
+locations** — a corrected glob, a new fidelity label, a tightened/loosened permission scope, an
+enable/disable, or a whole new **data-only** custom connector — **without an app release**, secured by the
+**same** ed25519 machinery as pricing but a **separate keypair**:
+
+- **Private key** `.secrets/connector-catalog-private-key.pem` — _creates_ signatures. **Secret, offline.**
+- **Public key** `CONNECTOR_CATALOG_PUBLIC_KEY` in `packages/shared/src/connector-catalog.ts` — _verifies_
+  them. Bundled in source. The server verifies uploads; the **collector re-verifies** the pulled catalog
+  against this key before applying it (defense-in-depth — a tampered local cache is ignored).
+
+> **Decision A (PRD §39): parsers stay code.** The catalog overlays locations/fidelity/permissions/active
+> onto code-keyed connectors **by id**; an entry with no built-in id and a `def` is compiled by the
+> existing custom-connector factory. No plugin/script runtime is introduced.
+
+With **no active catalog** the collector registry is **byte-identical to today** (the bundled
+`CONNECTOR_CATALOG_BASELINE` is the floor). A catalog update that **widens** a connector's
+`watchGlobs`/`requiredPermissions` flips it to **`needs-approval`** (the §10.4 capture-surface-change gate,
+12.7b) until the user approves it in the desktop app.
+
+### 1. Write the connector-catalog JSON
+
+Shape: `{ "version": string, "payload": { "connectors": ConnectorCatalogEntry[] } }`. Each entry overlays
+by `id`; omitted fields are left untouched. Start from `CONNECTOR_CATALOG_BASELINE` in
+`packages/shared/src/connector-catalog.ts`.
+
+> **`watchGlobs` are ABSOLUTE and are NOT `~`-expanded** (same convention as a local custom connector) —
+> a `watchGlobs` override resolves verbatim, so it is **machine-specific**. Prefer overriding fidelity /
+> `requiredPermissions` (portable across machines) in a global catalog; only override `watchGlobs` when
+> every target machine shares the path layout.
+
+```json
+{
+  "version": "m12-connector-catalog-v2",
+  "payload": {
+    "connectors": [
+      {
+        "id": "claude-code",
+        "fidelity": { "requiredPermissions": ["Read Claude Code transcripts (reviewed 2026-06)"] }
+      },
+      {
+        "id": "custom-syslog",
+        "def": {
+          "id": "custom-syslog",
+          "watchGlobs": ["/var/log/app.jsonl"],
+          "format": "jsonl",
+          "eventType": "message.user"
+        }
+      }
+    ]
+  }
+}
+```
+
+### 2. Sign it (offline — note the `--connector` flag + the connector key)
+
+```bash
+npx tsx scripts/sign-catalog.ts --connector connector-catalog.json --key .secrets/connector-catalog-private-key.pem > signed.json
+# or: CONNECTOR_CATALOG_SIGNING_KEY=.secrets/connector-catalog-private-key.pem npx tsx scripts/sign-catalog.ts --connector connector-catalog.json > signed.json
+```
+
+### 3. Upload → approve (admin), then the collector pulls it
+
+```bash
+curl -X POST "$INGEST_URL/v1/connector-catalog" -H "authorization: Bearer $ADMIN_TOKEN" -H "content-type: application/json" -d @signed.json
+# → 200 pending   (bad/tampered signature → 400)
+curl -X POST "$INGEST_URL/v1/connector-catalog/<id>/approve" -H "authorization: Bearer $ADMIN_TOKEN"
+# → 200 active   (prior active atomically superseded)
+```
+
+The collector pulls the **active** catalog at startup via the **machine-authed** `GET
+/v1/connector-catalog/active` (its ingest token, not the admin token), caches it at
+`~/.420ai/connector-catalog.json`, and overlays it onto the registry. **Offline-first:** a failed pull
+falls back to the cache, then the bundled baseline — capture never blocks.
+
+### Connector-catalog endpoints
+
+| Method & path                            | Auth    | Effect                                              |
+| ---------------------------------------- | ------- | --------------------------------------------------- |
+| `POST /v1/connector-catalog`             | admin   | verify signature → store `pending` (bad sig → 400)  |
+| `GET /v1/connector-catalog`              | admin   | list all catalogs (newest first)                    |
+| `POST /v1/connector-catalog/:id/approve` | admin   | `pending → active`, supersede prior active          |
+| `POST /v1/connector-catalog/:id/reject`  | admin   | `pending → rejected`                                |
+| `GET /v1/connector-catalog/active`       | machine | the active `{version,payload,signature}` or **204** |

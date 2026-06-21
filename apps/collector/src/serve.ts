@@ -9,6 +9,12 @@ import { QueueStore, type QueueStats } from "./queue/queue-store.js";
 import { connectors as defaultConnectors, type Connector } from "./connectors/connector.js";
 import { loadRegistry } from "./connectors/registry.js";
 import {
+  fetchActiveConnectorCatalog,
+  loadCachedConnectorCatalog as loadCachedConnectorCatalogDefault,
+  saveCachedConnectorCatalog,
+  type SignedConnectorCatalog,
+} from "./connectors/connector-catalog-cache.js";
+import {
   loadConnectorConfig as loadConnectorConfigDefault,
   saveConnectorConfig as saveConnectorConfigDefault,
   filterConnectors,
@@ -79,6 +85,8 @@ export interface ServeDeps {
   loadConnectorApprovals?: () => ConnectorApprovals;
   /** Slice 12.7b: persist per-connector capture-surface approvals; defaults to the persisted module. */
   saveConnectorApprovals?: (cfg: ConnectorApprovals) => void;
+  /** Slice 12.7c: read the cached signed connector catalog; defaults to the persisted module. */
+  loadCachedConnectorCatalog?: () => SignedConnectorCatalog | undefined;
   /** Slice 2: home dir used to resolve a connector's `watchGlobs` (permission scope). */
   home?: string;
 }
@@ -141,11 +149,14 @@ export function runServe(deps: ServeDeps = {}): Promise<void> {
   const exit = deps.exit ?? ((code: number) => process.exit(code));
   const pid = deps.pid ?? process.pid;
   const home = deps.home ?? homedir();
-  // Default registry = built-ins + valid custom connectors (M10-S2). An injected
-  // registry (tests) bypasses the loader and carries no drop reasons.
+  // Default registry = built-ins + valid custom connectors (M10-S2), overlaid with the
+  // CACHED signed connector catalog (Slice 12.7c). Read SYNCHRONOUSLY (no await before the
+  // listeners/timer arm — the leak-window rule); offline-first (no cache ⇒ bundled
+  // baseline). An injected registry (tests) bypasses the loader and carries no drop reasons.
+  const loadCachedCatalog = deps.loadCachedConnectorCatalog ?? loadCachedConnectorCatalogDefault;
   const registry = deps.connectorRegistry
     ? { connectors: deps.connectorRegistry, dropped: [] as { id: string; reason: string }[] }
-    : loadRegistry(home);
+    : loadRegistry(home, { catalog: loadCachedCatalog()?.payload });
   const connectorRegistry = registry.connectors;
   const loadConnectorCfg = deps.loadConnectorConfig ?? loadConnectorConfigDefault;
   const saveConnectorCfg = deps.saveConnectorConfig ?? saveConnectorConfigDefault;
@@ -430,6 +441,24 @@ export function runServe(deps: ServeDeps = {}): Promise<void> {
     // The entrypoint may log; the registry library itself stays silent (D5).
     for (const d of registry.dropped) {
       log("warn", `custom connector "${d.id}" dropped: ${d.reason}`);
+    }
+
+    // M12 12.7c: best-effort REFRESH of the cached connector catalog for the NEXT start.
+    // Fired AFTER `cleanupAndExit` is armed (a one-shot promise, never a timer/stream — no
+    // leak window), production-only (tests inject `connectorRegistry` and skip this). The
+    // live registry already overlaid the CACHED catalog synchronously above; a freshly
+    // pulled one applies on the next start (avoids an await-before-arm leak / a live
+    // registry rebuild). The `closed` guard prevents a late write/log during shutdown.
+    if (!deps.connectorRegistry && creds) {
+      const c = creds;
+      void fetchActiveConnectorCatalog({ baseUrl: c.url, token: c.token })
+        .then((fetched) => {
+          if (fetched && !closed) {
+            saveCachedConnectorCatalog(fetched);
+            log("info", `connector catalog ${fetched.version} cached (applies next start)`);
+          }
+        })
+        .catch(() => {});
     }
   });
 }

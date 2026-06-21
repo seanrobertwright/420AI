@@ -4,6 +4,11 @@ import { hostname as osHostname, homedir } from "node:os";
 import { parseClaudeCodeSession } from "./connectors/claude-code.js";
 import { connectors as defaultConnectors } from "./connectors/connector.js";
 import { loadRegistry } from "./connectors/registry.js";
+import {
+  fetchActiveConnectorCatalog,
+  loadCachedConnectorCatalog,
+  saveCachedConnectorCatalog,
+} from "./connectors/connector-catalog-cache.js";
 import { CUSTOM_CONNECTOR_CONFIG_PATH } from "./connectors/custom-connector.js";
 import { discoverWorkspaces } from "./discovery/discover-engine.js";
 import { SqliteStore } from "./store/sqlite-store.js";
@@ -163,10 +168,20 @@ export async function runWatch(opts: {
 }): Promise<void> {
   const creds = resolveCreds(opts);
   const home = opts.home ?? homedir();
-  // Merge built-ins + valid custom connectors (M10-S2). The plain CLI must merge
-  // too, else `collector watch` would capture only the built-ins while `serve` did
-  // both. Surface any dropped (invalid/colliding) defs through the logger callback.
-  const { connectors, dropped } = loadRegistry(home);
+  // M12 12.7c: best-effort pull of the active signed connector catalog → cache it.
+  // Offline-first: a failed pull (offline / 204 / bad signature) falls back to the
+  // cached catalog, then the bundled baseline (loadRegistry with no catalog ⇒
+  // byte-identical to today). Never blocks capture; the helper never throws.
+  const fetched = await fetchActiveConnectorCatalog({ baseUrl: creds.url, token: creds.token });
+  if (fetched) {
+    saveCachedConnectorCatalog(fetched);
+    opts.logger?.(`connector catalog ${fetched.version} pulled and cached`);
+  }
+  const cachedCatalog = loadCachedConnectorCatalog();
+  // Merge built-ins + valid custom connectors (M10-S2), then overlay the signed catalog.
+  // The plain CLI must merge too, else `collector watch` would capture only the built-ins
+  // while `serve` did both. Surface any dropped (invalid/colliding) defs through the logger.
+  const { connectors, dropped } = loadRegistry(home, { catalog: cachedCatalog?.payload });
   for (const d of dropped) opts.logger?.(`custom connector "${d.id}" dropped: ${d.reason}`);
   await runCaptureEngine({
     creds,

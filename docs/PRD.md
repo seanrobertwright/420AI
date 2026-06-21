@@ -782,7 +782,9 @@ Requirements:
     - **Slice 12.7 — Connector hardening.** Close the connector gaps: Codex CLI **tool-call failure
       classification** (currently a `knownGap` — no structured `is_error`); **per-connector permission
       scopes** (§8.1, deferred since M3); **connector-catalog-as-data** (M10 catalog signing is pricing-
-      only — make connector definitions/locations catalog-driven too); and resolve the **Cursor**
+      only — make connector definitions/locations catalog-driven too; **12.7c implemented 2026-06-21** —
+      signed `connector_catalogs` + machine-authed collector pull + registry overlay, parsers stay code);
+      and resolve the **Cursor**
       (`%APPDATA%\Cursor`) + **Antigravity** research gates (ship if feasible, never block GA).
     - **Slice 12.8 — Export & distribution polish.** **Parquet** export (deferred past V1); a **restore/
       import** path (V1 exports are inspection-grade only); and desktop distribution: a \*\*signed installer
