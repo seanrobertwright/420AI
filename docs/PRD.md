@@ -80,10 +80,13 @@ The MVP is successful when one Windows machine can:
   past V1.)
 
 **Stretch / research-gated (not required for MVP):** Antigravity (IDE + CLI) and Cursor
-connectors are targeted but gated until their capture surfaces are verified. The spike found
-Antigravity records rich tool actions but **no token/cost data**, and Cursor's `~/.cursor`
-store is a code-provenance tracker rather than a conversation store (real chat history lives
-in `%APPDATA%\Cursor`, not yet inspected). These ship when feasible and never block the MVP.
+connectors are targeted but gated until their capture surfaces are verified. The M12.7d spike
+(2026-06-20) **closed the gate by deferring both**: Antigravity records rich tool actions but
+**no token/cost data** (schema-less binary protobuf, no shipped `.proto`), and Cursor's
+`~/.cursor` store is a code-provenance tracker — its real chat history lives in
+`%APPDATA%\Cursor\…\state.vscdb` (now inspected: 22k message bubbles, partial token data),
+but recovering it needs a **new SQLite poll capture mode**, so it is deferred to a dedicated
+post-GA slice. Neither blocks the MVP (see §10.1, §25-M12.7d).
 
 ## 8. Architecture
 
@@ -207,10 +210,10 @@ cost (cost is computed — see §13).**
 
 **Stretch / research-gated (not required for MVP):**
 
-| Connector               | Store                                                              | Finding                                                           | Status                               |
-| ----------------------- | ------------------------------------------------------------------ | ----------------------------------------------------------------- | ------------------------------------ |
-| Antigravity (IDE + CLI) | `~/.gemini/antigravity-*`                                          | rich tool-action trace but **no token/cost**; some protobuf state | Experimental — actions-only possible |
-| Cursor                  | `~/.cursor/ai-tracking/ai-code-tracking.db` (code-provenance only) | real chat history is in `%APPDATA%\Cursor` — not yet inspected    | Planned — needs follow-up research   |
+| Connector               | Store                                                                                  | Finding                                                                                                                      | Status                                                                         |
+| ----------------------- | -------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| Antigravity (IDE + CLI) | `~/.gemini/antigravity-*` (conversations are binary `.pb`)                             | rich tool-action trace but **no token/cost**; schema-less binary protobuf, no shipped `.proto`                               | **Deferred (12.7d)** — drop/keep-gated; lowest value, highest decode effort    |
+| Cursor                  | `%APPDATA%\Cursor\…\state.vscdb` (`cursorDiskKV`; `~/.cursor` is code-provenance only) | chat IS recoverable — 22k message bubbles, model in `composerData.modelConfig`, **partial** token data, secret keys to avoid | **Deferred (12.7d)** — needs a new SQLite **poll** capture mode → own V2 slice |
 
 ### 10.1.1 Liveness Levels
 
@@ -658,13 +661,17 @@ Requirements:
 - ✅ _App-level encryption of sensitive fields?_ — Yes, field-level encryption from day one (§18.1).
 - ✅ _First implementation milestone after approval?_ — Milestone 1 walking skeleton:
   Claude Code connector → ingest → store → one report (§25).
+- ✅ _Cursor follow-up: does `%APPDATA%\Cursor` expose a usable conversation/token store?_ — **Yes**
+  (M12.7d spike): `…\state.vscdb` `cursorDiskKV` holds 22k message bubbles with partial token data and
+  the model in `composerData.modelConfig`. But it is WAL-mode SQLite, so the text-based `parse(fileText)`
+  contract can't ingest it without a new **poll** capture mode — **deferred to a dedicated V2 slice**
+  (§10.1, §25-M12.7d).
 
 **Still open:**
 
 - What is the first concrete schema migration for raw records, normalized events, and stable entities?
 - What is the minimum viable theGridCN layout for Live Monitor and Reports?
 - How should report comparison be visualized in the dashboard?
-- Cursor follow-up: does `%APPDATA%\Cursor` expose a usable conversation/token store?
 - Confirm Codex `session_meta` carries `cwd`/git info, and that Gemini `projectHash` is a
   stable hash of the project path (both for project attribution).
 
@@ -784,8 +791,13 @@ Requirements:
       scopes** (§8.1, deferred since M3); **connector-catalog-as-data** (M10 catalog signing is pricing-
       only — make connector definitions/locations catalog-driven too; **12.7c implemented 2026-06-21** —
       signed `connector_catalogs` + machine-authed collector pull + registry overlay, parsers stay code);
-      and resolve the **Cursor**
-      (`%APPDATA%\Cursor`) + **Antigravity** research gates (ship if feasible, never block GA).
+      and resolve the **Cursor** (`%APPDATA%\Cursor`) + **Antigravity** research gates (ship if
+      feasible, never block GA). **12.7d resolved 2026-06-20 → DEFER BOTH:** a live read-only spike
+      located Cursor's chat in `%APPDATA%\Cursor\…\state.vscdb` (`cursorDiskKV` — 22k message bubbles,
+      partial token data, model in `composerData.modelConfig`, secret keys to avoid), but it is WAL-mode
+      SQLite that the text-based `parse(fileText)` contract can't ingest, so Cursor needs a new **SQLite
+      poll capture mode** and moves to its own post-GA slice; Antigravity is schema-less binary protobuf
+      with **no token/cost** ⇒ dropped/kept-gated. Neither blocks GA (the point of the gate).
     - **Slice 12.8 — Export & distribution polish.** **Parquet** export (deferred past V1); a **restore/
       import** path (V1 exports are inspection-grade only); and desktop distribution: a \*\*signed installer
       - auto-update** and the **MSI/WiX\*\* target (both need a code-signing certificate — the gating cost).
