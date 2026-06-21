@@ -38,6 +38,7 @@ export type ControlCommand =
   | { cmd: "discover" } //             optional: trigger M5 discovery
   | { cmd: "connectors.list" } //      Slice 2: request a `connectors` event (registry + persisted enablement)
   | { cmd: "connectors.set"; id: string; enabled: boolean; config?: Record<string, unknown> } // Slice 2: persist per-connector enable/disable (`config` reserved/forward-compat — ignored today)
+  | { cmd: "connectors.approve"; id: string } // Slice 12.7b: record the connector's CURRENT capture-surface scope as approved (§10.4)
   | { cmd: "stop" }; //                graceful drain + exit
 
 /**
@@ -56,7 +57,20 @@ export interface ConnectorInfo {
   tokens: "exact" | "estimated" | "none";
   cost: "reported" | "computed" | "none";
   knownGaps: string[];
-  watchGlobs: string[]; // resolved against home — the "permission scope" (which files it reads)
+  watchGlobs: string[]; // resolved against home — the raw read scope (which files it reads)
+  /**
+   * Slice 12.7b (§10.3): human-readable statements of what this connector reads —
+   * the "Capture Permission" scope the user reviews/approves (distinct from the raw
+   * `watchGlobs`). Mirrored 1:1 from `ConnectorFidelity.requiredPermissions`.
+   */
+  requiredPermissions: string[];
+  /**
+   * Slice 12.7b (§8.1/§10.4): the connector's capture-surface approval state.
+   * `"needs-approval"` ⇒ its current scope drifted from what was last approved and
+   * it is WITHHELD from capture until `connectors.approve`. Default-on: a fresh /
+   * unrecorded connector is seeded `"approved"` at boot.
+   */
+  approval: "approved" | "needs-approval";
   /** True for user-defined config connectors (M10-S2 custom connectors); absent/false ⇒ a built-in. */
   custom?: boolean;
 }
@@ -85,4 +99,4 @@ export type ControlEvent =
   | { type: "error"; message: string; cmd?: string };
 
 /** Stamps the control-protocol wire shape (sibling of MONITOR_VERSION / ALERT_VERSION). */
-export const CONTROL_PROTOCOL_VERSION = "m11-control-v2" as const;
+export const CONTROL_PROTOCOL_VERSION = "m12-control-v3" as const;

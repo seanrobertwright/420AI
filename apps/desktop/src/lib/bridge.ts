@@ -47,6 +47,11 @@ export function setConnector(id: string, enabled: boolean): Promise<void> {
   return sendCommand({ cmd: "connectors.set", id, enabled });
 }
 
+/** Approve a connector's CURRENT capture surface (records its scope fingerprint as approved). */
+export function approveConnector(id: string): Promise<void> {
+  return sendCommand({ cmd: "connectors.approve", id });
+}
+
 /**
  * GUI pairing (Slice 3). Rust does the HTTP handshake against `/v1/pair`, stores the
  * issued token in the OS keychain, and `configure`s the sidecar — the token is born in

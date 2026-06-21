@@ -4,6 +4,10 @@ import { runServe, type ServeDeps } from "./serve.js";
 import type { CaptureEngineOptions } from "./capture-engine.js";
 import { connectors as defaultConnectors, type Connector } from "./connectors/connector.js";
 import type { ConnectorConfig } from "./connectors/connector-config.js";
+import {
+  captureSurfaceFingerprint,
+  type ConnectorApprovals,
+} from "./connectors/connector-approvals.js";
 import type { ControlCommand, ControlEvent } from "@420ai/shared";
 
 /**
@@ -72,6 +76,10 @@ function makeHarness(overrides: Partial<ServeDeps> = {}): Harness {
     });
   };
 
+  // Default in-memory approvals seam so seed-on-boot never touches the real ~/.420ai.
+  // (Tests that need to assert drift inject their own via overrides.)
+  let approvalsBlob: ConnectorApprovals = { version: "test", approved: {} };
+
   const deps: ServeDeps = {
     stdin,
     stdout,
@@ -86,6 +94,13 @@ function makeHarness(overrides: Partial<ServeDeps> = {}): Harness {
     // Inject the built-in registry by default so non-overriding tests never read the
     // real ~/.420ai/custom-connectors.json (runServe's loadRegistry branch is skipped).
     connectorRegistry: defaultConnectors,
+    loadConnectorApprovals: () => ({
+      version: approvalsBlob.version,
+      approved: { ...approvalsBlob.approved },
+    }),
+    saveConnectorApprovals: (next) => {
+      approvalsBlob = { version: next.version, approved: { ...next.approved } };
+    },
     ...overrides,
   };
 
@@ -177,6 +192,7 @@ function fakeConnector(id: string): Connector {
       tokens: "exact",
       cost: "reported",
       knownGaps: [`${id} gap`],
+      requiredPermissions: [`Read ${id} session files`],
     },
     watchGlobs: (home: string) => [`${home}/.${id}/**/*.jsonl`],
     parse: () => ({ rawRecords: [], events: [], skippedLines: 0 }),
@@ -214,7 +230,8 @@ describe("serve connector management (Slice 2)", () => {
     )) as Extract<ControlEvent, { type: "connectors" }>;
     expect(ev.connectors.map((c) => c.id)).toEqual(["claude-code", "codex-cli"]);
     expect(ev.connectors.every((c) => c.enabled)).toBe(true);
-    // The mapper carries fidelity 1:1 + the resolved watch globs (permission scope).
+    // The mapper carries fidelity 1:1 + the resolved watch globs (permission scope) +
+    // the declared §10.3 permissions and the §10.4 approval state (seeded approved).
     expect(ev.connectors[0]).toMatchObject({
       id: "claude-code",
       status: "stable",
@@ -224,7 +241,10 @@ describe("serve connector management (Slice 2)", () => {
       cost: "reported",
       knownGaps: ["claude-code gap"],
       watchGlobs: ["/fake/home/.claude-code/**/*.jsonl"],
+      requiredPermissions: ["Read claude-code session files"],
+      approval: "approved",
     });
+    expect(ev.connectors.every((c) => c.approval === "approved")).toBe(true);
   });
 
   it("connectors.set persists; a follow-up list shows the id disabled", async () => {
@@ -291,6 +311,129 @@ describe("serve connector management (Slice 2)", () => {
     });
     await h.send({ cmd: "start" }, (e) => e.type === "status" && e.state === "running");
     expect(seen?.map((c) => c.id)).toEqual(["claude-code"]);
+    await h.send({ cmd: "stop" }, (e) => e.type === "stopped");
+    await h.done;
+  });
+});
+
+/** An in-memory approvals seam (a closure over a mutable blob). */
+function inMemoryApprovals(initial: ConnectorApprovals["approved"] = {}): {
+  load: () => ConnectorApprovals;
+  save: (cfg: ConnectorApprovals) => void;
+  saved: () => number;
+} {
+  let cfg: ConnectorApprovals = { version: "test", approved: { ...initial } };
+  let saves = 0;
+  return {
+    load: () => ({ version: cfg.version, approved: { ...cfg.approved } }),
+    save: (next) => {
+      saves += 1;
+      cfg = { version: next.version, approved: { ...next.approved } };
+    },
+    saved: () => saves,
+  };
+}
+
+describe("serve connector approvals (Slice 12.7b)", () => {
+  const registry = [fakeConnector("claude-code"), fakeConnector("codex-cli")];
+  const HOME = "/fake/home";
+
+  it("connectors.approve records the surface + acks + re-emits; the seam is persisted", async () => {
+    const approvals = inMemoryApprovals();
+    const h = makeHarness({
+      connectorRegistry: registry,
+      home: HOME,
+      loadConnectorApprovals: approvals.load,
+      saveConnectorApprovals: approvals.save,
+    });
+    const savesBeforeCmd = approvals.saved(); // boot seed already ran
+    // approve acks THEN re-emits `connectors` synchronously — wait for the trailing
+    // connectors event (the ack precedes it in the captured stream).
+    const ev = (await h.send(
+      { cmd: "connectors.approve", id: "codex-cli" },
+      (e) => e.type === "connectors",
+    )) as Extract<ControlEvent, { type: "connectors" }>;
+    expect(h.events.some((e) => e.type === "ack" && e.cmd === "connectors.approve")).toBe(true);
+    expect(approvals.saved()).toBeGreaterThan(savesBeforeCmd); // approval persisted
+    expect(ev.connectors.find((c) => c.id === "codex-cli")?.approval).toBe("approved");
+  });
+
+  it("connectors.approve for an unknown id → error event, no throw, loop survives", async () => {
+    const approvals = inMemoryApprovals();
+    const h = makeHarness({
+      connectorRegistry: registry,
+      home: HOME,
+      loadConnectorApprovals: approvals.load,
+      saveConnectorApprovals: approvals.save,
+    });
+    const err = await h.send(
+      { cmd: "connectors.approve", id: "ghost-cli" },
+      (e) => e.type === "error",
+    );
+    expect(err).toMatchObject({ type: "error", cmd: "connectors.approve" });
+    expect((err as { message: string }).message).toMatch(/unknown connector id/);
+    const st = await h.send({ cmd: "status" }, (e) => e.type === "status");
+    expect(st).toMatchObject({ type: "status", state: "idle" });
+  });
+
+  it("a drifted connector is reported needs-approval AND withheld from the engine", async () => {
+    // Pre-seed codex-cli with a STALE fingerprint (simulating a prior, narrower scope) so
+    // its current surface drifts on boot. claude-code is left unrecorded ⇒ seeded approved.
+    const approvals = inMemoryApprovals({ "codex-cli": { surfaceFingerprint: "stale-deadbeef" } });
+    let seen: Connector[] | undefined;
+    const runEngine = (opts: CaptureEngineOptions): Promise<void> => {
+      seen = opts.connectors;
+      return new Promise<void>((resolve) => {
+        if (opts.signal.aborted) return resolve();
+        opts.signal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    };
+    const h = makeHarness({
+      connectorRegistry: registry,
+      home: HOME,
+      loadConnectorApprovals: approvals.load,
+      saveConnectorApprovals: approvals.save,
+      runEngine,
+    });
+    const ev = (await h.send(
+      { cmd: "connectors.list" },
+      (e) => e.type === "connectors",
+    )) as Extract<ControlEvent, { type: "connectors" }>;
+    expect(ev.connectors.find((c) => c.id === "codex-cli")?.approval).toBe("needs-approval");
+    expect(ev.connectors.find((c) => c.id === "claude-code")?.approval).toBe("approved");
+
+    await h.send({ cmd: "start" }, (e) => e.type === "status" && e.state === "running");
+    // The drifted connector is withheld from capture (filtered out of the engine's registry).
+    expect(seen?.map((c) => c.id)).toEqual(["claude-code"]);
+    await h.send({ cmd: "stop" }, (e) => e.type === "stopped");
+    await h.done;
+  });
+
+  it("approving a drifted connector restores it to capture on the next start", async () => {
+    const approvals = inMemoryApprovals({ "codex-cli": { surfaceFingerprint: "stale-deadbeef" } });
+    let seen: Connector[] | undefined;
+    const runEngine = (opts: CaptureEngineOptions): Promise<void> => {
+      seen = opts.connectors;
+      return new Promise<void>((resolve) => {
+        if (opts.signal.aborted) return resolve();
+        opts.signal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    };
+    const h = makeHarness({
+      connectorRegistry: registry,
+      home: HOME,
+      loadConnectorApprovals: approvals.load,
+      saveConnectorApprovals: approvals.save,
+      runEngine,
+    });
+    await h.send({ cmd: "connectors.approve", id: "codex-cli" }, (e) => e.type === "ack");
+    // Sanity: the persisted fingerprint now matches the connector's current surface.
+    const codex = registry.find((c) => c.id === "codex-cli")!;
+    expect(approvals.load().approved["codex-cli"]?.surfaceFingerprint).toBe(
+      captureSurfaceFingerprint(codex, HOME),
+    );
+    await h.send({ cmd: "start" }, (e) => e.type === "status" && e.state === "running");
+    expect(seen?.map((c) => c.id)?.sort()).toEqual(["claude-code", "codex-cli"]);
     await h.send({ cmd: "stop" }, (e) => e.type === "stopped");
     await h.done;
   });

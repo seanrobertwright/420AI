@@ -38,6 +38,13 @@ export interface ConnectorFidelity {
   cost: "reported" | "computed" | "none";
   /** Honest list of what this connector does NOT yet capture/correlate. */
   knownGaps: string[];
+  /**
+   * §10.3 declared capture scope — human-readable statements of what this connector
+   * reads (reviewed/approved by the user). Distinct from the raw `watchGlobs`: these
+   * are the "Capture Permission" the user reviews (docs/CONTEXT.md). A change here (or
+   * in `watchGlobs`) is a "Capture Surface Change" that requires fresh approval (§10.4).
+   */
+  requiredPermissions: string[];
   /** Tool versions this connector has been validated against. */
   testedVersions?: string[];
 }

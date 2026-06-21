@@ -14,6 +14,15 @@ import {
   filterConnectors,
   type ConnectorConfig,
 } from "./connectors/connector-config.js";
+import {
+  loadConnectorApprovals as loadConnectorApprovalsDefault,
+  saveConnectorApprovals as saveConnectorApprovalsDefault,
+  seedMissingApprovals,
+  approvalStatus,
+  approveConnector,
+  filterByApproval,
+  type ConnectorApprovals,
+} from "./connectors/connector-approvals.js";
 import type { ControlCommand, ControlEvent, ConnectorInfo } from "@420ai/shared";
 
 /** Built-in connector ids, computed once — `mapConnectorInfo` flags anything else as `custom`. */
@@ -66,6 +75,10 @@ export interface ServeDeps {
   loadConnectorConfig?: () => ConnectorConfig;
   /** Slice 2: persist per-connector enablement; defaults to the persisted config module. */
   saveConnectorConfig?: (cfg: ConnectorConfig) => void;
+  /** Slice 12.7b: read per-connector capture-surface approvals; defaults to the persisted module. */
+  loadConnectorApprovals?: () => ConnectorApprovals;
+  /** Slice 12.7b: persist per-connector capture-surface approvals; defaults to the persisted module. */
+  saveConnectorApprovals?: (cfg: ConnectorApprovals) => void;
   /** Slice 2: home dir used to resolve a connector's `watchGlobs` (permission scope). */
   home?: string;
 }
@@ -76,7 +89,12 @@ export interface ServeDeps {
  * import `Connector`, so the fidelity fields are mirrored on the wire) — a serve
  * test asserts this mapping stays 1:1 with `ConnectorFidelity`.
  */
-function mapConnectorInfo(c: Connector, enabled: boolean, home: string): ConnectorInfo {
+function mapConnectorInfo(
+  c: Connector,
+  enabled: boolean,
+  home: string,
+  approval: "approved" | "needs-approval",
+): ConnectorInfo {
   return {
     id: c.id,
     enabled,
@@ -87,6 +105,9 @@ function mapConnectorInfo(c: Connector, enabled: boolean, home: string): Connect
     cost: c.fidelity.cost,
     knownGaps: c.fidelity.knownGaps,
     watchGlobs: c.watchGlobs(home),
+    // Slice 12.7b: the declared §10.3 scope + the §10.4 approval state.
+    requiredPermissions: c.fidelity.requiredPermissions,
+    approval,
     // A connector whose id is not a built-in is a user-defined custom connector (M10-S2).
     custom: !BUILTIN_IDS.has(c.id),
   };
@@ -128,6 +149,18 @@ export function runServe(deps: ServeDeps = {}): Promise<void> {
   const connectorRegistry = registry.connectors;
   const loadConnectorCfg = deps.loadConnectorConfig ?? loadConnectorConfigDefault;
   const saveConnectorCfg = deps.saveConnectorConfig ?? saveConnectorConfigDefault;
+  const loadApprovals = deps.loadConnectorApprovals ?? loadConnectorApprovalsDefault;
+  const saveApprovals = deps.saveConnectorApprovals ?? saveConnectorApprovalsDefault;
+
+  // Slice 12.7b: seed-on-first-sight (default-on). Record the current capture-surface
+  // fingerprint for any connector not yet known, establishing the baseline so a LATER
+  // drift is detectable as a §10.4 "capture surface change". Synchronous (no await) —
+  // it precedes the Promise executor's listener/timer arming (leak-window rule), and
+  // the registry is already resolved above.
+  {
+    const seeded = seedMissingApprovals(connectorRegistry, loadApprovals(), home);
+    if (seeded.changed) saveApprovals(seeded.approvals);
+  }
 
   let state: ServeState = "idle";
   let intent: Intent = null;
@@ -159,11 +192,17 @@ export function runServe(deps: ServeDeps = {}): Promise<void> {
     emit({ type: "status", state, pending: stats.pending, inflight: stats.inflight, lastSyncAt });
   }
 
-  /** Emit the current registry + persisted enablement as a `connectors` event (Slice 2). */
+  /** Emit the current registry + persisted enablement + approval state as a `connectors` event. */
   function emitConnectors(): void {
     const cfg = loadConnectorCfg();
+    const approvals = loadApprovals();
     const connectors = connectorRegistry.map((c) =>
-      mapConnectorInfo(c, cfg.connectors[c.id]?.enabled !== false, home),
+      mapConnectorInfo(
+        c,
+        cfg.connectors[c.id]?.enabled !== false,
+        home,
+        approvalStatus(c, approvals, home),
+      ),
     );
     emit({ type: "connectors", connectors });
   }
@@ -181,10 +220,17 @@ export function runServe(deps: ServeDeps = {}): Promise<void> {
     controller = ctrl;
     intent = "running";
     state = "running";
-    // Slice 2: re-read enablement at each (re)start and hand the engine the FILTERED
-    // registry. The M3/M4 capture core is unchanged — this is the existing
-    // `CaptureEngineOptions.connectors` seam (capture-engine.ts).
-    const enabledConnectors = filterConnectors(connectorRegistry, loadConnectorCfg());
+    // Slice 2 + 12.7b: re-read enablement AND approvals at each (re)start and hand the
+    // engine the FILTERED registry. The M3/M4 capture core is unchanged — this is the
+    // existing `CaptureEngineOptions.connectors` seam (capture-engine.ts). Both filters
+    // compose: a connector must be enabled AND its capture surface approved to capture.
+    // Re-reading approvals here means an approval granted mid-session takes effect on the
+    // next start (mirroring how enablement is re-read). Default-on preserved by both.
+    const enabledConnectors = filterByApproval(
+      filterConnectors(connectorRegistry, loadConnectorCfg()),
+      loadApprovals(),
+      home,
+    );
     enginePromise = runEngine({
       creds,
       signal: ctrl.signal,
@@ -289,6 +335,24 @@ export function runServe(deps: ServeDeps = {}): Promise<void> {
         const cfg = loadConnectorCfg();
         cfg.connectors[c.id] = { enabled: c.enabled };
         saveConnectorCfg(cfg);
+        emit({ type: "ack", cmd: c.cmd });
+        emitConnectors();
+        return;
+      }
+      case "connectors.approve": {
+        // Defense-in-depth at the stdin boundary (the Rust relay forwards opaque JSON).
+        if (typeof c.id !== "string") {
+          emit({ type: "error", message: "connectors.approve requires id:string", cmd: c.cmd });
+          return;
+        }
+        // Record the connector's CURRENT capture surface as the approved baseline (§10.4).
+        // Unknown id ⇒ clean error (capture unaffected) — mirrors connectors.set's guard.
+        const found = connectorRegistry.find((conn) => conn.id === c.id);
+        if (!found) {
+          emit({ type: "error", message: "unknown connector id", cmd: c.cmd });
+          return;
+        }
+        saveApprovals(approveConnector(found, loadApprovals(), home));
         emit({ type: "ack", cmd: c.cmd });
         emitConnectors();
         return;

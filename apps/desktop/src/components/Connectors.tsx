@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import type { ControlEvent, ConnectorInfo } from "@420ai/shared";
-import { listConnectors, setConnector, onControlEvent } from "@/lib/bridge";
+import { listConnectors, setConnector, approveConnector, onControlEvent } from "@/lib/bridge";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -31,6 +31,13 @@ export function Connectors() {
   const toggle = (c: ConnectorInfo): void => {
     setError(null);
     setConnector(c.id, !c.enabled).catch((err) => setError(String(err)));
+  };
+
+  // Approve the connector's CURRENT capture surface (§10.4). The sidecar re-emits the
+  // `connectors` event, so the panel refreshes via the shared listener — no refetch.
+  const approve = (c: ConnectorInfo): void => {
+    setError(null);
+    approveConnector(c.id).catch((err) => setError(String(err)));
   };
 
   // Request the list (the `connectors` event arrives on the shared stream). Exposed so
@@ -118,29 +125,52 @@ export function Connectors() {
                       </div>
                     ) : null}
                   </TableCell>
-                  <TableCell className="text-muted-foreground align-top font-mono text-xs">
-                    {/* Do not truncate — the user is reviewing the real read scope. */}
-                    <div className="space-y-0.5 break-all whitespace-normal">
-                      {c.watchGlobs.length > 0 ? (
-                        c.watchGlobs.map((g, i) => <div key={`${g}:${i}`}>{g}</div>)
+                  <TableCell className="text-muted-foreground align-top text-xs">
+                    {/* Do not truncate — the user is reviewing the real read scope (§10.3). */}
+                    <div className="space-y-0.5 break-words whitespace-normal">
+                      {c.requiredPermissions.length > 0 ? (
+                        c.requiredPermissions.map((p, i) => <div key={`perm:${p}:${i}`}>{p}</div>)
                       ) : (
                         <span>—</span>
                       )}
                     </div>
+                    {c.watchGlobs.length > 0 ? (
+                      <div className="mt-1 space-y-0.5 font-mono break-all whitespace-normal opacity-70">
+                        {c.watchGlobs.map((g, i) => (
+                          <div key={`glob:${g}:${i}`}>{g}</div>
+                        ))}
+                      </div>
+                    ) : null}
                   </TableCell>
                   <TableCell className="align-top text-right">
-                    <button
-                      type="button"
-                      onClick={() => toggle(c)}
-                      className={cn(
-                        "inline-flex h-8 items-center rounded-md border px-3 text-sm font-medium transition-colors",
-                        c.enabled
-                          ? "border-input bg-background hover:bg-accent"
-                          : "border-transparent bg-primary text-primary-foreground hover:opacity-90",
-                      )}
-                    >
-                      {c.enabled ? "Disable" : "Enable"}
-                    </button>
+                    <div className="flex flex-col items-end gap-2">
+                      {c.approval === "needs-approval" ? (
+                        <>
+                          <Badge variant="outline" className="text-destructive border-destructive">
+                            needs review
+                          </Badge>
+                          <button
+                            type="button"
+                            onClick={() => approve(c)}
+                            className="inline-flex h-8 items-center rounded-md border border-transparent bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:opacity-90"
+                          >
+                            Approve
+                          </button>
+                        </>
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={() => toggle(c)}
+                        className={cn(
+                          "inline-flex h-8 items-center rounded-md border px-3 text-sm font-medium transition-colors",
+                          c.enabled
+                            ? "border-input bg-background hover:bg-accent"
+                            : "border-transparent bg-primary text-primary-foreground hover:opacity-90",
+                        )}
+                      >
+                        {c.enabled ? "Disable" : "Enable"}
+                      </button>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))}

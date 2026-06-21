@@ -15,6 +15,7 @@ function stubConnector(id: string, hints: RootHint[]): Connector {
       tokens: "none",
       cost: "none",
       knownGaps: [],
+      requiredPermissions: [],
     },
     watchGlobs: () => [],
     parse: () => ({ rawRecords: [], events: [], skippedLines: 0 }),
