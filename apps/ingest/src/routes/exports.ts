@@ -248,9 +248,7 @@ export default async function exportRoutes(app: FastifyInstance): Promise<void> 
         metrics: row.metrics,
         markdown: row.markdown,
         generatedAt:
-          row.generatedAt instanceof Date
-            ? row.generatedAt.toISOString()
-            : String(row.generatedAt),
+          row.generatedAt instanceof Date ? row.generatedAt.toISOString() : String(row.generatedAt),
       });
       const exportedAt = new Date().toISOString();
       const manifest: ExportManifest = {
@@ -264,8 +262,7 @@ export default async function exportRoutes(app: FastifyInstance): Promise<void> 
         redactionFindings: findings,
       };
 
-      const body =
-        format === "md" ? report.markdown : JSON.stringify({ manifest, report });
+      const body = format === "md" ? report.markdown : JSON.stringify({ manifest, report });
 
       return sendExport(reply, {
         format,
@@ -328,9 +325,7 @@ export default async function exportRoutes(app: FastifyInstance): Promise<void> 
       } else if (format === "jsonl") {
         body = toJsonl(redactedEntries);
       } else {
-        body = redactedEntries
-          .map((e) => `**${e.role}** (${e.ts}):\n\n${e.text}`)
-          .join("\n\n");
+        body = redactedEntries.map((e) => `**${e.role}** (${e.ts}):\n\n${e.text}`).join("\n\n");
       }
 
       return sendExport(reply, {

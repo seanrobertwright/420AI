@@ -29,10 +29,7 @@ export async function createMachine(
 
 /** Record that a machine just authenticated (for last-seen / liveness, PRD §20). */
 export async function touchLastSeen(db: DbClient, machineId: string): Promise<void> {
-  await db
-    .update(machines)
-    .set({ lastSeenAt: new Date() })
-    .where(eq(machines.id, machineId));
+  await db.update(machines).set({ lastSeenAt: new Date() }).where(eq(machines.id, machineId));
 }
 
 /**

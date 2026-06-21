@@ -14,6 +14,9 @@
     "typecheck": "tsc -b",
     "build": "tsc -b",
     "test": "vitest run",
+    "lint": "eslint .",
+    "format": "prettier --write \"**/*.{ts,tsx,js,mjs,json,md}\"",
+    "format:check": "prettier --check \"**/*.{ts,tsx,js,mjs,json,md}\"",
     "repo-health": "node scripts/repo-health.mjs",
     "repo-health:fast": "node scripts/repo-health.mjs --fast",
     "prepare": "git config core.hooksPath .githooks",
@@ -35,11 +38,17 @@
     "build:desktop": "npm run build:collector-sea && npm run build -w @420ai/desktop && cd apps/desktop && cargo tauri build"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.4",
     "@types/node": "^24",
     "esbuild": "^0.28",
+    "eslint": "^9.39.4",
+    "eslint-config-prettier": "^9.1.2",
+    "globals": "^15.15.0",
     "postject": "^1.0.0-alpha.6",
+    "prettier": "^3.8.4",
     "tsx": "^4",
     "typescript": "^6",
+    "typescript-eslint": "^8.61.1",
     "vitest": "^4"
   }
 }

@@ -9,7 +9,15 @@ import {
 import type { ModelPricing } from "./pricing.js";
 
 function rate(over: Partial<ModelPricing> = {}): ModelPricing {
-  return { input: 1e-6, output: 2e-6, cache_read: 0, cache_write: 0, sourceUrl: "x", asOf: "2026-06-13", ...over };
+  return {
+    input: 1e-6,
+    output: 2e-6,
+    cache_read: 0,
+    cache_write: 0,
+    sourceUrl: "x",
+    asOf: "2026-06-13",
+    ...over,
+  };
 }
 
 const content: CatalogContent = {
@@ -19,7 +27,9 @@ const content: CatalogContent = {
 
 /** Sign canonicalized content with a private key → base64 detached ed25519 (mirrors the offline signer). */
 function signWith(privatePem: string, c: CatalogContent): string {
-  return cryptoSign(null, Buffer.from(canonicalizeCatalog(c), "utf8"), privatePem).toString("base64");
+  return cryptoSign(null, Buffer.from(canonicalizeCatalog(c), "utf8"), privatePem).toString(
+    "base64",
+  );
 }
 
 describe("canonicalizeCatalog", () => {
@@ -72,7 +82,9 @@ describe("verifyCatalogSignature", () => {
 
   it("a wrong (other) key → false", () => {
     const sig = signWith(privPem, content);
-    const other = generateKeyPairSync("ed25519").publicKey.export({ type: "spki", format: "pem" }).toString();
+    const other = generateKeyPairSync("ed25519")
+      .publicKey.export({ type: "spki", format: "pem" })
+      .toString();
     expect(verifyCatalogSignature(content, sig, other)).toBe(false);
   });
 

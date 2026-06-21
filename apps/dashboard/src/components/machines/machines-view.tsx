@@ -83,7 +83,9 @@ export function MachinesView({
                           ({m.queueInflight ?? 0} in-flight)
                         </span>
                       </TableCell>
-                      <TableCell className="font-mono text-xs">{m.collectorVersion ?? "—"}</TableCell>
+                      <TableCell className="font-mono text-xs">
+                        {m.collectorVersion ?? "—"}
+                      </TableCell>
                       <TableCell className="text-muted-foreground">
                         {formatAgo(m.lastHeartbeatAt ?? m.lastSeenAt, nowMs)}
                       </TableCell>
@@ -125,7 +127,9 @@ export function MachinesView({
                         {w.gitBranch ?? "—"}
                       </TableCell>
                       <TableCell className="font-mono text-xs">{w.projectId ?? "—"}</TableCell>
-                      <TableCell className="text-muted-foreground">{formatAgo(w.lastSeenAt, nowMs)}</TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {formatAgo(w.lastSeenAt, nowMs)}
+                      </TableCell>
                       <TableCell>
                         <WorkspaceRemap
                           workspaceId={w.id}

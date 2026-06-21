@@ -58,7 +58,9 @@ export function ExportView() {
     end: evEnd,
   });
   const reportUrl = reportId.trim()
-    ? buildUrl(`/api/reports/${encodeURIComponent(reportId.trim())}/export`, { format: reportFormat })
+    ? buildUrl(`/api/reports/${encodeURIComponent(reportId.trim())}/export`, {
+        format: reportFormat,
+      })
     : null;
   const transcriptUrl = sessionId.trim()
     ? buildUrl(`/api/sessions/${encodeURIComponent(sessionId.trim())}/transcript/export`, {
@@ -67,7 +69,10 @@ export function ExportView() {
     : null;
 
   return (
-    <PageShell title="Export" subtitle="Download redacted archive data — no token leaves the server.">
+    <PageShell
+      title="Export"
+      subtitle="Download redacted archive data — no token leaves the server."
+    >
       <div className="space-y-8">
         {/* Events */}
         <Card>

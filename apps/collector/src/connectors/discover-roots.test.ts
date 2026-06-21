@@ -57,7 +57,10 @@ describe("connector discoverRoots ⇄ parse projectPath invariant (D2)", () => {
       timestamp: "2026-06-14T10:00:01.000Z",
       payload: { type: "user_message", message: "hi" },
     });
-    write(join(".codex", "sessions", "2026", "06", "14", "rollout-1.jsonl"), meta + "\n" + msg + "\n");
+    write(
+      join(".codex", "sessions", "2026", "06", "14", "rollout-1.jsonl"),
+      meta + "\n" + msg + "\n",
+    );
 
     const roots = await discoverCodexRoots(home);
     expect(roots).toHaveLength(1);

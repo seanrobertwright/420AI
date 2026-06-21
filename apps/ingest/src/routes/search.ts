@@ -19,24 +19,20 @@ import { adminAuthorized, isUuid } from "../auth.js";
 export default async function searchRoutes(app: FastifyInstance): Promise<void> {
   app.get<{
     Querystring: { q: string; type?: SearchEntityType; projectId?: string; limit?: number };
-  }>(
-    "/v1/search",
-    { schema: { querystring: searchQuerySchema } },
-    async (request, reply) => {
-      if (!adminAuthorized(app, request)) {
-        return reply.code(401).send({ error: "admin authorization required" });
-      }
-      const { q, type, projectId, limit } = request.query;
-      // A project filter must be a well-formed uuid (else a PG uuid-cast 500) →
-      // unknown/malformed id is 404, preserving the repo-wide invariant.
-      if (projectId !== undefined && !isUuid(projectId)) {
-        return reply.code(404).send({ error: "project not found" });
-      }
-      return reply
-        .code(200)
-        .send(await searchDocuments(app.db, { q, type, projectId: projectId ?? null, limit }));
-    },
-  );
+  }>("/v1/search", { schema: { querystring: searchQuerySchema } }, async (request, reply) => {
+    if (!adminAuthorized(app, request)) {
+      return reply.code(401).send({ error: "admin authorization required" });
+    }
+    const { q, type, projectId, limit } = request.query;
+    // A project filter must be a well-formed uuid (else a PG uuid-cast 500) →
+    // unknown/malformed id is 404, preserving the repo-wide invariant.
+    if (projectId !== undefined && !isUuid(projectId)) {
+      return reply.code(404).send({ error: "project not found" });
+    }
+    return reply
+      .code(200)
+      .send(await searchDocuments(app.db, { q, type, projectId: projectId ?? null, limit }));
+  });
 
   app.post("/v1/search/reindex", async (request, reply) => {
     if (!adminAuthorized(app, request)) {

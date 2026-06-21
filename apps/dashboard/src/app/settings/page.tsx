@@ -13,7 +13,10 @@ interface Health {
 /** GET ingest JSON on the server→ingest hop (D8), returning null on any non-200/throw. */
 async function getJson<T>(path: string): Promise<T | null> {
   try {
-    const res = await fetch(`${ingestUrl()}${path}`, { headers: await adminHeaders(), cache: "no-store" });
+    const res = await fetch(`${ingestUrl()}${path}`, {
+      headers: await adminHeaders(),
+      cache: "no-store",
+    });
     return res.ok ? ((await res.json()) as T) : null;
   } catch {
     return null;

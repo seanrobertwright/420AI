@@ -93,10 +93,7 @@ function mapTokens(t: GeminiTokens): NormalizedTokens {
  * `ParseResult` with `skippedLines: 1` (never throws), so the watcher does NOT
  * advance the cursor and retries on the next tick.
  */
-export function parseGeminiSession(
-  fileText: string,
-  opts?: { ingestedAt?: string },
-): ParseResult {
+export function parseGeminiSession(fileText: string, opts?: { ingestedAt?: string }): ParseResult {
   const ingestedAt = opts?.ingestedAt ?? new Date().toISOString();
   const rawRecords: RawSourceRecord[] = [];
   const events: NormalizedEvent[] = [];

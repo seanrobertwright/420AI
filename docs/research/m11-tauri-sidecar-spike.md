@@ -21,14 +21,14 @@ protocol between them.
 
 ## Toolchain — all present on this machine
 
-| Tool | Version / status | Note |
-|---|---|---|
-| `rustc` | 1.95.0 | Tauri v2 build host |
-| `cargo` | 1.95.0 | |
-| `tauri-cli` | 2.11.2 | Tauri v2 line |
-| `node:sea` | available (Node 24) | package the collector as a single executable — **no new dependency** |
-| WebView2 runtime | 149.x present | Tauri's Windows webview dependency |
-| Existing Tauri config | none | greenfield — new `apps/desktop` (or `src-tauri`) |
+| Tool                  | Version / status    | Note                                                                 |
+| --------------------- | ------------------- | -------------------------------------------------------------------- |
+| `rustc`               | 1.95.0              | Tauri v2 build host                                                  |
+| `cargo`               | 1.95.0              |                                                                      |
+| `tauri-cli`           | 2.11.2              | Tauri v2 line                                                        |
+| `node:sea`            | available (Node 24) | package the collector as a single executable — **no new dependency** |
+| WebView2 runtime      | 149.x present       | Tauri's Windows webview dependency                                   |
+| Existing Tauri config | none                | greenfield — new `apps/desktop` (or `src-tauri`)                     |
 
 ## Sidecar mechanism (Tauri v2) — VERIFIED via docs
 
@@ -49,6 +49,7 @@ file, then `node:sea` → a `.exe`, copied to `src-tauri/binaries/collector-x86_
 ## Tray — VERIFIED via docs
 
 `TrayIconBuilder` + `MenuBuilder` / `MenuItemBuilder` + `on_menu_event` (pattern-match on item ids).
+
 - **Gotcha:** dev hot-reload can spawn **duplicate tray icons** (tauri#8982) — build the tray once
   in `setup`, guard against re-creation.
 - Menu items can be updated at runtime to reflect status (e.g. "Status: running / paused").
@@ -82,13 +83,13 @@ config (env: `ARCHIVE_ENCRYPTION_KEY`, `ANALYSIS_*`, `ADMIN_TOKEN`, `DATABASE_UR
 
 ## Risks & mitigations
 
-| Risk | Mitigation |
-|---|---|
-| First Rust/Tauri surface in the repo (new language) | Sidecar keeps Rust thin (shell + tray + relay); all capture logic stays in tested Node/TS |
-| `node:sea` packaging on Windows (icon/asset edge cases) | Validate the `.exe` runs standalone early; fall back to `pkg` only if blocked |
+| Risk                                                                 | Mitigation                                                                                  |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| First Rust/Tauri surface in the repo (new language)                  | Sidecar keeps Rust thin (shell + tray + relay); all capture logic stays in tested Node/TS   |
+| `node:sea` packaging on Windows (icon/asset edge cases)              | Validate the `.exe` runs standalone early; fall back to `pkg` only if blocked               |
 | Long-running sidecar supervision (crash/restart, zombie on app quit) | Rust owns lifecycle; kill sidecar on app exit; restart-with-backoff; surface health in tray |
-| Managing server secrets from a workstation app | OS keychain only; never log; mirror the §18 "key outside the DB" discipline |
-| Duplicate tray icons in dev | Build tray once in `setup` (tauri#8982) |
+| Managing server secrets from a workstation app                       | OS keychain only; never log; mirror the §18 "key outside the DB" discipline                 |
+| Duplicate tray icons in dev                                          | Build tray once in `setup` (tauri#8982)                                                     |
 
 ## Conclusion
 

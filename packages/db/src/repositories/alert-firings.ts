@@ -165,12 +165,14 @@ export async function listAlertFirings(
         ),
       ),
     );
-  return rows.map(toFiring).sort(
-    (a, b) =>
-      rank(a) - rank(b) ||
-      SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity] ||
-      Date.parse(a.firstFiredAt) - Date.parse(b.firstFiredAt),
-  );
+  return rows
+    .map(toFiring)
+    .sort(
+      (a, b) =>
+        rank(a) - rank(b) ||
+        SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity] ||
+        Date.parse(a.firstFiredAt) - Date.parse(b.firstFiredAt),
+    );
 }
 
 /**
@@ -234,6 +236,9 @@ export async function deliverPendingFirings(
       log?.(err);
     }
     // Stamp regardless of outcome — at-most-once attempt, no 3-second retry spam.
-    await db.update(alertFirings).set({ deliveryAttemptedAt: now }).where(eq(alertFirings.id, r.id));
+    await db
+      .update(alertFirings)
+      .set({ deliveryAttemptedAt: now })
+      .where(eq(alertFirings.id, r.id));
   }
 }

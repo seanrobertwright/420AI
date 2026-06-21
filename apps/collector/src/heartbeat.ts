@@ -42,7 +42,10 @@ export function newHeartbeatState(): HeartbeatState {
  * Mutates `state.lastSentMs` to the attempt time (BEFORE awaiting the send) so a slow
  * or failing request never bunches up duplicate sends on the next tick.
  */
-export async function maybeSendHeartbeat(deps: HeartbeatDeps, state: HeartbeatState): Promise<void> {
+export async function maybeSendHeartbeat(
+  deps: HeartbeatDeps,
+  state: HeartbeatState,
+): Promise<void> {
   const nowMs = deps.now().getTime();
   if (nowMs - state.lastSentMs < deps.intervalMs) return; // throttle to the cadence
   state.lastSentMs = nowMs;

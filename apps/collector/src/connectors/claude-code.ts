@@ -228,9 +228,7 @@ export function parseClaudeCodeSession(
         const tokens = mapTokens(usage);
         events.push(makeEvent(rawId, 1, "usage.reported", record, { tokens }));
         const cost = computeCost(record.message?.model, tokens);
-        events.push(
-          makeEvent(rawId, 2, "cost.estimated", record, { tokens, cost }),
-        );
+        events.push(makeEvent(rawId, 2, "cost.estimated", record, { tokens, cost }));
       }
 
       // Tool calls + file events: one per tool_use block. `tool.call.started`

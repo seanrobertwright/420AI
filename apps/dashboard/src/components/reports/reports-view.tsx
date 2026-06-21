@@ -29,7 +29,10 @@ export function ReportsView({ reports }: { reports: ReportArtifactRow[] }) {
   const selected = reports.find((r) => r.id === selectedId) ?? null;
 
   return (
-    <PageShell title="Reports" subtitle="Versioned report artifacts (cost-over-time, session autopsy).">
+    <PageShell
+      title="Reports"
+      subtitle="Versioned report artifacts (cost-over-time, session autopsy)."
+    >
       <div className="space-y-8">
         <Card>
           <CardHeader>
@@ -54,10 +57,7 @@ export function ReportsView({ reports }: { reports: ReportArtifactRow[] }) {
                     <TableRow
                       key={r.id}
                       onClick={() => setSelectedId(r.id)}
-                      className={cn(
-                        "cursor-pointer",
-                        r.id === selectedId && "bg-muted/60",
-                      )}
+                      className={cn("cursor-pointer", r.id === selectedId && "bg-muted/60")}
                     >
                       <TableCell className="font-medium">{r.reportType}</TableCell>
                       <TableCell className="text-muted-foreground font-mono text-xs">
@@ -76,7 +76,9 @@ export function ReportsView({ reports }: { reports: ReportArtifactRow[] }) {
                           </Badge>
                         ) : null}
                       </TableCell>
-                      <TableCell className="text-muted-foreground">{formatDate(r.generatedAt)}</TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {formatDate(r.generatedAt)}
+                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -90,7 +92,9 @@ export function ReportsView({ reports }: { reports: ReportArtifactRow[] }) {
             <CardHeader>
               <CardTitle>
                 {selected.reportType}{" "}
-                <span className="text-muted-foreground text-sm font-normal">v{selected.version}</span>
+                <span className="text-muted-foreground text-sm font-normal">
+                  v{selected.version}
+                </span>
               </CardTitle>
             </CardHeader>
             <CardContent>

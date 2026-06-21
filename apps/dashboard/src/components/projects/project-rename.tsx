@@ -67,7 +67,12 @@ export function ProjectRename({
               className="border-border bg-background min-w-64 rounded-md border px-3 py-2 text-sm"
               aria-label="Project name"
             />
-            <button type="button" className={btn} disabled={!dirty || busy} onClick={() => void save()}>
+            <button
+              type="button"
+              className={btn}
+              disabled={!dirty || busy}
+              onClick={() => void save()}
+            >
               {busy ? "Saving…" : "Save"}
             </button>
             <button

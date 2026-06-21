@@ -86,10 +86,7 @@ export async function renameProject(
 }
 
 /** Look up a project's display name (for the discover mapping response). */
-export async function getProjectName(
-  db: DbClient,
-  projectId: string,
-): Promise<string | undefined> {
+export async function getProjectName(db: DbClient, projectId: string): Promise<string | undefined> {
   const [row] = await db
     .select({ name: projects.name })
     .from(projects)

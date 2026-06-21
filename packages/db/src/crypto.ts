@@ -61,7 +61,9 @@ function keyring(): Keyring {
     }
     const activeId = process.env.ARCHIVE_ENCRYPTION_ACTIVE_KEY_ID;
     if (!activeId || !keys.has(activeId)) {
-      throw new Error("ARCHIVE_ENCRYPTION_ACTIVE_KEY_ID must name a key in ARCHIVE_ENCRYPTION_KEYS");
+      throw new Error(
+        "ARCHIVE_ENCRYPTION_ACTIVE_KEY_ID must name a key in ARCHIVE_ENCRYPTION_KEYS",
+      );
     }
     return { keys, activeId };
   }

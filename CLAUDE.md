@@ -8,6 +8,7 @@ conventions. Background: `SUMMARY.md` (build loop + decisions), `docs/PRD.md`, `
 ## Workspaces
 
 npm workspaces, all strict TS, Node ≥ 24:
+
 - `packages/shared` — token shape, event taxonomy, fingerprint, pricing, cost, ingest wire types
 - `packages/db` — Drizzle Postgres schema + migrations, AES-256-GCM field encryption, repositories
 - `apps/ingest` — Fastify Ingest API (pairing, bearer-authed idempotent ingest, health)
@@ -67,7 +68,8 @@ prints. Daemons take an optional `logger` callback wired by the entrypoint.
 ## Local state
 
 `~/.420ai/` is the collector home: `credentials.json` (M2 pairing) + `queue.sqlite` (M3 durable queue
-+ per-file cursors). It lives outside the repo and is never committed (`*.sqlite` is gitignored).
+
+- per-file cursors). It lives outside the repo and is never committed (`*.sqlite` is gitignored).
 
 ## Testing
 
@@ -139,8 +141,8 @@ the int test asserting it could never have passed against a real DB, so the laye
   restrict the WHERE to the relevant `event_type`s when a null-keyed all-zero row would be noise (e.g.
   `usageByModel` filters to `usage.reported`/`cost.estimated`).
 - **A guard sufficient for a READ is insufficient for a WRITE that adds an FK.** The M6 projection reads
-  return 200-zeros for an unknown project uuid (`isUuid → 404` only screens *malformed* ids, never
-  inserts). An M7-style *write* whose row carries a FK (`report_artifacts.project_id → projects.id`)
+  return 200-zeros for an unknown project uuid (`isUuid → 404` only screens _malformed_ ids, never
+  inserts). An M7-style _write_ whose row carries a FK (`report_artifacts.project_id → projects.id`)
   turns a well-formed-but-nonexistent id into an **FK-violation 500** at insert. Guard write paths with an
   **existence check** (e.g. `getProjectName(id)` undefined → 404), not just `isUuid`, to preserve the
   repo-wide "unknown id → 404, never a DB-constraint/cast 500" invariant.

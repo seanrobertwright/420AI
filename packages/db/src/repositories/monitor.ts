@@ -79,7 +79,9 @@ export async function activeSessions(
       startedAt: sql<string | null>`min(${events.ts})`,
       lastEventAt: sql<string | null>`max(${events.ts})`,
       eventCount: sql<number>`count(${events.fingerprint})::int`,
-      models: sql<string[]>`coalesce(array_agg(distinct ${events.model}) filter (where ${events.model} is not null), '{}')`,
+      models: sql<
+        string[]
+      >`coalesce(array_agg(distinct ${events.model}) filter (where ${events.model} is not null), '{}')`,
       projectPath: sql<string | null>`max(${events.projectPath})`,
       gitBranch: sql<string | null>`max(${events.gitBranch})`,
     })

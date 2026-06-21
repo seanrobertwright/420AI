@@ -4,7 +4,11 @@ import type { FastifyInstance } from "fastify";
 import { createDb, recordHeartbeat, recordIngestAuthFailure } from "@420ai/db";
 import type { AlertFiring, LiveMonitorSnapshot } from "@420ai/shared";
 import { buildApp } from "./app.js";
-import { AnalysisProviderError, type AnalysisProvider, type AnalysisRequest } from "./analysis/provider.js";
+import {
+  AnalysisProviderError,
+  type AnalysisProvider,
+  type AnalysisRequest,
+} from "./analysis/provider.js";
 
 const TEST_URL = process.env.DATABASE_URL_TEST;
 const ADMIN = "test-admin";
@@ -74,7 +78,11 @@ describe.skipIf(!TEST_URL)("alert delivery + new §20 conditions (HTTP e2e via i
   }
 
   function getMonitor() {
-    return app.inject({ method: "GET", url: "/v1/monitor", headers: { authorization: `Bearer ${ADMIN}` } });
+    return app.inject({
+      method: "GET",
+      url: "/v1/monitor",
+      headers: { authorization: `Bearer ${ADMIN}` },
+    });
   }
 
   it("delivers a newly-opened firing exactly once; a second read does NOT re-deliver", async () => {
@@ -115,7 +123,9 @@ describe.skipIf(!TEST_URL)("alert delivery + new §20 conditions (HTTP e2e via i
     const alert = body.alerts.find((a) => a.code === "ingest.auth_failure");
     expect(alert).toBeDefined();
     expect(alert!.severity).toBe("warning");
-    expect(body.alertFirings.some((f) => f.code === "ingest.auth_failure" && f.status === "open")).toBe(true);
+    expect(
+      body.alertFirings.some((f) => f.code === "ingest.auth_failure" && f.status === "open"),
+    ).toBe(true);
   });
 
   it("archive.unreachable surfaces for an online machine reporting ≥3 consecutive sync failures", async () => {
@@ -131,7 +141,9 @@ describe.skipIf(!TEST_URL)("alert delivery + new §20 conditions (HTTP e2e via i
     const body = (await getMonitor()).json() as LiveMonitorSnapshot;
     expect(body.machines[0]!.status).toBe("online");
     expect(body.machines[0]!.consecutiveSyncFailures).toBe(3);
-    const alert = body.alerts.find((a) => a.code === "archive.unreachable" && a.machineId === machineId);
+    const alert = body.alerts.find(
+      (a) => a.code === "archive.unreachable" && a.machineId === machineId,
+    );
     expect(alert).toBeDefined();
     expect(alert!.severity).toBe("warning");
   });

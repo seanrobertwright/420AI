@@ -32,15 +32,8 @@ export async function createPairingCode(
  * Redeem a pairing code: validate + mark consumed atomically. Single-use.
  * Pass the transaction handle so this composes with createMachine/issueIngestToken.
  */
-export async function redeemPairingCode(
-  tx: DbClient,
-  code: string,
-): Promise<{ userId: string }> {
-  const [row] = await tx
-    .select()
-    .from(pairingCodes)
-    .where(eq(pairingCodes.code, code))
-    .limit(1);
+export async function redeemPairingCode(tx: DbClient, code: string): Promise<{ userId: string }> {
+  const [row] = await tx.select().from(pairingCodes).where(eq(pairingCodes.code, code)).limit(1);
 
   if (!row) throw new PairingError("unknown pairing code", "unknown");
   if (row.consumedAt) throw new PairingError("pairing code already used", "consumed");
@@ -48,10 +41,7 @@ export async function redeemPairingCode(
     throw new PairingError("pairing code expired", "expired");
   }
 
-  await tx
-    .update(pairingCodes)
-    .set({ consumedAt: new Date() })
-    .where(eq(pairingCodes.code, code));
+  await tx.update(pairingCodes).set({ consumedAt: new Date() }).where(eq(pairingCodes.code, code));
 
   return { userId: row.userId };
 }

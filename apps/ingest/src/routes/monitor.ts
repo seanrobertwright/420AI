@@ -45,7 +45,11 @@ const ACTIVE_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
  * samples, merged + re-sorted by `sortAlerts`), it reconciles them against the persisted
  * open firings (evaluate-on-read — no background dispatcher) and attaches `alertFirings`.
  */
-async function buildSnapshot(db: DbClient, userId: string, now: Date): Promise<LiveMonitorSnapshot> {
+async function buildSnapshot(
+  db: DbClient,
+  userId: string,
+  now: Date,
+): Promise<LiveMonitorSnapshot> {
   const nowMs = now.getTime();
   const sinceIso = new Date(nowMs - ACTIVE_WINDOW_MS).toISOString();
   const trendSince = new Date(nowMs - BACKLOG_TREND_WINDOW_MS);
@@ -168,7 +172,9 @@ export default async function monitorRoutes(app: FastifyInstance): Promise<void>
       } catch (err) {
         // The error handler is bypassed post-hijack — emit + keep the stream alive.
         if (!closed) {
-          reply.raw.write(`event: error\ndata: ${JSON.stringify({ error: "snapshot failed" })}\n\n`);
+          reply.raw.write(
+            `event: error\ndata: ${JSON.stringify({ error: "snapshot failed" })}\n\n`,
+          );
         }
         request.log.error(err);
       }

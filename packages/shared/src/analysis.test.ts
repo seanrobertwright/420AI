@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { buildAnalysisPrompt, AI_REPORT_VERSION, type SessionBundle, type ProjectBundle } from "./analysis.js";
+import {
+  buildAnalysisPrompt,
+  AI_REPORT_VERSION,
+  type SessionBundle,
+  type ProjectBundle,
+} from "./analysis.js";
 import { zeroTokens } from "./tokens.js";
 
 function sessionBundle(): SessionBundle {
@@ -36,7 +41,12 @@ function sessionBundle(): SessionBundle {
       { role: "assistant", text: "sure, here is a plan" },
     ],
     redactionFindings: [
-      { kind: "anthropic_key", ruleId: "anthropic_key", count: 1, placeholder: "[REDACTED:anthropic_key]" },
+      {
+        kind: "anthropic_key",
+        ruleId: "anthropic_key",
+        count: 1,
+        placeholder: "[REDACTED:anthropic_key]",
+      },
     ],
     transcriptTruncated: false,
   };

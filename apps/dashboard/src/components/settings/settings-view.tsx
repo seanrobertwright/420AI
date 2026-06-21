@@ -93,7 +93,8 @@ export function SettingsView({
 
         <Card>
           <CardContent className="text-muted-foreground pt-6 text-sm">
-            Editable settings (auth, scheduled reports, provider config) arrive in a later M12 slice.
+            Editable settings (auth, scheduled reports, provider config) arrive in a later M12
+            slice.
           </CardContent>
         </Card>
       </div>

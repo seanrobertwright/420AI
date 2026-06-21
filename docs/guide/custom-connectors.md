@@ -49,13 +49,13 @@ A dropped declaration prints its reason, e.g. `dropped custom-bad: connector "cu
   "version": "m10-custom-v1",
   "connectors": [
     {
-      "id": "custom-mytool",          // REQUIRED. Non-empty, unique, NOT a built-in id.
-                                      //   Recommended: a "custom-" prefix.
-      "displayName": "My Tool",       // optional, cosmetic
+      "id": "custom-mytool", // REQUIRED. Non-empty, unique, NOT a built-in id.
+      //   Recommended: a "custom-" prefix.
+      "displayName": "My Tool", // optional, cosmetic
       "watchGlobs": ["C:/tmp/mytool/*.log"], // REQUIRED. Absolute glob(s). Forward slashes
-                                      //   work on every OS. `~` is NOT expanded — use a full path.
-      "format": "jsonl",              // REQUIRED. "jsonl" | "regex"
-      "pattern": "…",                 // REQUIRED iff format === "regex" (see below)
+      //   work on every OS. `~` is NOT expanded — use a full path.
+      "format": "jsonl", // REQUIRED. "jsonl" | "regex"
+      "pattern": "…", // REQUIRED iff format === "regex" (see below)
 
       // Field sources. For "jsonl" these are DOT-PATHS into each parsed line
       // (e.g. "meta.session"); for "regex" they are named-capture GROUP NAMES.
@@ -63,14 +63,14 @@ A dropped declaration prints its reason, e.g. `dropped custom-bad: connector "cu
       "sessionIdField": "session",
       "projectPathField": "cwd",
       "modelField": "model",
-      "eventTypeField": "kind",       // per-line event type; see §4
+      "eventTypeField": "kind", // per-line event type; see §4
 
       "eventType": "message.assistant", // constant fallback when eventTypeField is absent/empty
 
       // Optional usage mapping (numeric sources). Present ⇒ fidelity.tokens = "estimated".
-      "tokenMap": { "input": "usage.in", "output": "usage.out" }
-    }
-  ]
+      "tokenMap": { "input": "usage.in", "output": "usage.out" },
+    },
+  ],
 }
 ```
 
@@ -95,13 +95,18 @@ Each non-blank line is `JSON.parse`d, then each field source is read as a **dot-
   "sessionIdField": "meta.session",
   "projectPathField": "cwd",
   "eventTypeField": "kind",
-  "tokenMap": { "input": "usage.in", "output": "usage.out" }
+  "tokenMap": { "input": "usage.in", "output": "usage.out" },
 }
 ```
 
 ```jsonc
 // a matching log line
-{"meta":{"ts":"2026-06-19T00:00:00Z","session":"s1"},"cwd":"/proj","kind":"message.assistant","usage":{"in":10,"out":20}}
+{
+  "meta": { "ts": "2026-06-19T00:00:00Z", "session": "s1" },
+  "cwd": "/proj",
+  "kind": "message.assistant",
+  "usage": { "in": 10, "out": 20 },
+}
 ```
 
 → one `message.assistant` event for session `s1`, project `/proj`, with `input=10`, `output=20`.
@@ -120,7 +125,7 @@ falls back to the capture time and no `ts` group is required.
   "pattern": "^(?<ts>\\S+)\\s+session=(?<sessionId>\\S+)\\s+kind=(?<kind>\\S+)\\s+(?<msg>.*)$",
   "tsField": "ts",
   "sessionIdField": "sessionId",
-  "eventTypeField": "kind"
+  "eventTypeField": "kind",
 }
 ```
 

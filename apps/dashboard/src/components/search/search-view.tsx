@@ -58,7 +58,9 @@ export function SearchView() {
         return;
       }
       const c = (await res.json()) as ReindexCounts;
-      setReindexMsg(`Reindexed ${c.total} (${c.projects} projects, ${c.sessions} sessions, ${c.reports} reports).`);
+      setReindexMsg(
+        `Reindexed ${c.total} (${c.projects} projects, ${c.sessions} sessions, ${c.reports} reports).`,
+      );
     } catch {
       setReindexMsg("Ingest unreachable.");
     } finally {
@@ -166,7 +168,10 @@ export function SearchView() {
                       <div className="flex items-center gap-2">
                         <Badge className={cn(ENTITY_BADGE[hit.entityType])}>{hit.entityType}</Badge>
                         {href ? (
-                          <Link href={href} className="text-primary text-sm font-medium hover:underline">
+                          <Link
+                            href={href}
+                            className="text-primary text-sm font-medium hover:underline"
+                          >
                             {title}
                           </Link>
                         ) : (

@@ -1,12 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import type { ModelPricing } from "@420ai/shared";
 import { verifyCatalogSignature } from "@420ai/shared";
-import {
-  insertPendingCatalog,
-  listCatalogs,
-  approveCatalog,
-  rejectCatalog,
-} from "@420ai/db";
+import { insertPendingCatalog, listCatalogs, approveCatalog, rejectCatalog } from "@420ai/db";
 import { catalogUploadBodySchema } from "../schemas.js";
 import { adminAuthorized, isUuid } from "../auth.js";
 

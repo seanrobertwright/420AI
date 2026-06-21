@@ -103,10 +103,7 @@ function mapTokens(usage: CodexTokenUsage): NormalizedTokens {
  * Tolerant: a malformed line is skipped and counted (`skippedLines`), never
  * throwing. Raw records are pushed verbatim before any normalization.
  */
-export function parseCodexSession(
-  fileText: string,
-  opts?: { ingestedAt?: string },
-): ParseResult {
+export function parseCodexSession(fileText: string, opts?: { ingestedAt?: string }): ParseResult {
   const ingestedAt = opts?.ingestedAt ?? new Date().toISOString();
   const rawRecords: RawSourceRecord[] = [];
   const events: NormalizedEvent[] = [];
@@ -184,9 +181,7 @@ export function parseCodexSession(
     .sort();
   if (parsed.length > 0) {
     const sessionRawId = `${resolvedSession}:session`;
-    events.push(
-      makeEvent(sessionRawId, 0, "session.started", timestamps[0], undefined),
-    );
+    events.push(makeEvent(sessionRawId, 0, "session.started", timestamps[0], undefined));
   }
 
   // --- Pass 2: per-record events (carry model forward from turn_context) ---
@@ -234,10 +229,7 @@ export function parseCodexSession(
             payload: { name: payload.name, call_id: payload.call_id },
           }),
         );
-      } else if (
-        subType === "function_call_output" ||
-        subType === "custom_tool_call_output"
-      ) {
+      } else if (subType === "function_call_output" || subType === "custom_tool_call_output") {
         // VERIFIED (D3): outputs are plain strings with no structured is_error
         // signal, so emit `completed` for every output and DEFER failure
         // classification (see knownGaps).
@@ -247,8 +239,7 @@ export function parseCodexSession(
           }),
         );
       } else if (subType === "message") {
-        const eventType: EventType =
-          payload.role === "user" ? "message.user" : "message.assistant";
+        const eventType: EventType = payload.role === "user" ? "message.user" : "message.assistant";
         events.push(makeEvent(rawId, 0, eventType, ts, currentModel));
       }
       continue;
@@ -259,13 +250,7 @@ export function parseCodexSession(
   if (parsed.length > 0) {
     const sessionRawId = `${resolvedSession}:session`;
     events.push(
-      makeEvent(
-        sessionRawId,
-        0,
-        "session.ended",
-        timestamps[timestamps.length - 1],
-        undefined,
-      ),
+      makeEvent(sessionRawId, 0, "session.ended", timestamps[timestamps.length - 1], undefined),
     );
   }
 
@@ -339,9 +324,7 @@ export const codexCliConnector: Connector = {
     liveness: "streaming",
     tokens: "exact",
     cost: "computed",
-    knownGaps: [
-      "tool-call failure classification deferred — outputs carry no structured is_error",
-    ],
+    knownGaps: ["tool-call failure classification deferred — outputs carry no structured is_error"],
     testedVersions: ["0.137.x"],
   },
   watchGlobs: (home) => codexWatchGlobs(home),

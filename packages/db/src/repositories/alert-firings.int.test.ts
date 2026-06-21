@@ -3,11 +3,7 @@ import { and, eq, sql } from "drizzle-orm";
 import type { OperationalAlert } from "@420ai/shared";
 import { createDb } from "../index.js";
 import { users, machines, alertFirings } from "../schema.js";
-import {
-  reconcileAlertFirings,
-  listAlertFirings,
-  ackAlertFiring,
-} from "./alert-firings.js";
+import { reconcileAlertFirings, listAlertFirings, ackAlertFiring } from "./alert-firings.js";
 
 const TEST_URL = process.env.DATABASE_URL_TEST;
 
@@ -153,9 +149,7 @@ describe.skipIf(!TEST_URL)("alert-firings repository (integration)", () => {
     await reconcileAlertFirings(dbh.db, userId, [offlineAlert()], farLater);
     const withOpen = await listAlertFirings(dbh.db, userId, new Date(farLater.getTime() + 60_000));
     expect(
-      withOpen.find(
-        (x) => x.alertKey === `collector.offline:${machineId}` && x.status === "open",
-      ),
+      withOpen.find((x) => x.alertKey === `collector.offline:${machineId}` && x.status === "open"),
     ).toBeDefined();
   });
 

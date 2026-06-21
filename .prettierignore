@@ -1,0 +1,22 @@
+# Build output / generated / vendored — never formatted.
+node_modules
+dist
+**/dist
+.next
+**/.next
+coverage
+**/*.min.js
+
+# Generated migration SQL + drizzle snapshots (drizzle-kit owns their formatting).
+packages/db/drizzle
+
+# Rust / Tauri target
+apps/desktop/src-tauri/target
+
+# Lockfiles + data
+package-lock.json
+*.sqlite
+
+# Internal planning/review scratch artifacts (append-only prose; not shipped — Prettier's
+# markdown reflow on these long-line docs is churny/unstable, so leave them as authored).
+.agents

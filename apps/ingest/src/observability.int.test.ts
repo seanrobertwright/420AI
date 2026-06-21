@@ -2,7 +2,11 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { createDb } from "@420ai/db";
 import { buildApp } from "./app.js";
-import { AnalysisProviderError, type AnalysisProvider, type AnalysisRequest } from "./analysis/provider.js";
+import {
+  AnalysisProviderError,
+  type AnalysisProvider,
+  type AnalysisRequest,
+} from "./analysis/provider.js";
 
 const TEST_URL = process.env.DATABASE_URL_TEST;
 const ADMIN = "test-admin";
@@ -64,11 +68,19 @@ describe.skipIf(!TEST_URL)("observability + rate limiting (HTTP e2e via inject)"
   it("counts a 2xx response in byStatusClass", async () => {
     // Read the current 2xx count, make a 200 (health), then confirm it rose.
     const before = (
-      await app.inject({ method: "GET", url: "/v1/metrics", headers: { authorization: `Bearer ${ADMIN}` } })
+      await app.inject({
+        method: "GET",
+        url: "/v1/metrics",
+        headers: { authorization: `Bearer ${ADMIN}` },
+      })
     ).json().byStatusClass["2xx"] as number;
     await app.inject({ method: "GET", url: "/v1/health" });
     const after = (
-      await app.inject({ method: "GET", url: "/v1/metrics", headers: { authorization: `Bearer ${ADMIN}` } })
+      await app.inject({
+        method: "GET",
+        url: "/v1/metrics",
+        headers: { authorization: `Bearer ${ADMIN}` },
+      })
     ).json().byStatusClass["2xx"] as number;
     // +2 at least: the /v1/health 200 AND the first /v1/metrics 200 both land before the read.
     expect(after).toBeGreaterThan(before);

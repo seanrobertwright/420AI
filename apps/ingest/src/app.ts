@@ -165,9 +165,7 @@ export function buildApp(opts: BuildAppOptions): FastifyInstance {
     // Provider failures (non-200/timeout/parse → 502; not-configured → 503). Placed
     // BEFORE the status>=500 masking branch, which would otherwise hide the message.
     if (err instanceof AnalysisProviderError) {
-      return reply
-        .code(err.kind === "not_configured" ? 503 : 502)
-        .send({ error: err.message });
+      return reply.code(err.kind === "not_configured" ? 503 : 502).send({ error: err.message });
     }
     if (err.validation) {
       return reply.code(400).send({ error: err.message });

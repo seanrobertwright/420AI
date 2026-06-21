@@ -58,9 +58,7 @@ export function loadCredentials(path = CREDENTIALS_PATH): Credentials | undefine
 export function requireCredentials(path = CREDENTIALS_PATH): Credentials {
   const creds = loadCredentials(path);
   if (!creds) {
-    throw new NotPairedError(
-      "not paired — run `collector pair <code> --url <baseUrl>` first",
-    );
+    throw new NotPairedError("not paired — run `collector pair <code> --url <baseUrl>` first");
   }
   return creds;
 }

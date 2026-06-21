@@ -20,7 +20,10 @@ export function ProjectReportActions({ projectId }: { projectId: string }) {
   const [done, setDone] = useState<string | null>(null);
 
   async function generate(kind: "cost" | "ai"): Promise<void> {
-    if (kind === "ai" && !window.confirm("Generate an AI interpretation? This calls a billable provider.")) {
+    if (
+      kind === "ai" &&
+      !window.confirm("Generate an AI interpretation? This calls a billable provider.")
+    ) {
       return;
     }
     setBusy(kind);
@@ -65,10 +68,20 @@ export function ProjectReportActions({ projectId }: { projectId: string }) {
   return (
     <div className="flex flex-col items-end gap-1">
       <div className="flex gap-2">
-        <button type="button" className={btn} disabled={busy !== null} onClick={() => void generate("cost")}>
+        <button
+          type="button"
+          className={btn}
+          disabled={busy !== null}
+          onClick={() => void generate("cost")}
+        >
           {busy === "cost" ? "Generating…" : "Generate cost report"}
         </button>
-        <button type="button" className={btn} disabled={busy !== null} onClick={() => void generate("ai")}>
+        <button
+          type="button"
+          className={btn}
+          disabled={busy !== null}
+          onClick={() => void generate("ai")}
+        >
           {busy === "ai" ? "Generating…" : "Generate AI interpretation"}
         </button>
       </div>

@@ -70,8 +70,4 @@ export interface Connector {
 }
 
 /** The active connector registry. M3: Claude only; M4 appends Codex/Gemini. */
-export const connectors: Connector[] = [
-  claudeCodeConnector,
-  codexCliConnector,
-  geminiCliConnector,
-];
+export const connectors: Connector[] = [claudeCodeConnector, codexCliConnector, geminiCliConnector];

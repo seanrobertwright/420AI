@@ -7,7 +7,7 @@ Build a self-hosted application that captures, archives, analyzes, and reports o
 V1 focuses on AI Coding Tools and runs as a **self-hosted, single-user** system. General AI Chat
 capture (ChatGPT, Claude, Gemini web/desktop sessions) **and** a multi-user / cloud-hosted SaaS
 product experience are both deferred to V2. (The archive schema is already multi-user-capable; only
-the V1 *product experience* is single-user.)
+the V1 _product experience_ is single-user.)
 
 ## 2. Problem
 
@@ -35,7 +35,7 @@ AI coding tools produce valuable but fragmented operational data. Sessions live 
 - ChatGPT, Claude, or Gemini web/app session capture.
 - Cloud-hosted SaaS version.
 - **Multi-user product experience / RBAC / tenancy** (the schema is multi-user-capable, but the V1
-  *and* M12-GA product experience stay single-user self-hosted; multi-user is a V2 concern).
+  _and_ M12-GA product experience stay single-user self-hosted; multi-user is a V2 concern).
 - Mobile application.
 - macOS or Linux collectors.
 - Browser extension capture.
@@ -74,7 +74,7 @@ The MVP is successful when one Windows machine can:
 - Store raw source records and normalized events.
 - Map sessions to projects and workspaces.
 - Compute cost, token, context, failure, and Git **metadata** metrics (Git outcome
-  *attribution* is manual-plus-heuristic in V1 — see §11.4).
+  _attribution_ is manual-plus-heuristic in V1 — see §11.4).
 - Generate Markdown reports with Mermaid diagrams.
 - Export report and archive data in Markdown, JSON, JSONL, and CSV. (Parquet is deferred
   past V1.)
@@ -196,21 +196,21 @@ cost (cost is computed — see §13).**
 
 **Required (MVP):**
 
-| Connector | Store location | Format | Liveness | Tokens / Model |
-| --- | --- | --- | --- | --- |
-| Claude Code | `~/.claude/projects/<cwd-slug>/<uuid>.jsonl` | JSONL, append | Streaming (tail) | exact / yes (+ `cwd`,`gitBranch` per record) |
-| OpenAI Codex CLI | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` + `history.jsonl` | JSONL, append | Streaming (tail) | exact, incl. reasoning+cached / yes |
-| Gemini CLI | `~/.gemini/tmp/<projectHash>/chats/session-*.json` | JSON, rewritten | Near-real-time (watch+diff) | exact per-msg / yes |
-| Generic file/log watcher | user-configured | any | per config | custom mapping |
+| Connector                | Store location                                                   | Format          | Liveness                    | Tokens / Model                               |
+| ------------------------ | ---------------------------------------------------------------- | --------------- | --------------------------- | -------------------------------------------- |
+| Claude Code              | `~/.claude/projects/<cwd-slug>/<uuid>.jsonl`                     | JSONL, append   | Streaming (tail)            | exact / yes (+ `cwd`,`gitBranch` per record) |
+| OpenAI Codex CLI         | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` + `history.jsonl` | JSONL, append   | Streaming (tail)            | exact, incl. reasoning+cached / yes          |
+| Gemini CLI               | `~/.gemini/tmp/<projectHash>/chats/session-*.json`               | JSON, rewritten | Near-real-time (watch+diff) | exact per-msg / yes                          |
+| Generic file/log watcher | user-configured                                                  | any             | per config                  | custom mapping                               |
 
 > **Build order:** Claude Code first (richest data + free Git context), then Codex, then Gemini.
 
 **Stretch / research-gated (not required for MVP):**
 
-| Connector | Store | Finding | Status |
-| --- | --- | --- | --- |
-| Antigravity (IDE + CLI) | `~/.gemini/antigravity-*` | rich tool-action trace but **no token/cost**; some protobuf state | Experimental — actions-only possible |
-| Cursor | `~/.cursor/ai-tracking/ai-code-tracking.db` (code-provenance only) | real chat history is in `%APPDATA%\Cursor` — not yet inspected | Planned — needs follow-up research |
+| Connector               | Store                                                              | Finding                                                           | Status                               |
+| ----------------------- | ------------------------------------------------------------------ | ----------------------------------------------------------------- | ------------------------------------ |
+| Antigravity (IDE + CLI) | `~/.gemini/antigravity-*`                                          | rich tool-action trace but **no token/cost**; some protobuf state | Experimental — actions-only possible |
+| Cursor                  | `~/.cursor/ai-tracking/ai-code-tracking.db` (code-provenance only) | real chat history is in `%APPDATA%\Cursor` — not yet inspected    | Planned — needs follow-up research   |
 
 ### 10.1.1 Liveness Levels
 
@@ -335,7 +335,7 @@ stamps the commit. V1 keeps this deliberately simple and defers the full weighte
 - **Manual linking** — the user can explicitly attach a session to a commit (confidence: manual).
 - **One lightweight heuristic suggestion** — same repository + commit within a configurable
   window after a session ends + at least one overlapping changed file → suggest a link at
-  low/medium confidence for the user to confirm. Auto-links are *suggestions*, never asserted facts.
+  low/medium confidence for the user to confirm. Auto-links are _suggestions_, never asserted facts.
 
 **Deferred to a later iteration** — the full hybrid scorer combining additional signals (branch/
 worktree match, tool activity, time-proximity weighting, user-correction learning).
@@ -394,7 +394,7 @@ reused by attribution (§11.4). Defining it precisely early is a high-leverage s
 ## 13. Cost And Usage Model
 
 **Spike reality:** none of the required connectors report cost — but all report **exact
-tokens**. So the normal path is *cost = exact tokens × catalog pricing*, which is a precise
+tokens**. So the normal path is _cost = exact tokens × catalog pricing_, which is a precise
 estimate, not a guess. "Reported cost" is a rarely-used top rung for these CLIs.
 
 ### 13.1 Token Sub-Types (required)
@@ -410,7 +410,7 @@ A flat input/output split would materially mis-cost every session.
 ### 13.2 Pricing Source
 
 - Pricing lives in the **connector catalog** as a table: `model → { per-sub-type $/token,
-  source URL, as-of date }`, covering at minimum the observed models: Claude (Opus/Sonnet/Haiku
+source URL, as-of date }`, covering at minimum the observed models: Claude (Opus/Sonnet/Haiku
   with cache tiers), `gpt-5.4` (+ reasoning + cached), `gemini-3-flash` (+ thoughts/cached).
 - Pricing updates ship via the catalog (independent of app releases — §10.4).
 - **Refresh is manual-trigger in V1** ("Check for pricing updates"); an optional schedule is a
@@ -612,7 +612,7 @@ Supported export formats:
 - JSON
 - JSONL
 - CSV
-- Parquet *(deferred past V1)*
+- Parquet _(deferred past V1)_
 
 Exports may be scoped by:
 
@@ -632,7 +632,7 @@ disposable, derived, and re-buildable at any time. Because the raw record is pre
 never lost — metrics can always be recomputed.
 
 **Reconciliation model (V1): upsert-by-fingerprint.** Re-parsing a raw record with an improved
-parser regenerates events with the *same* deterministic fingerprints (§12); those events
+parser regenerates events with the _same_ deterministic fingerprints (§12); those events
 **replace** the prior ones (upsert), each stamped with the `parser_version` that produced it.
 This is idempotent (re-running ingest cannot create duplicates) and simple. Because
 `parser_version` is stored, the design can later graduate to versioned event "generations"
@@ -652,11 +652,11 @@ Requirements:
 
 **Resolved (during PRD review + capture spike):**
 
-- ✅ *Which local paths/surfaces are available per MVP connector?* — Verified for Claude Code,
+- ✅ _Which local paths/surfaces are available per MVP connector?_ — Verified for Claude Code,
   Codex CLI, Gemini CLI; see §10.1 and `docs/research/connector-capture-spike.md`.
-- ✅ *Secret-scanning engine for the Redaction Pipeline?* — Regex + entropy scanner for V1 (§18.2).
-- ✅ *App-level encryption of sensitive fields?* — Yes, field-level encryption from day one (§18.1).
-- ✅ *First implementation milestone after approval?* — Milestone 1 walking skeleton:
+- ✅ _Secret-scanning engine for the Redaction Pipeline?_ — Regex + entropy scanner for V1 (§18.2).
+- ✅ _App-level encryption of sensitive fields?_ — Yes, field-level encryption from day one (§18.1).
+- ✅ _First implementation milestone after approval?_ — Milestone 1 walking skeleton:
   Claude Code connector → ingest → store → one report (§25).
 
 **Still open:**
@@ -720,7 +720,7 @@ Requirements:
 
 12. **Production Readiness / GA (post-V1).** **Planned.** Closes every item the V1/M11 build deliberately
     deferred, taking the product from "feature-built" to **shippable, self-hosted, single-user GA**. This
-    is a *single* milestone built in thin slices (each through the build loop in `SUMMARY.md` §2), in the
+    is a _single_ milestone built in thin slices (each through the build loop in `SUMMARY.md` §2), in the
     dependency order below. It targets the **self-hosted single-user** product experience — **multi-user /
     RBAC / tenancy and cloud SaaS remain V2** (§4). Origin: the 2026-06-20 deferral audit (recorded in
     `SUMMARY.md`) that swept every `defer`/`deferred`/non-goal note across the docs, plans, and code.
@@ -729,7 +729,7 @@ Requirements:
     (2) one milestone, sliced; (3) the archive-replay engine is **in** this milestone (Slice 12.5);
     (4) no V2/non-goal items pulled forward.
 
-    - **Slice 12.1 — Basic Search (§21). DONE (2026-06-20).** The last V1 *functional* hole. A redacted
+    - **Slice 12.1 — Basic Search (§21). DONE (2026-06-20).** The last V1 _functional_ hole. A redacted
       plaintext search projection (`search_documents`: redact-then-store via the M8 `redact()` engine —
       never index encrypted originals; session content decrypted, redacted, then indexed; rows stamp
       `REDACTION_VERSION`) with a DB-`GENERATED` `tsvector` + GIN index, served by PostgreSQL full-text
@@ -741,22 +741,22 @@ Requirements:
     - **Slice 12.2 — Dashboard surfaces (§8.4).** The other V1 hole — the dashboard was Live-Monitor-
       only. Build the remaining UIs over the **existing** ingest APIs (mostly presentation), keeping the
       token-never-in-browser proxy-Route-Handler discipline. **Sub-sliced:**
-        - **12.2a Foundation + read surfaces — DONE (2026-06-20):** a generalized server-only proxy
-          (`proxyJson`/`proxyStream`, forwards upstream status; 502 only on an unreachable hop), dashboard-
-          local wire types, shared formatters, a persistent nav + page shell, and **read-only** surfaces —
-          projects (list + detail), reports (list + Markdown view), search (the 12.1 redacted index), and
-          machines (status/backlog/heartbeat + workspaces). Zero backend change; `ADMIN_TOKEN` never reaches
-          the browser (grep==0, verified).
-        - **12.2b Mutations/admin surfaces — DONE (2026-06-20):** report generate (project + session,
-          cost + billable AI interpretation with confirm + distinct 503/502) and the report-comparison view
-          the stored `metrics` snapshot was the seam for (pure unit-tested `diffMetrics`), project
-          create/rename + workspace remap, catalog approve/reject (upload stays offline-signed CLI), search
-          reindex, pairing-code generate, read-only settings, and redacted export (events/report/transcript
-          via `proxyStream`, no token client-side). Additive `apps/dashboard` only (zero backend change);
-          `ADMIN_TOKEN` never in served HTML (grep==0 on every page, verified live) and 0 in `.next/static`.
-          **Deferred → later M12:** rich Markdown/Mermaid rendering, `ts_headline` bold-highlight, catalog
-          upload UI, machine/token revoke, editable settings (→ 12.3+), and a typed per-report-type diff.
-          With 12.2a + 12.2b landed, **Slice 12.2 is complete.**
+      - **12.2a Foundation + read surfaces — DONE (2026-06-20):** a generalized server-only proxy
+        (`proxyJson`/`proxyStream`, forwards upstream status; 502 only on an unreachable hop), dashboard-
+        local wire types, shared formatters, a persistent nav + page shell, and **read-only** surfaces —
+        projects (list + detail), reports (list + Markdown view), search (the 12.1 redacted index), and
+        machines (status/backlog/heartbeat + workspaces). Zero backend change; `ADMIN_TOKEN` never reaches
+        the browser (grep==0, verified).
+      - **12.2b Mutations/admin surfaces — DONE (2026-06-20):** report generate (project + session,
+        cost + billable AI interpretation with confirm + distinct 503/502) and the report-comparison view
+        the stored `metrics` snapshot was the seam for (pure unit-tested `diffMetrics`), project
+        create/rename + workspace remap, catalog approve/reject (upload stays offline-signed CLI), search
+        reindex, pairing-code generate, read-only settings, and redacted export (events/report/transcript
+        via `proxyStream`, no token client-side). Additive `apps/dashboard` only (zero backend change);
+        `ADMIN_TOKEN` never in served HTML (grep==0 on every page, verified live) and 0 in `.next/static`.
+        **Deferred → later M12:** rich Markdown/Mermaid rendering, `ts_headline` bold-highlight, catalog
+        upload UI, machine/token revoke, editable settings (→ 12.3+), and a typed per-report-type diff.
+        With 12.2a + 12.2b landed, **Slice 12.2 is complete.**
     - **Slice 12.3 — Auth hardening.** Replace the static `ADMIN_TOKEN` + hardcoded `DEFAULT_EMAIL` with a
       real **single-user admin login** (sessions/credentials), so a self-hosted deployment is not gated by
       a shared bearer string. Touches every admin route. **No multi-user/RBAC** (that is V2) — this only
@@ -768,14 +768,14 @@ Requirements:
       observability** for ingest/archive themselves (structured logs/metrics — distinct from the M9
       collector→monitor heartbeat); **ingest rate limiting**; a documented **encryption-key rotation**
       story (`ARCHIVE_ENCRYPTION_KEY` lives only in env today); and a **migration rollback** path.
-    - **Slice 12.5 — Archive-replay engine (§23).** The keystone deferred *capability*: a read-back →
+    - **Slice 12.5 — Archive-replay engine (§23).** The keystone deferred _capability_: a read-back →
       decrypt → re-parse path over the immutable raw records, so a newer parser or an approved pricing
       catalog can **retroactively** re-derive/re-price historical rows (today catalog signing re-prices
-      *going forward only*). Re-derived events **upsert in place by the unchanged fingerprint** (§12) and
+      _going forward only_). Re-derived events **upsert in place by the unchanged fingerprint** (§12) and
       re-stamp `parser_version`/`catalog_version`/`analysis_version` (§23) — zero duplicates. Makes the
       "raw sacred, projections disposable" promise fully real. Large but fairly independent.
     - **Slice 12.6 — Alert delivery + remaining §20 conditions.** Alerts today are derived/persisted/acked
-      but never *delivered*. Add a delivery channel (email and/or webhook) over the existing 3c firing
+      but never _delivered_. Add a delivery channel (email and/or webhook) over the existing 3c firing
       surface, plus the still-deferred conditions: `ingest.auth_failure` (401 tracking),
       `archive.unreachable`, and a **windowed** connector-failure rate (the current `connector.failing` is
       a lifetime ratio). Proactive cost/context **Efficiency Alerts** stay out (§20 V1 non-goal).
@@ -785,12 +785,12 @@ Requirements:
       only — make connector definitions/locations catalog-driven too); and resolve the **Cursor**
       (`%APPDATA%\Cursor`) + **Antigravity** research gates (ship if feasible, never block GA).
     - **Slice 12.8 — Export & distribution polish.** **Parquet** export (deferred past V1); a **restore/
-      import** path (V1 exports are inspection-grade only); and desktop distribution: a **signed installer
-      + auto-update** and the **MSI/WiX** target (both need a code-signing certificate — the gating cost).
-      Last because it is refinement and unblocks nothing else.
+      import** path (V1 exports are inspection-grade only); and desktop distribution: a \*\*signed installer
+      - auto-update** and the **MSI/WiX\*\* target (both need a code-signing certificate — the gating cost).
+        Last because it is refinement and unblocks nothing else.
 
     **Deferred from M12 (kept as V2 / explicit non-goals — do NOT pull in):** General AI Chat capture;
     multi-user product experience / RBAC / tenancy; cloud-hosted SaaS; mobile; browser-extension capture;
-    in-tool context-rule *enforcement* (V1 recommends only); full local-model lifecycle management;
+    in-tool context-rule _enforcement_ (V1 recommends only); full local-model lifecycle management;
     script/plugin custom-connector runtime; advanced semantic/vector search; subscription cost
     amortization; scheduled report generation / scheduled analysis (manual-first stays the default).

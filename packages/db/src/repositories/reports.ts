@@ -64,11 +64,7 @@ export async function getReportArtifact(
   db: DbClient,
   id: string,
 ): Promise<ReportArtifactRow | undefined> {
-  const [row] = await db
-    .select()
-    .from(reportArtifacts)
-    .where(eq(reportArtifacts.id, id))
-    .limit(1);
+  const [row] = await db.select().from(reportArtifacts).where(eq(reportArtifacts.id, id)).limit(1);
   return row as ReportArtifactRow | undefined;
 }
 

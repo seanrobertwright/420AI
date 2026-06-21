@@ -1,11 +1,7 @@
 import { postIngest, isUnauthorized } from "../ingest-client.js";
 import type { QueueStore, SyncOutcome } from "../queue/queue-store.js";
 import { maybeSendHeartbeat, newHeartbeatState } from "../heartbeat.js";
-import type {
-  IngestBatch,
-  RawRecordPayload,
-  EventPayload,
-} from "@420ai/shared";
+import type { IngestBatch, RawRecordPayload, EventPayload } from "@420ai/shared";
 
 /**
  * Sync worker: drains the durable queue to the M2 Ingest API. Library file —

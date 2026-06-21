@@ -3,13 +3,7 @@ import type { UnlistenFn } from "@tauri-apps/api/event";
 import type { ControlEvent, ConnectorInfo } from "@420ai/shared";
 import { listConnectors, setConnector, onControlEvent } from "@/lib/bridge";
 import { Badge } from "@/components/ui/badge";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Table,
   TableBody,
@@ -119,7 +113,9 @@ export function Connectors() {
                       <Badge variant="outline">cost: {c.cost}</Badge>
                     </div>
                     {c.knownGaps.length > 0 ? (
-                      <div className="text-muted-foreground mt-1">gaps: {c.knownGaps.join("; ")}</div>
+                      <div className="text-muted-foreground mt-1">
+                        gaps: {c.knownGaps.join("; ")}
+                      </div>
                     ) : null}
                   </TableCell>
                   <TableCell className="text-muted-foreground align-top font-mono text-xs">

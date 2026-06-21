@@ -10,7 +10,10 @@ export default async function CatalogPage() {
   let catalogs: PricingCatalogRow[] = [];
   try {
     // GET /v1/catalog → a BARE array (newest-first server-side).
-    const res = await fetch(`${ingestUrl()}/v1/catalog`, { headers: await adminHeaders(), cache: "no-store" });
+    const res = await fetch(`${ingestUrl()}/v1/catalog`, {
+      headers: await adminHeaders(),
+      cache: "no-store",
+    });
     if (res.ok) catalogs = (await res.json()) as PricingCatalogRow[];
   } catch {
     /* ingest unreachable — render an empty list rather than crashing the page */

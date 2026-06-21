@@ -24,7 +24,7 @@ OneDrive Files-On-Demand reparse-points and **locks** freshly built artifacts in
 uploads them, so `cargo tauri build` fails mid-build:
 
 - tauri-build's sidecar re-copy → `fs::remove_file(dest)` → `Os { code: 5, PermissionDenied, "Access
-  is denied." }`
+is denied." }`
 - the installer linker cannot write the bundle under `target/release/bundle`.
 
 Fix: redirect the Rust `target-dir` **out of** OneDrive. Create

@@ -50,7 +50,9 @@ export function ProjectsView({ projects }: { projects: ProjectRow[] }) {
                       <TableCell className="text-muted-foreground font-mono text-xs">
                         {p.gitRemote ?? "—"}
                       </TableCell>
-                      <TableCell className="text-muted-foreground">{formatDate(p.createdAt)}</TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {formatDate(p.createdAt)}
+                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>

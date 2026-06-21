@@ -27,11 +27,11 @@ Protocol shape exercised (the recommended first-cut command/event schema):
 
 ## Results — all PASS
 
-| Question | Result |
-|---|---|
-| Can the **real collector + `node:sqlite`** be packaged by `node:sea` into a standalone `.exe` that runs? | ✅ Yes. 88 MB artifact (full embedded runtime); durable SQLite queue works inside SEA. |
-| Does the **stdio JSON-lines bidirectional protocol** work (control + live status)? | ✅ Yes, identical under `node` and the SEA `.exe`. pause holds backlog steady `[2,2]`; resume advances; stop drains + exits 0. |
-| Does experimental-module noise pollute the protocol channel? | ✅ No. The `node:sqlite` ExperimentalWarning and the SEA warning go to **stderr**; **stdout stays pure JSON-lines**. |
+| Question                                                                                                 | Result                                                                                                                         |
+| -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| Can the **real collector + `node:sqlite`** be packaged by `node:sea` into a standalone `.exe` that runs? | ✅ Yes. 88 MB artifact (full embedded runtime); durable SQLite queue works inside SEA.                                         |
+| Does the **stdio JSON-lines bidirectional protocol** work (control + live status)?                       | ✅ Yes, identical under `node` and the SEA `.exe`. pause holds backlog steady `[2,2]`; resume advances; stop drains + exits 0. |
+| Does experimental-module noise pollute the protocol channel?                                             | ✅ No. The `node:sqlite` ExperimentalWarning and the SEA warning go to **stderr**; **stdout stays pure JSON-lines**.           |
 
 ## Findings that shape the plan
 

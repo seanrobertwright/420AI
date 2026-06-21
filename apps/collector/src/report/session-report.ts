@@ -51,7 +51,10 @@ export function renderSessionReport(events: NormalizedEvent[]): string {
   const toolsCompleted = events.filter((e) => e.eventType === "tool.call.completed").length;
   const toolsFailed = events.filter((e) => e.eventType === "tool.call.failed").length;
 
-  const tsValues = events.map((e) => e.ts).filter(Boolean).sort();
+  const tsValues = events
+    .map((e) => e.ts)
+    .filter(Boolean)
+    .sort();
   const timeRange =
     tsValues.length > 0 ? `${tsValues[0]} → ${tsValues[tsValues.length - 1]}` : "(none)";
 
@@ -61,7 +64,9 @@ export function renderSessionReport(events: NormalizedEvent[]): string {
   lines.push(`- **Project path:** ${projectPath}`);
   lines.push(`- **Git branch:** ${gitBranch}`);
   lines.push(`- **Model(s):** ${models.length ? models.join(", ") : "(unknown)"}`);
-  lines.push(`- **Events:** ${events.length} (user: ${userMsgs}, assistant: ${assistantMsgs}, tool calls: ${toolCalls})`);
+  lines.push(
+    `- **Events:** ${events.length} (user: ${userMsgs}, assistant: ${assistantMsgs}, tool calls: ${toolCalls})`,
+  );
   lines.push(`- **Files touched:** ${filesRead} read, ${filesModified} modified`);
   lines.push(`- **Tool outcomes:** ${toolsCompleted} completed, ${toolsFailed} failed`);
   lines.push(`- **Time range:** ${timeRange}`);
@@ -83,7 +88,7 @@ export function renderSessionReport(events: NormalizedEvent[]): string {
   lines.push("");
   lines.push("```mermaid");
   lines.push("pie showData");
-  lines.push('    title Token composition');
+  lines.push("    title Token composition");
   lines.push(`    "input" : ${tokens.input}`);
   lines.push(`    "output" : ${tokens.output}`);
   lines.push(`    "cache_read" : ${tokens.cache_read}`);

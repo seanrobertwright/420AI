@@ -17,7 +17,15 @@ import type { IngestBatch } from "@420ai/shared";
 const TEST_URL = process.env.DATABASE_URL_TEST;
 
 function rate(over: Partial<ModelPricing> = {}): ModelPricing {
-  return { input: 1e-6, output: 2e-6, cache_read: 0, cache_write: 0, sourceUrl: "x", asOf: "2026-06-20", ...over };
+  return {
+    input: 1e-6,
+    output: 2e-6,
+    cache_read: 0,
+    cache_write: 0,
+    sourceUrl: "x",
+    asOf: "2026-06-20",
+    ...over,
+  };
 }
 
 const PAYLOAD_V2: Record<string, ModelPricing> = {
@@ -40,7 +48,15 @@ function costBatch(): IngestBatch {
         sessionId: "rp-s1",
         model: "claude-opus-4-8",
         ts: "2026-06-14T00:00:00.000Z",
-        tokens: { input: 1000, output: 0, cache_read: 0, cache_write: 0, reasoning: 0, tool: 0, total: 1000 },
+        tokens: {
+          input: 1000,
+          output: 0,
+          cache_read: 0,
+          cache_write: 0,
+          reasoning: 0,
+          tool: 0,
+          total: 1000,
+        },
         cost: { usd: 0.005, confidence: "estimated-model-known", model: "claude-opus-4-8" },
       },
       {
@@ -54,7 +70,15 @@ function costBatch(): IngestBatch {
         sessionId: "rp-s1",
         model: "claude-opus-4-8",
         ts: "2026-06-14T00:01:00.000Z",
-        tokens: { input: 500, output: 0, cache_read: 0, cache_write: 0, reasoning: 0, tool: 0, total: 500 },
+        tokens: {
+          input: 500,
+          output: 0,
+          cache_read: 0,
+          cache_write: 0,
+          reasoning: 0,
+          tool: 0,
+          total: 500,
+        },
       },
     ],
   };
@@ -76,7 +100,10 @@ describe.skipIf(!TEST_URL)("pricing-catalogs repository (integration) — M10 3d
     await dbh.db.execute(
       sql`TRUNCATE pricing_catalogs, raw_source_records, events, ingest_tokens, pairing_codes, machines, users RESTART IDENTITY CASCADE`,
     );
-    const [u] = await dbh.db.insert(users).values({ email: "test@example.com" }).returning({ id: users.id });
+    const [u] = await dbh.db
+      .insert(users)
+      .values({ email: "test@example.com" })
+      .returning({ id: users.id });
     const [m] = await dbh.db
       .insert(machines)
       .values({ userId: u!.id, name: "test-machine" })
@@ -85,7 +112,11 @@ describe.skipIf(!TEST_URL)("pricing-catalogs repository (integration) — M10 3d
   });
 
   it("insert pending → not active yet, pending count 1", async () => {
-    const row = await insertPendingCatalog(dbh.db, { version: "m10-catalog-v2", payload: PAYLOAD_V2, signature: "sig" });
+    const row = await insertPendingCatalog(dbh.db, {
+      version: "m10-catalog-v2",
+      payload: PAYLOAD_V2,
+      signature: "sig",
+    });
     expect(row.status).toBe("pending");
     expect(row.uploadedAt).toBe(new Date(row.uploadedAt).toISOString()); // ISO-normalized
     expect(row.approvedAt).toBeNull();
@@ -94,7 +125,11 @@ describe.skipIf(!TEST_URL)("pricing-catalogs repository (integration) — M10 3d
   });
 
   it("approve → active, getActiveCatalog returns it, pending count 0", async () => {
-    const pending = await insertPendingCatalog(dbh.db, { version: "m10-catalog-v2", payload: PAYLOAD_V2, signature: "sig" });
+    const pending = await insertPendingCatalog(dbh.db, {
+      version: "m10-catalog-v2",
+      payload: PAYLOAD_V2,
+      signature: "sig",
+    });
     const approved = await approveCatalog(dbh.db, pending.id, "admin", new Date());
     expect(approved?.status).toBe("active");
     expect(approved?.approvedBy).toBe("admin");
@@ -106,9 +141,17 @@ describe.skipIf(!TEST_URL)("pricing-catalogs repository (integration) — M10 3d
   });
 
   it("approving a 2nd catalog supersedes the 1st atomically — only ONE active (partial unique held)", async () => {
-    const first = await insertPendingCatalog(dbh.db, { version: "v-a", payload: PAYLOAD_V2, signature: "s1" });
+    const first = await insertPendingCatalog(dbh.db, {
+      version: "v-a",
+      payload: PAYLOAD_V2,
+      signature: "s1",
+    });
     await approveCatalog(dbh.db, first.id, "admin", new Date());
-    const second = await insertPendingCatalog(dbh.db, { version: "v-b", payload: { "claude-opus-4-8": rate({ input: 99e-6 }) }, signature: "s2" });
+    const second = await insertPendingCatalog(dbh.db, {
+      version: "v-b",
+      payload: { "claude-opus-4-8": rate({ input: 99e-6 }) },
+      signature: "s2",
+    });
     const promoted = await approveCatalog(dbh.db, second.id, "admin", new Date());
     expect(promoted?.status).toBe("active");
 
@@ -121,15 +164,25 @@ describe.skipIf(!TEST_URL)("pricing-catalogs repository (integration) — M10 3d
   });
 
   it("approve is guarded: unknown id, already-active, or rejected id → undefined", async () => {
-    expect(await approveCatalog(dbh.db, "00000000-0000-4000-8000-000000000000", "admin", new Date())).toBeUndefined();
-    const p = await insertPendingCatalog(dbh.db, { version: "v1", payload: PAYLOAD_V2, signature: "s" });
+    expect(
+      await approveCatalog(dbh.db, "00000000-0000-4000-8000-000000000000", "admin", new Date()),
+    ).toBeUndefined();
+    const p = await insertPendingCatalog(dbh.db, {
+      version: "v1",
+      payload: PAYLOAD_V2,
+      signature: "s",
+    });
     await approveCatalog(dbh.db, p.id, "admin", new Date());
     // re-approving an already-active row → undefined (not pending)
     expect(await approveCatalog(dbh.db, p.id, "admin", new Date())).toBeUndefined();
   });
 
   it("reject a pending → rejected; rejecting a non-pending → undefined", async () => {
-    const p = await insertPendingCatalog(dbh.db, { version: "v1", payload: PAYLOAD_V2, signature: "s" });
+    const p = await insertPendingCatalog(dbh.db, {
+      version: "v1",
+      payload: PAYLOAD_V2,
+      signature: "s",
+    });
     const rejected = await rejectCatalog(dbh.db, p.id, new Date());
     expect(rejected?.status).toBe("rejected");
     expect(rejected?.approvedBy).toBeNull(); // a rejection is distinguishable from an approval
@@ -138,15 +191,26 @@ describe.skipIf(!TEST_URL)("pricing-catalogs repository (integration) — M10 3d
   });
 
   it("re-uploading the same version is idempotent (same row, no duplicate)", async () => {
-    const a = await insertPendingCatalog(dbh.db, { version: "dup", payload: PAYLOAD_V2, signature: "s" });
-    const b = await insertPendingCatalog(dbh.db, { version: "dup", payload: PAYLOAD_V2, signature: "s" });
+    const a = await insertPendingCatalog(dbh.db, {
+      version: "dup",
+      payload: PAYLOAD_V2,
+      signature: "s",
+    });
+    const b = await insertPendingCatalog(dbh.db, {
+      version: "dup",
+      payload: PAYLOAD_V2,
+      signature: "s",
+    });
     expect(b.id).toBe(a.id);
     expect(await listCatalogs(dbh.db)).toHaveLength(1);
   });
 
   it("ingestBatch re-prices a cost-bearing event under the active catalog (going forward)", async () => {
     // Re-price: 1000 input tokens × 10e-6 (the v2 rate) = 0.01 (NOT the wire 0.005).
-    await ingestBatch(dbh.db, machineId, costBatch(), { version: "m10-catalog-v2", rates: PAYLOAD_V2 });
+    await ingestBatch(dbh.db, machineId, costBatch(), {
+      version: "m10-catalog-v2",
+      rates: PAYLOAD_V2,
+    });
     const rows = (
       await dbh.db.execute(
         sql`SELECT fingerprint, (cost->>'usd')::float AS usd, catalog_version FROM events ORDER BY fingerprint`,

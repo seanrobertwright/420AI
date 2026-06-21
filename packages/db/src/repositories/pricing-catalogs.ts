@@ -61,7 +61,12 @@ export async function insertPendingCatalog(
 ): Promise<PricingCatalogRow> {
   const [inserted] = await db
     .insert(pricingCatalogs)
-    .values({ version: input.version, payload: input.payload, signature: input.signature, status: "pending" })
+    .values({
+      version: input.version,
+      payload: input.payload,
+      signature: input.signature,
+      status: "pending",
+    })
     .onConflictDoNothing({ target: pricingCatalogs.version })
     .returning();
   if (inserted) return toRow(inserted);
