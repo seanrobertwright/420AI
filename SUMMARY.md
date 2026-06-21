@@ -372,8 +372,36 @@ original M10 "hardening bundle" (exports, catalog signing, replay metadata, pers
       failures, ridden on the heartbeat, offline-suppressed). All three render unchanged in `AlertsPanel`
       (switches on severity, not code). See `docs/guide/operations.md` (12.6). **Deferred → 12.6b:**
       windowed connector-failure rate (needs a time-bucketed projection), SMTP/email delivery,
-      deliver-on-resolve. 7. **12.7 Connector hardening** — Codex tool-call failure classification; per-connector permission
-      scopes (§8.1); connector-catalog-as-data; resolve Cursor (`%APPDATA%\Cursor`) + Antigravity gates. 8. **12.8 Export & distribution polish** — Parquet export; restore/import path; signed installer +
+      deliver-on-resolve. 7. **12.7 Connector hardening** — **PLANNED, sub-sliced 12.7a–d** (2026-06-21;
+      plans under [`.agents/plans/`](./.agents/plans/)). The four §25-M12.7 closure items are independent
+      and very different in size/risk, so each is its own thin slice run through the build loop (§2): -
+      **12.7a — Codex tool-call failure classification** (`m12-slice7a-codex-failure-classification.md`).
+      Collector-parser-only: classify `tool.call.failed` from the real Codex output signal
+      (`metadata.exit_code` inside the JSON-string `output`; `apply_patch verification failed` text) into a
+      PRD §14 class stored in the (encrypted) event payload; bump `PARSER_VERSION`. No schema/server/
+      fingerprint change. Going-forward only (a re-parse of history is 12.5b's job — eventType is a
+      fingerprint input, so reclassification changes the fingerprint). _Thinnest; highest confidence. Do
+      first._ - **12.7b — Per-connector permission scopes (§8.1)**
+      (`m12-slice7b-connector-permission-scopes.md`). Additive `requiredPermissions` on
+      `ConnectorFidelity`/`ConnectorInfo` + a capture-surface **approval gate** (`connector-approvals.ts`
+      mirroring `connector-config.ts`: a sha256 of sorted globs+perms; seed-on-first-sight = approved;
+      drift ⇒ `needs-approval` ⇒ withheld until `connectors.approve`) + desktop surfacing. Resolves
+      default-on-vs-consent: approval gates a CHANGE, not initial capture (§10.4). No DB/Rust/migration
+      (the Rust relay is opaque). _Owns the `requiredPermissions` field shape 12.7c sources from data._ -
+      **12.7c — Connector-catalog-as-data (§10.4)** (`m12-slice7c-connector-catalog-as-data.md`). Extend
+      the M10 ed25519 signing + `pending→active` approval lifecycle (pricing-only today) to a signed
+      `connector_catalogs` document (migration `0011`) carrying connector metadata/locations/permissions;
+      collector pulls the active catalog (machine-authed `GET /v1/connector-catalog/active`) and overlays
+      it onto the registry, bundled-baseline fallback when none. **Parsers stay code** (PRD §39 — overlay
+      metadata only; data-only entries reuse the custom-connector factory). Biggest sub-slice — recommend
+      internal **12.7c-1** (server+shared, a near-exact pricing mirror) then **12.7c-2** (collector
+      overlay). _Recommended order: 12.7b before 12.7c (12.7c feeds 12.7b's capture-surface fingerprint)._ - **12.7d — Cursor + Antigravity gates** (`m12-slice7d-cursor-antigravity-connectors.md`) —
+      **RESEARCH GATE RESOLVED → DEFER BOTH (per §25 "ship if feasible, never block GA")**. A live spike
+      located Cursor's chat in `%APPDATA%\Cursor\…\state.vscdb` (`cursorDiskKV`: 22k message bubbles,
+      partial token data, model in `composerData.modelConfig`, **secret keys to avoid**) — recoverable but
+      it needs a NEW **SQLite poll capture mode** (the `parse(fileText)` contract is text-based), so it's
+      its own future slice, not a hardening bolt-on. Antigravity = schema-less binary protobuf with no
+      token/cost ⇒ drop/keep-gated. Neither blocks GA. 8. **12.8 Export & distribution polish** — Parquet export; restore/import path; signed installer +
       auto-update + MSI/WiX (needs a code-signing cert). _Last — refinement, unblocks nothing._
 - [x] **M11 (Tauri desktop)** — built across Slices 1–5; both open design points resolved (see the M11
       subsection in §4): JSON-lines control protocol (`m11-control-v2`) and Rust `std::process::Command`
