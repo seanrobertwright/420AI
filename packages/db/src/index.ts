@@ -115,3 +115,5 @@ export type { PricingCatalogRow } from "./repositories/pricing-catalogs.js";
 export { rebuildSearchIndex, searchDocuments } from "./repositories/search.js";
 export { reencryptAll } from "./repositories/key-rotation.js";
 export type { RotationCounts } from "./repositories/key-rotation.js";
+export { repriceAll } from "./repositories/reprice.js";
+export type { RepriceResult } from "./repositories/reprice.js";

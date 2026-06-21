@@ -157,3 +157,47 @@ npm run db:migrate      # re-applies it (idempotent)
 (`npm run backup`) and prefer running it against a scratch/test DB. With no applied migrations,
 `db:rollback` prints a reason and exits 1 (it never crashes). To roll back multiple migrations,
 run it repeatedly (newest → oldest).
+
+---
+
+## 12.5a — Retroactive re-pricing (archive replay)
+
+Approving a corrected pricing catalog (`POST /v1/catalog/:id/approve`) only re-prices events **as
+they are (re-)ingested** going forward — events already in the archive keep the cost they were
+priced under at capture time. Retroactive re-pricing applies the **active** catalog to those
+existing rows: it walks every cost-bearing event (`cost` + `tokens` + `model` all present),
+recomputes `cost = tokens × catalog rate`, and re-stamps `catalog_version`. This makes the
+"projections are re-derivable" promise real for `cost` — the projection most likely to need
+correcting (PRD §23/§25 12.5).
+
+It is a **pure data pass over `events`**: no decrypt, no re-parse, **raw records and the event
+fingerprint are untouched**, and there is no schema change. It only ever *recomputes* an existing
+cost — it never *adds* a cost to a costless event (`usage.reported`/`message.*` pass through).
+
+**Run it (CLI — for cron/manual ops):**
+
+```sh
+npm run db:reprice
+# re-priced 42 events under catalog v-2026-06
+# a second run prints "re-priced 0 events …" (idempotent)
+```
+
+**Or over HTTP** (admin-gated; the dashboard would reach it via the server-side proxy):
+
+```sh
+curl -X POST localhost:8420/v1/replay/reprice -H "authorization: Bearer $ADMIN_TOKEN"
+# 200 {"repriced":42,"catalogVersion":"v-2026-06"}
+# no active catalog → 409; no/invalid bearer → 401
+```
+
+**Caveats:**
+
+- **Back up first** (`npm run backup`, 12.4d) — re-pricing overwrites the `cost` column in place.
+- It re-prices only when a catalog is **active**. With none active (`409` / the CLI throws), events
+  are already at the bundled baseline from capture, so there is nothing to apply.
+- An **incomplete uploaded catalog zeroes** the cost of any model it omits (`usd 0`,
+  `estimated-model-unknown`) — identical to the going-forward ingest path (the same `computeCost`
+  call), which looks up *only* the active catalog with no fallback to the bundled baseline. Upload a
+  complete catalog.
+- It is **idempotent** — safe to re-run; rows already at the active version are skipped (so a second
+  run reprices 0). Run it after each catalog approval.

@@ -26,6 +26,7 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/migrate-cli.ts",
     "db:rotate-key": "tsx src/rotate-key-cli.ts",
+    "db:reprice": "tsx src/reprice-cli.ts",
     "db:rollback": "tsx src/rollback-cli.ts"
   }
 }

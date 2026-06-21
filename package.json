@@ -22,6 +22,7 @@
     "db:generate": "npm run -w @420ai/db db:generate",
     "db:migrate": "npm run -w @420ai/db db:migrate",
     "db:rotate-key": "npm run -w @420ai/db db:rotate-key",
+    "db:reprice": "npm run -w @420ai/db db:reprice",
     "db:rollback": "npm run -w @420ai/db db:rollback",
     "backup": "sh scripts/backup-archive.sh",
     "restore": "sh scripts/restore-archive.sh",
