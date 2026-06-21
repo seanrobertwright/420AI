@@ -73,6 +73,7 @@ export interface HeartbeatRequest {
   queuePending: number; // QueueStore.stats().pending
   queueInflight: number; // QueueStore.stats().inflight
   collectorVersion: string; // from the collector package.json, read at the entrypoint
+  consecutiveSyncFailures?: number; // M12 12.6 archive.unreachable signal (optional → back-compat with older collectors)
 }
 
 export interface HeartbeatResponse {

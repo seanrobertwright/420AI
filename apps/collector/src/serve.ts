@@ -136,6 +136,7 @@ export function runServe(deps: ServeDeps = {}): Promise<void> {
   let creds: Credentials | undefined = loadCreds();
   // TODO(Slice 2): populate from the engine's last successful sync. `runCaptureEngine`
   // does not surface it yet, so this stays null on the wire (StatusBar renders "—").
+  // eslint-disable-next-line prefer-const -- reassigned once Slice 2 wires the sync time (TODO above)
   let lastSyncAt: string | null = null;
   let closed = false;
   // Per-instance teardown; assigned once the Promise executor has rl + the timer.
@@ -274,7 +275,11 @@ export function runServe(deps: ServeDeps = {}): Promise<void> {
         // so validate `id`/`enabled` rather than trust the (typed) producer — without
         // this, a malformed line writes a `"undefined"` config key and falsely acks.
         if (typeof c.id !== "string" || typeof c.enabled !== "boolean") {
-          emit({ type: "error", message: "connectors.set requires id:string + enabled:boolean", cmd: c.cmd });
+          emit({
+            type: "error",
+            message: "connectors.set requires id:string + enabled:boolean",
+            cmd: c.cmd,
+          });
           return;
         }
         // Persist enable/disable; re-emit so the UI reflects the saved state. Takes
@@ -293,7 +298,11 @@ export function runServe(deps: ServeDeps = {}): Promise<void> {
         return;
       case "pair":
       case "discover":
-        emit({ type: "error", message: `${c.cmd} not supported in this build (Slice 3+)`, cmd: c.cmd });
+        emit({
+          type: "error",
+          message: `${c.cmd} not supported in this build (Slice 3+)`,
+          cmd: c.cmd,
+        });
         return;
       default: {
         const unknown = c as { cmd?: unknown };
@@ -307,10 +316,12 @@ export function runServe(deps: ServeDeps = {}): Promise<void> {
   // command (e.g. a quick pause→resume must apply in order).
   let chain: Promise<void> = Promise.resolve();
   function dispatch(c: ControlCommand): void {
-    chain = chain.then(() => handle(c)).catch((err) => {
-      const cmd = (c as { cmd?: string }).cmd;
-      emit({ type: "error", message: `command failed: ${(err as Error).message}`, cmd });
-    });
+    chain = chain
+      .then(() => handle(c))
+      .catch((err) => {
+        const cmd = (c as { cmd?: string }).cmd;
+        emit({ type: "error", message: `command failed: ${(err as Error).message}`, cmd });
+      });
   }
 
   function handleLine(line: string): void {

@@ -16,10 +16,10 @@ This validates feasibility before any product code and seeds the connector catal
 
 1. **All three required connectors (Claude Code, Codex CLI, Gemini CLI) record exact token
    usage + model + tool calls.** Fidelity is high. Capture is very feasible.
-2. **None of them record cost** — only tokens. So cost is *always computed* by us from
+2. **None of them record cost** — only tokens. So cost is _always computed_ by us from
    tokens × catalog pricing. This strongly validates the Q6 pricing ladder: "reported cost"
    will be rare; "estimated from known model pricing" is the normal path, and because tokens
-   are *exact*, those estimates are high quality.
+   are _exact_, those estimates are high quality.
 3. **Claude Code & Codex & Gemini CLI = append/per-session files → tailable (near-real-time).**
 4. **Antigravity** records rich tool actions but **no tokens/cost** → keep research-gated.
 5. **Cursor's `~/.cursor` DB is NOT a conversation store** — it only tracks AI-authored code
@@ -71,10 +71,10 @@ This validates feasibility before any product code and seeds the connector catal
 ### ✅ Gemini CLI — REQUIRED — fidelity: HIGH
 
 - **Location:** `~/.gemini/tmp/<projectHash>/chats/session-<ts>-<id>.json` (one JSON per session)
-  + `~/.gemini/tmp/<projectHash>/logs.json`.
-  *(Note: `~/.gemini/antigravity-cli/...` is a separate product — see Antigravity below.)*
+  - `~/.gemini/tmp/<projectHash>/logs.json`.
+    _(Note: `~/.gemini/antigravity-cli/...` is a separate product — see Antigravity below.)_
 - **Format:** single **JSON** object per session: `{ sessionId, projectHash, startTime,
-  lastUpdated, messages[] }`. Messages are `user` / `gemini` typed.
+lastUpdated, messages[] }`. Messages are `user` / `gemini` typed.
 - **Tokens (per assistant message):**
   ```
   tokens: { input, output, cached, thoughts, tool, total }
@@ -95,8 +95,8 @@ This validates feasibility before any product code and seeds the connector catal
 - **Format:** **JSONL** action trace. Record types: `USER_INPUT`, `PLANNER_RESPONSE`,
   `VIEW_FILE`, `LIST_DIRECTORY`, `GREP_SEARCH`, `RUN_COMMAND`, `CODE_ACTION`, `ERROR_MESSAGE`,
   with `step_index`, `source`, `status`, `created_at`, `content`, `tool_calls`, `thinking`.
-- **Gap:** **no token/usage/model/cost** in records inspected. Rich for *what the agent did*,
-  poor for *what it cost*. Some state is protobuf (needs the tool's schema to decode → brittle).
+- **Gap:** **no token/usage/model/cost** in records inspected. Rich for _what the agent did_,
+  poor for _what it cost_. Some state is protobuf (needs the tool's schema to decode → brittle).
 - **Verdict:** confirms the research gate. Could ship as an "actions only, no cost" connector
   later; do not block MVP on it.
 
@@ -104,8 +104,8 @@ This validates feasibility before any product code and seeds the connector catal
 
 - **Location inspected:** `~/.cursor/ai-tracking/ai-code-tracking.db` (SQLite).
 - **Schema:** single table `ai_code_hashes(hash, source, fileExtension, fileName, requestId,
-  conversationId, timestamp, createdAt, model)` — **0 rows** on this machine.
-- **Finding:** this is a **code-provenance tracker** (which files/lines came from AI), *not* a
+conversationId, timestamp, createdAt, model)` — **0 rows** on this machine.
+- **Finding:** this is a **code-provenance tracker** (which files/lines came from AI), _not_ a
   conversation store. No prompts, outputs, or tokens. Full Cursor chat history is in VS
   Code-style storage (`%APPDATA%\Cursor\User\...\state.vscdb` / workspaceStorage), **not yet
   inspected.**
@@ -116,18 +116,18 @@ This validates feasibility before any product code and seeds the connector catal
 
 ## Feasibility matrix (PRD §10.3 fidelity fields)
 
-| Field | Claude Code | Codex CLI | Gemini CLI | Antigravity | Cursor |
-|---|---|---|---|---|---|
-| **Status** | Stable (required) | Stable (required) | Stable (required) | Experimental (gated) | Planned (gated) |
-| **Capture method** | Tail JSONL | Tail JSONL | Watch+diff JSON | Tail JSONL | SQLite poll (TBD) |
-| **Tokens** | ✅ exact | ✅ exact | ✅ exact | ❌ | ❌ (in this DB) |
-| **Model** | ✅ | ✅ | ✅ | ❌ | partial |
-| **Cost** | compute | compute | compute | ❌ | ❌ |
-| **Tool calls** | ✅ | ✅ (+patches) | ✅ (+status) | ✅ rich | ❌ |
-| **Failures** | stop_reason | turn_aborted/outputs | toolCall.status | ERROR_MESSAGE | ❌ |
-| **Project attrib.** | cwd + gitBranch | session_meta (cwd) | projectHash | path | fileName |
-| **Real-time level** | Streaming | Streaming | Near-real-time | Batch/partial | Snapshot |
-| **Known gaps** | none material | none material | rewrite-not-append | no cost; protobuf | not a chat store |
+| Field               | Claude Code       | Codex CLI            | Gemini CLI         | Antigravity          | Cursor            |
+| ------------------- | ----------------- | -------------------- | ------------------ | -------------------- | ----------------- |
+| **Status**          | Stable (required) | Stable (required)    | Stable (required)  | Experimental (gated) | Planned (gated)   |
+| **Capture method**  | Tail JSONL        | Tail JSONL           | Watch+diff JSON    | Tail JSONL           | SQLite poll (TBD) |
+| **Tokens**          | ✅ exact          | ✅ exact             | ✅ exact           | ❌                   | ❌ (in this DB)   |
+| **Model**           | ✅                | ✅                   | ✅                 | ❌                   | partial           |
+| **Cost**            | compute           | compute              | compute            | ❌                   | ❌                |
+| **Tool calls**      | ✅                | ✅ (+patches)        | ✅ (+status)       | ✅ rich              | ❌                |
+| **Failures**        | stop_reason       | turn_aborted/outputs | toolCall.status    | ERROR_MESSAGE        | ❌                |
+| **Project attrib.** | cwd + gitBranch   | session_meta (cwd)   | projectHash        | path                 | fileName          |
+| **Real-time level** | Streaming         | Streaming            | Near-real-time     | Batch/partial        | Snapshot          |
+| **Known gaps**      | none material     | none material        | rewrite-not-append | no cost; protobuf    | not a chat store  |
 
 ---
 
@@ -135,15 +135,15 @@ This validates feasibility before any product code and seeds the connector catal
 
 Each tool uses its **own token schema**. The normalizer must map all to one shape, e.g.:
 
-| Common field | Claude | Codex | Gemini |
-|---|---|---|---|
-| `input_tokens` | `input_tokens` | `input_tokens` | `input` |
-| `output_tokens` | `output_tokens` | `output_tokens` | `output` |
-| `cache_read` | `cache_read_input_tokens` | `cached_input_tokens` | `cached` |
-| `cache_write` | `cache_creation_input_tokens` | — | — |
-| `reasoning` | (in iterations) | `reasoning_output_tokens` | `thoughts` |
-| `tool_tokens` | `server_tool_use.*` | — | `tool` |
-| `total` | (sum) | `total_tokens` | `total` |
+| Common field    | Claude                        | Codex                     | Gemini     |
+| --------------- | ----------------------------- | ------------------------- | ---------- |
+| `input_tokens`  | `input_tokens`                | `input_tokens`            | `input`    |
+| `output_tokens` | `output_tokens`               | `output_tokens`           | `output`   |
+| `cache_read`    | `cache_read_input_tokens`     | `cached_input_tokens`     | `cached`   |
+| `cache_write`   | `cache_creation_input_tokens` | —                         | —          |
+| `reasoning`     | (in iterations)               | `reasoning_output_tokens` | `thoughts` |
+| `tool_tokens`   | `server_tool_use.*`           | —                         | `tool`     |
+| `total`         | (sum)                         | `total_tokens`            | `total`    |
 
 > Define this mapping once in the shared types package; every connector parser targets it.
 
@@ -161,7 +161,7 @@ Each tool uses its **own token schema**. The normalizer must map all to one shap
   × catalog pricing, confidence "estimated-model-known." Pricing table must cover at least:
   Claude (Opus/Sonnet/Haiku + cache tiers), `gpt-5.4` (+ reasoning + cached), `gemini-3-flash`
   (+ thoughts/cached). **Cache and reasoning tokens are priced differently — the pricing model
-  must handle token *sub-types*, not just input/output.**
+  must handle token _sub-types_, not just input/output.**
 - **New:** Add a **token sub-type** dimension (input / output / cache-read / cache-write /
   reasoning / tool) to the cost model — a flat input/output split would under/over-count.
 

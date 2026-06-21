@@ -74,7 +74,7 @@ async function main() {
     if (check) {
       // Cheap cross-platform smoke: run the bundle under `node` and assert it
       // answers a status command with a JSON status line (no SEA/postject needed).
-      console.log("[2] --check: run {\"cmd\":\"status\"} under node");
+      console.log('[2] --check: run {"cmd":"status"} under node');
       let out;
       try {
         out = execFileSync(process.execPath, [cjs, "serve"], {
@@ -123,21 +123,16 @@ async function main() {
     copyFileSync(process.execPath, outExe);
     ok(`copied ${process.execPath} → ${outExe}`);
 
-    console.log("[4] postject inject NODE_SEA_BLOB (the 'signature corrupted' warning is expected)");
+    console.log(
+      "[4] postject inject NODE_SEA_BLOB (the 'signature corrupted' warning is expected)",
+    );
     // Resolve postject's CLI by package, not a hardcoded hoist path (portable across
     // npm/pnpm layouts and a future workspace-local install).
     const postjectCli = createRequire(import.meta.url).resolve("postject/dist/cli.js");
     try {
       execFileSync(
         process.execPath,
-        [
-          postjectCli,
-          outExe,
-          "NODE_SEA_BLOB",
-          blob,
-          "--sentinel-fuse",
-          NODE_SEA_FUSE,
-        ],
+        [postjectCli, outExe, "NODE_SEA_BLOB", blob, "--sentinel-fuse", NODE_SEA_FUSE],
         { stdio: "inherit" },
       );
     } catch (err) {
@@ -146,9 +141,7 @@ async function main() {
 
     const mb = (statSync(outExe).size / 1024 / 1024).toFixed(0);
     ok(`SEA artifact ready: ${outExe} (${mb} MB)`);
-    console.log(
-      `\nbuild-sea: PASS — verify with:\n  echo '{"cmd":"status"}' | "${outExe}" serve`,
-    );
+    console.log(`\nbuild-sea: PASS — verify with:\n  echo '{"cmd":"status"}' | "${outExe}" serve`);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

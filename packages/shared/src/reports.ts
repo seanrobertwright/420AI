@@ -154,8 +154,7 @@ export function renderSessionAutopsyReport(input: SessionAutopsyReportInput): st
   lines.push(`- **Project path:** ${s.projectPath ?? "(unknown)"}`);
   lines.push(`- **Git branch:** ${s.gitBranch ?? "(unknown)"}`);
   lines.push(`- **Model(s):** ${s.models.length ? s.models.join(", ") : "(unknown)"}`);
-  const timeRange =
-    s.startedAt && s.endedAt ? `${s.startedAt} → ${s.endedAt}` : "(none)";
+  const timeRange = s.startedAt && s.endedAt ? `${s.startedAt} → ${s.endedAt}` : "(none)";
   lines.push(`- **Time range:** ${timeRange}`);
   lines.push(
     `- **Events:** ${s.eventCount} (user: ${s.userMessages}, assistant: ${s.assistantMessages}, tool calls: ${s.toolCalls})`,

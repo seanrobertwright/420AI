@@ -62,11 +62,11 @@ Three sections:
 
 Right-click the tray icon (tooltip **420AI Collector**):
 
-| Item | Action |
-|---|---|
+| Item                               | Action                                                  |
+| ---------------------------------- | ------------------------------------------------------- |
 | **Start** / **Pause** / **Resume** | drive the collector sidecar (same as the Capture panel) |
-| **Server: manage in Settings** | display-only label (server controls live in Settings) |
-| **Quit** | exits the app (tears the sidecar down cleanly) |
+| **Server: manage in Settings**     | display-only label (server controls live in Settings)   |
+| **Quit**                           | exits the app (tears the sidecar down cleanly)          |
 
 ---
 
@@ -75,17 +75,17 @@ Right-click the tray icon (tooltip **420AI Collector**):
 All three required connectors are **stable**, capture **exact tokens**, and **compute cost** from
 tokens × the pricing catalog. They watch your local tool stores read-only.
 
-| Connector | `id` | Watches | Mode | Liveness |
-|---|---|---|---|---|
-| **Claude Code** | `claude-code` | `~/.claude/projects/*/*.jsonl` | tail | streaming |
-| **OpenAI Codex CLI** | `codex-cli` | `~/.codex/sessions/*/*/*/rollout-*.jsonl` | tail | streaming |
-| **Gemini CLI** | `gemini-cli` | `~/.gemini/tmp/*/chats/session-*.json` | snapshot (whole-file re-read) | near-real-time |
+| Connector            | `id`          | Watches                                   | Mode                          | Liveness       |
+| -------------------- | ------------- | ----------------------------------------- | ----------------------------- | -------------- |
+| **Claude Code**      | `claude-code` | `~/.claude/projects/*/*.jsonl`            | tail                          | streaming      |
+| **OpenAI Codex CLI** | `codex-cli`   | `~/.codex/sessions/*/*/*/rollout-*.jsonl` | tail                          | streaming      |
+| **Gemini CLI**       | `gemini-cli`  | `~/.gemini/tmp/*/chats/session-*.json`    | snapshot (whole-file re-read) | near-real-time |
 
 Known gaps (surfaced as `gaps:` badges):
 
 - **Claude Code** — `file.referenced` not emitted (no reliable structured signal); `session.ended`
   timestamp settles only once the file stops growing.
-- **Codex CLI** — tool-call *failure* classification deferred (outputs carry no structured
+- **Codex CLI** — tool-call _failure_ classification deferred (outputs carry no structured
   `is_error`). Validated against CLI `0.137.x`.
 - **Gemini CLI** — sessions are keyed by an opaque `projectHash`; project attribution needs the
   `.project_root` sidecar. Legacy hash-only sessions stay **unattributed** (a reported gap, not an
@@ -118,16 +118,16 @@ collector projects [--url <baseUrl>] [--token <adminToken>]
 Invoke as `npx tsx apps/collector/src/cli.ts <command> …`. Running with no command prints this usage
 plus, if a local DB exists, the stored sessions.
 
-| Command | What it does |
-|---|---|
-| **`pair`** | Redeems a one-time code; saves `{url, token, machineId}` to `~/.420ai/credentials.json`. `--url` is **required**; `--name`/`--hostname` default to the computer name, `--os` to `process.platform`. Prints the ingest token once — store it securely. |
-| **`watch`** | The continuous capture agent: discover → tail → queue → sync, until Ctrl-C (graceful final drain). Unpaired ⇒ prints "run `collector pair …`" and exits. `--interval` sets the poll cadence; `--heartbeat-interval` (or `HEARTBEAT_INTERVAL_MS`) sets the liveness ping. |
-| **`sync`** | One-shot drain of the durable queue to the archive (ops/testing). Prints `pending`/`inflight` after. |
-| **`queue`** | Prints the queue backlog: `pending=… , inflight=…`. |
-| **`discover`** | Enumerates project roots across all connectors, enriches with git metadata + Gemini's `.project_root`, and POSTs them — upserting workspaces and auto-creating one project per workspace. Idempotent. |
-| **`projects`** | Lists the archive's projects. **Admin-gated** — pass `--token <adminToken>` (the saved pairing is a *machine* token; a machine token gets a friendly 401 hint). |
-| **`push`** | One-shot: parse one Claude Code session file and POST it (the manual precursor to `watch`). Idempotent (`recordsInserted: 0` on re-push). |
-| **`ingest`** / **`report`** | Local-only (SQLite) helpers: parse a session file into a local DB, and render a Markdown session report from it. `--db` defaults to `./420ai.sqlite`. |
+| Command                     | What it does                                                                                                                                                                                                                                                             |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **`pair`**                  | Redeems a one-time code; saves `{url, token, machineId}` to `~/.420ai/credentials.json`. `--url` is **required**; `--name`/`--hostname` default to the computer name, `--os` to `process.platform`. Prints the ingest token once — store it securely.                    |
+| **`watch`**                 | The continuous capture agent: discover → tail → queue → sync, until Ctrl-C (graceful final drain). Unpaired ⇒ prints "run `collector pair …`" and exits. `--interval` sets the poll cadence; `--heartbeat-interval` (or `HEARTBEAT_INTERVAL_MS`) sets the liveness ping. |
+| **`sync`**                  | One-shot drain of the durable queue to the archive (ops/testing). Prints `pending`/`inflight` after.                                                                                                                                                                     |
+| **`queue`**                 | Prints the queue backlog: `pending=… , inflight=…`.                                                                                                                                                                                                                      |
+| **`discover`**              | Enumerates project roots across all connectors, enriches with git metadata + Gemini's `.project_root`, and POSTs them — upserting workspaces and auto-creating one project per workspace. Idempotent.                                                                    |
+| **`projects`**              | Lists the archive's projects. **Admin-gated** — pass `--token <adminToken>` (the saved pairing is a _machine_ token; a machine token gets a friendly 401 hint).                                                                                                          |
+| **`push`**                  | One-shot: parse one Claude Code session file and POST it (the manual precursor to `watch`). Idempotent (`recordsInserted: 0` on re-push).                                                                                                                                |
+| **`ingest`** / **`report`** | Local-only (SQLite) helpers: parse a session file into a local DB, and render a Markdown session report from it. `--db` defaults to `./420ai.sqlite`.                                                                                                                    |
 
 **Typical headless loop:**
 

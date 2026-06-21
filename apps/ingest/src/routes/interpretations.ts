@@ -1,10 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import {
-  ensureUserByEmail,
-  getProjectName,
-  sessionDetail,
-  usageTotals,
-} from "@420ai/db";
+import { ensureUserByEmail, getProjectName, sessionDetail, usageTotals } from "@420ai/db";
 import {
   generateSessionInterpretation,
   generateProjectInterpretation,

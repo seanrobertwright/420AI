@@ -72,6 +72,9 @@ export const machines = pgTable("machines", {
   queuePending: integer("queue_pending"),
   queueInflight: integer("queue_inflight"),
   collectorVersion: text("collector_version"),
+  // M12 12.6 archive.unreachable signal — the latest collector-reported count of
+  // consecutive sync failures (nullable; older collectors don't send it → null → 0).
+  consecutiveSyncFailures: integer("consecutive_sync_failures"),
 });
 
 export const pairingCodes = pgTable("pairing_codes", {
@@ -278,12 +281,7 @@ export const reportArtifacts = pgTable(
   },
   (t) => [
     // History lookup + the version-bump backstop (one row per (user, type, scope, version)).
-    uniqueIndex("report_artifacts_scope_version").on(
-      t.userId,
-      t.reportType,
-      t.scopeId,
-      t.version,
-    ),
+    uniqueIndex("report_artifacts_scope_version").on(t.userId, t.reportType, t.scopeId, t.version),
     index("report_artifacts_by_scope").on(t.userId, t.reportType, t.scopeId),
   ],
 );
@@ -398,12 +396,29 @@ export const machineHeartbeats = pgTable(
   "machine_heartbeats",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    machineId: uuid("machine_id").notNull().references(() => machines.id),
+    machineId: uuid("machine_id")
+      .notNull()
+      .references(() => machines.id),
     ts: timestamp("ts", { withTimezone: true }).notNull().defaultNow(),
     queuePending: integer("queue_pending").notNull(),
     queueInflight: integer("queue_inflight").notNull(),
   },
   (t) => [index("machine_heartbeats_by_machine_ts").on(t.machineId, t.ts)],
+);
+
+/**
+ * M12 12.6 ingest auth-failure audit (PRD §20). Append-only; recordIngestAuthFailure
+ * appends + prunes. GLOBAL (no user_id — the token never resolved to a machine/user).
+ * Feeds the windowed `ingest.auth_failure` alert via countRecentAuthFailures.
+ */
+export const ingestAuthFailures = pgTable(
+  "ingest_auth_failures",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    ts: timestamp("ts", { withTimezone: true }).notNull().defaultNow(),
+    remoteIp: text("remote_ip"),
+  },
+  (t) => [index("ingest_auth_failures_by_ts").on(t.ts)],
 );
 
 /**
@@ -417,7 +432,9 @@ export const alertFirings = pgTable(
   "alert_firings",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    userId: uuid("user_id").notNull().references(() => users.id),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
     alertKey: text("alert_key").notNull(),
     code: text("code").notNull(),
     severity: text("severity").notNull(),
@@ -431,10 +448,15 @@ export const alertFirings = pgTable(
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
     resolvedAt: timestamp("resolved_at", { withTimezone: true }),
     ackedAt: timestamp("acked_at", { withTimezone: true }),
+    // M12 12.6 alert delivery: at-most-one delivery ATTEMPT per firing — stamped on
+    // success OR failure by deliverPendingFirings (nullable; null = not yet attempted).
+    deliveryAttemptedAt: timestamp("delivery_attempted_at", { withTimezone: true }),
   },
   (t) => [
     // At most ONE open firing per (user, alert_key) — the reconcile idempotency key (D3).
-    uniqueIndex("alert_firings_open_key").on(t.userId, t.alertKey).where(sql`${t.status} = 'open'`),
+    uniqueIndex("alert_firings_open_key")
+      .on(t.userId, t.alertKey)
+      .where(sql`${t.status} = 'open'`),
     index("alert_firings_by_user_status").on(t.userId, t.status),
   ],
 );
@@ -462,7 +484,9 @@ export const pricingCatalogs = pgTable(
   },
   (t) => [
     uniqueIndex("pricing_catalogs_version").on(t.version), // idempotent upload (re-upload same version = no-op)
-    uniqueIndex("pricing_catalogs_one_active").on(t.status).where(sql`${t.status} = 'active'`),
+    uniqueIndex("pricing_catalogs_one_active")
+      .on(t.status)
+      .where(sql`${t.status} = 'active'`),
   ],
 );
 

@@ -148,6 +148,10 @@ A notification about system health or data integrity, such as Collector offline,
 
 A persisted record that an Operational Alert is (or was) active: it carries when it first fired, when it was last seen, whether it resolved, and whether it was acknowledged. Reconciled on read against the live-derived alerts (PRD §20).
 
+## Alert Delivery
+
+The push of a newly-opened Alert Firing to a configured external sink (a webhook today — Slack/Discord/n8n/email-bridge; email later behind the same interface). At-most-one delivery _attempt_ per firing (stamped on success or failure), so a misconfigured sink is never spammed; the Alert Firing in the dashboard remains the durable record. Disabled unless a webhook URL is configured.
+
 ## Heartbeat Sample
 
 One time-stamped collector sync-backlog reading appended to the heartbeat time-series, the source for the "backlog growing" trend (distinct from the single latest sample on the machine row).

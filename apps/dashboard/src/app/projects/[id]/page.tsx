@@ -14,7 +14,10 @@ export const dynamic = "force-dynamic";
 /** GET ingest JSON on the server→ingest hop (D8), returning a fallback on any non-200/throw. */
 async function getJson<T>(path: string, fallback: T): Promise<T> {
   try {
-    const res = await fetch(`${ingestUrl()}${path}`, { headers: await adminHeaders(), cache: "no-store" });
+    const res = await fetch(`${ingestUrl()}${path}`, {
+      headers: await adminHeaders(),
+      cache: "no-store",
+    });
     return res.ok ? ((await res.json()) as T) : fallback;
   } catch {
     return fallback;
@@ -29,9 +32,20 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
   // is what tells "real project" from "valid uuid that doesn't exist". It also gives the name.
   const [{ projects }, summary, usage, byModel, overTime, git, sessions] = await Promise.all([
     getJson<{ projects: ProjectRow[] }>("/v1/projects", { projects: [] }),
-    getJson<ProjectEventSummary>(`/v1/projects/${id}/summary`, { eventCount: 0, lastActivity: null }),
+    getJson<ProjectEventSummary>(`/v1/projects/${id}/summary`, {
+      eventCount: 0,
+      lastActivity: null,
+    }),
     getJson<UsageTotals>(`/v1/projects/${id}/usage`, {
-      tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0, reasoning: 0, tool: 0, total: 0 },
+      tokens: {
+        input: 0,
+        output: 0,
+        cache_read: 0,
+        cache_write: 0,
+        reasoning: 0,
+        tool: 0,
+        total: 0,
+      },
       costUsd: 0,
       costConfidence: "unknown",
       eventCount: 0,

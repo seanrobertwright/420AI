@@ -5,9 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseHeartbeatIntervalMs, runIngest, runReport } from "./cli.js";
 
-const fixturePath = fileURLToPath(
-  new URL("./fixtures/sample-session.jsonl", import.meta.url),
-);
+const fixturePath = fileURLToPath(new URL("./fixtures/sample-session.jsonl", import.meta.url));
 
 let dbPath: string | undefined;
 

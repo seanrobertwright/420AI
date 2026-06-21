@@ -7,7 +7,12 @@ import {
   rebuildSearchIndex,
   searchDocuments,
 } from "../index.js";
-import { users, machines, reportArtifacts, searchDocuments as searchDocumentsTbl } from "../schema.js";
+import {
+  users,
+  machines,
+  reportArtifacts,
+  searchDocuments as searchDocumentsTbl,
+} from "../schema.js";
 import type { IngestBatch } from "@420ai/shared";
 
 const TEST_URL = process.env.DATABASE_URL_TEST;
@@ -61,7 +66,10 @@ describe.skipIf(!TEST_URL)("search repository (integration)", () => {
     await dbh.db.execute(
       sql`TRUNCATE search_documents, workspace_keys, workspaces, projects, report_artifacts, raw_source_records, events, ingest_tokens, pairing_codes, machines, users RESTART IDENTITY CASCADE`,
     );
-    const [u] = await dbh.db.insert(users).values({ email: "test@example.com" }).returning({ id: users.id });
+    const [u] = await dbh.db
+      .insert(users)
+      .values({ email: "test@example.com" })
+      .returning({ id: users.id });
     userId = u!.id;
     const [m] = await dbh.db
       .insert(machines)
@@ -135,9 +143,7 @@ describe.skipIf(!TEST_URL)("search repository (integration)", () => {
     const second = await rebuildSearchIndex(dbh.db);
     expect(second).toEqual(first);
     // The (entity_type, entity_id) unique index holds: exactly one row per entity.
-    const [{ n }] = await dbh.db
-      .select({ n: sql<number>`count(*)::int` })
-      .from(searchDocumentsTbl);
+    const [{ n }] = await dbh.db.select({ n: sql<number>`count(*)::int` }).from(searchDocumentsTbl);
     expect(n).toBe(first.total);
   });
 });

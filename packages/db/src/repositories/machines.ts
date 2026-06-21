@@ -29,10 +29,7 @@ export async function createMachine(
 
 /** Record that a machine just authenticated (for last-seen / liveness, PRD §20). */
 export async function touchLastSeen(db: DbClient, machineId: string): Promise<void> {
-  await db
-    .update(machines)
-    .set({ lastSeenAt: new Date() })
-    .where(eq(machines.id, machineId));
+  await db.update(machines).set({ lastSeenAt: new Date() }).where(eq(machines.id, machineId));
 }
 
 /**
@@ -48,7 +45,13 @@ export async function touchLastSeen(db: DbClient, machineId: string): Promise<vo
 export async function recordHeartbeat(
   db: DbClient,
   machineId: string,
-  hb: { queuePending: number; queueInflight: number; collectorVersion: string; now?: Date },
+  hb: {
+    queuePending: number;
+    queueInflight: number;
+    collectorVersion: string;
+    consecutiveSyncFailures?: number; // M12 12.6 archive.unreachable signal (optional → null)
+    now?: Date;
+  },
 ): Promise<void> {
   const now = hb.now ?? new Date();
   await db
@@ -58,6 +61,7 @@ export async function recordHeartbeat(
       queuePending: hb.queuePending,
       queueInflight: hb.queueInflight,
       collectorVersion: hb.collectorVersion,
+      consecutiveSyncFailures: hb.consecutiveSyncFailures ?? null,
     })
     .where(eq(machines.id, machineId));
   // M10 3c: append the time-series sample (trend source) + prune beyond retention.

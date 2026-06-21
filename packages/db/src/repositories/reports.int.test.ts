@@ -2,11 +2,7 @@ import { describe, it, expect, beforeAll, beforeEach, afterAll } from "vitest";
 import { sql } from "drizzle-orm";
 import { createDb } from "../index.js";
 import { users } from "../schema.js";
-import {
-  insertReportArtifact,
-  getReportArtifact,
-  listReportArtifacts,
-} from "./reports.js";
+import { insertReportArtifact, getReportArtifact, listReportArtifacts } from "./reports.js";
 
 const TEST_URL = process.env.DATABASE_URL_TEST;
 
@@ -56,9 +52,8 @@ describe.skipIf(!TEST_URL)("report-artifacts repository (integration)", () => {
     expect(second.version).toBe(2);
     expect(first.id).not.toBe(second.id); // both retained, not overwritten
 
-    const [{ n }] = (
-      await dbh.db.execute(sql`SELECT count(*)::int AS n FROM report_artifacts`)
-    ).rows as { n: number }[];
+    const [{ n }] = (await dbh.db.execute(sql`SELECT count(*)::int AS n FROM report_artifacts`))
+      .rows as { n: number }[];
     expect(n).toBe(2);
   });
 

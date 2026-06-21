@@ -31,7 +31,14 @@ function comparableGroups(reports: ReportArtifactRow[]): Group[] {
     const key = `${r.reportType}::${r.scopeId}`;
     const g = byKey.get(key);
     if (g) g.rows.push(r);
-    else byKey.set(key, { key, reportType: r.reportType, scopeKind: r.scopeKind, scopeId: r.scopeId, rows: [r] });
+    else
+      byKey.set(key, {
+        key,
+        reportType: r.reportType,
+        scopeKind: r.scopeKind,
+        scopeId: r.scopeId,
+        rows: [r],
+      });
   }
   return [...byKey.values()].filter((g) => g.rows.length >= 2);
 }

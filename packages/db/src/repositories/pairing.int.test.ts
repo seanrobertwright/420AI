@@ -21,7 +21,10 @@ describe.skipIf(!TEST_URL)("pairing repository (integration)", () => {
     await dbh.db.execute(
       sql`TRUNCATE raw_source_records, events, ingest_tokens, pairing_codes, machines, users RESTART IDENTITY CASCADE`,
     );
-    const [u] = await dbh.db.insert(users).values({ email: "test@example.com" }).returning({ id: users.id });
+    const [u] = await dbh.db
+      .insert(users)
+      .values({ email: "test@example.com" })
+      .returning({ id: users.id });
     userId = u!.id;
   });
 
@@ -39,7 +42,9 @@ describe.skipIf(!TEST_URL)("pairing repository (integration)", () => {
   });
 
   it("rejects an unknown code", async () => {
-    await expect(redeemPairingCode(dbh.db, "no-such-code")).rejects.toMatchObject({ reason: "unknown" });
+    await expect(redeemPairingCode(dbh.db, "no-such-code")).rejects.toMatchObject({
+      reason: "unknown",
+    });
   });
 
   it("rejects an expired code", async () => {

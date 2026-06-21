@@ -15,13 +15,7 @@ import {
   type PairingStatus,
 } from "@/lib/bridge";
 import { Badge } from "@/components/ui/badge";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 
 const DEFAULT_INGEST_URL = "http://localhost:8420";
@@ -235,7 +229,8 @@ export function Settings() {
       <CardHeader>
         <CardTitle>Settings</CardTitle>
         <CardDescription>
-          server config (secrets stored in the OS keychain) · start/stop the archive &amp; ingest · pairing
+          server config (secrets stored in the OS keychain) · start/stop the archive &amp; ingest ·
+          pairing
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
@@ -278,7 +273,10 @@ export function Settings() {
                 type="password"
                 value={adminToken}
                 onChange={(e) => setAdminToken(e.target.value)}
-                placeholder={secretPlaceholder(config?.hasAdminToken, "admin bearer for /v1/monitor")}
+                placeholder={secretPlaceholder(
+                  config?.hasAdminToken,
+                  "admin bearer for /v1/monitor",
+                )}
                 className={cn(inputClass, "font-mono")}
               />
             </Field>

@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { postPair, postIngest, postDiscover, IngestHttpError, isUnauthorized } from "./ingest-client.js";
+import {
+  postPair,
+  postIngest,
+  postDiscover,
+  IngestHttpError,
+  isUnauthorized,
+} from "./ingest-client.js";
 import type { IngestBatch, DiscoverRequest } from "@420ai/shared";
 
 afterEach(() => {
@@ -15,9 +21,9 @@ function jsonResponse(status: number, body: unknown): Response {
 
 describe("ingest-client", () => {
   it("postIngest sends the bearer header + JSON body and parses the response", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      jsonResponse(200, { recordsInserted: 2, eventsUpserted: 3 }),
-    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse(200, { recordsInserted: 2, eventsUpserted: 3 }));
     vi.stubGlobal("fetch", fetchMock);
 
     const batch: IngestBatch = {
@@ -42,9 +48,9 @@ describe("ingest-client", () => {
       "fetch",
       vi.fn().mockResolvedValue(jsonResponse(401, { error: "invalid or revoked token" })),
     );
-    await expect(postIngest("http://localhost:8420", "bad", { records: [], events: [] })).rejects.toThrow(
-      /ingest failed: HTTP 401/,
-    );
+    await expect(
+      postIngest("http://localhost:8420", "bad", { records: [], events: [] }),
+    ).rejects.toThrow(/ingest failed: HTTP 401/);
   });
 
   it("postIngest throws an IngestHttpError carrying the status (401)", async () => {
@@ -70,9 +76,11 @@ describe("ingest-client", () => {
   });
 
   it("postDiscover sends the bearer header + workspaces body to /v1/workspaces/discover", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      jsonResponse(200, { workspacesUpserted: 1, projectsCreated: 1, mappings: [] }),
-    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse(200, { workspacesUpserted: 1, projectsCreated: 1, mappings: [] }),
+      );
     vi.stubGlobal("fetch", fetchMock);
 
     const req: DiscoverRequest = {
@@ -92,15 +100,15 @@ describe("ingest-client", () => {
 
   it("postDiscover throws an IngestHttpError on a 401", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(401, { error: "nope" })));
-    const err = await postDiscover("http://localhost:8420", "bad", { workspaces: [] }).catch((e) => e);
+    const err = await postDiscover("http://localhost:8420", "bad", { workspaces: [] }).catch(
+      (e) => e,
+    );
     expect(err).toBeInstanceOf(IngestHttpError);
     expect((err as IngestHttpError).status).toBe(401);
   });
 
   it("postPair posts the pairing body (no auth header)", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      jsonResponse(200, { token: "t", machineId: "m" }),
-    );
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { token: "t", machineId: "m" }));
     vi.stubGlobal("fetch", fetchMock);
 
     const result = await postPair("http://localhost:8420", {

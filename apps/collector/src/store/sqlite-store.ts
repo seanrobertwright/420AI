@@ -52,7 +52,15 @@ export class SqliteStore {
   }
 
   /** Insert raw records, ignoring any whose id already exists (raw is immutable). */
-  insertRawRecords(records: readonly { id: string; sourceConnector: string; sessionId: string; ingestedAt: string; payload: string }[]): void {
+  insertRawRecords(
+    records: readonly {
+      id: string;
+      sourceConnector: string;
+      sessionId: string;
+      ingestedAt: string;
+      payload: string;
+    }[],
+  ): void {
     const stmt = this.db.prepare(`
       INSERT OR IGNORE INTO raw_source_records
         (id, source_connector, session_id, ingested_at, payload)
@@ -108,14 +116,16 @@ export class SqliteStore {
   /** Summary of stored sessions for CLI help. */
   listSessions(): { sessionId: string; model: string | null; eventCount: number }[] {
     const rows = this.db
-      .prepare(`
+      .prepare(
+        `
         SELECT session_id AS sessionId,
                MAX(model) AS model,
                COUNT(*) AS eventCount
         FROM events
         GROUP BY session_id
         ORDER BY MIN(ts)
-      `)
+      `,
+      )
       .all() as { sessionId: string; model: string | null; eventCount: number }[];
     return rows;
   }

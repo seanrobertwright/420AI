@@ -1,12 +1,8 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from "vitest";
-import { eq, sql } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 import { createDb } from "../index.js";
 import { users, machines, events } from "../schema.js";
-import {
-  findOrCreateProjectByRemote,
-  createProject,
-  listProjects,
-} from "./projects.js";
+import { findOrCreateProjectByRemote, createProject, listProjects } from "./projects.js";
 import {
   upsertWorkspace,
   addWorkspaceKey,
@@ -50,7 +46,12 @@ describe.skipIf(!TEST_URL)("workspaces + projects repositories (integration)", (
 
   it("upsertWorkspace inserts then updates in place on the same (userId, rootPath)", async () => {
     const root = "C:\\Users\\seanr\\420AI";
-    const first = await upsertWorkspace(dbh.db, { userId, machineId, rootPath: root, gitBranch: "main" });
+    const first = await upsertWorkspace(dbh.db, {
+      userId,
+      machineId,
+      rootPath: root,
+      gitBranch: "main",
+    });
     const second = await upsertWorkspace(dbh.db, {
       userId,
       machineId,
@@ -65,7 +66,12 @@ describe.skipIf(!TEST_URL)("workspaces + projects repositories (integration)", (
   });
 
   it("addWorkspaceKey is idempotent; resolveWorkspaceId returns the workspace+project, or undefined", async () => {
-    const ws = await upsertWorkspace(dbh.db, { userId, machineId, rootPath: "/repo", gitRemote: REMOTE });
+    const ws = await upsertWorkspace(dbh.db, {
+      userId,
+      machineId,
+      rootPath: "/repo",
+      gitRemote: REMOTE,
+    });
     const { id: projectId } = await findOrCreateProjectByRemote(dbh.db, userId, REMOTE, "420AI");
     await remapWorkspace(dbh.db, userId, ws.id, projectId);
 
@@ -82,9 +88,8 @@ describe.skipIf(!TEST_URL)("workspaces + projects repositories (integration)", (
       sourceConnector: "claude-code",
       projectKey: "/repo",
     });
-    const [{ n }] = (
-      await dbh.db.execute(sql`SELECT count(*)::int AS n FROM workspace_keys`)
-    ).rows as { n: number }[];
+    const [{ n }] = (await dbh.db.execute(sql`SELECT count(*)::int AS n FROM workspace_keys`))
+      .rows as { n: number }[];
     expect(n).toBe(1);
 
     const resolved = await resolveWorkspaceId(dbh.db, userId, "/repo");
@@ -98,7 +103,12 @@ describe.skipIf(!TEST_URL)("workspaces + projects repositories (integration)", (
     // Two machines: same remote, DIFFERENT absolute paths.
     const a = await findOrCreateProjectByRemote(dbh.db, userId, REMOTE, "420AI");
     expect(a.created).toBe(true);
-    const b = await findOrCreateProjectByRemote(dbh.db, userId, REMOTE, "renamed-should-not-clobber");
+    const b = await findOrCreateProjectByRemote(
+      dbh.db,
+      userId,
+      REMOTE,
+      "renamed-should-not-clobber",
+    );
     expect(b.created).toBe(false);
     expect(b.id).toBe(a.id);
 
@@ -123,7 +133,12 @@ describe.skipIf(!TEST_URL)("workspaces + projects repositories (integration)", (
   it("Gemini hash key resolves and projectEventSummary counts events joined by project_path", async () => {
     const hash = "2025fdb554a6deadbeef";
     const realPath = "c:\\users\\seanr\\onedrive\\documents\\420ai";
-    const ws = await upsertWorkspace(dbh.db, { userId, machineId, rootPath: realPath, gitRemote: REMOTE });
+    const ws = await upsertWorkspace(dbh.db, {
+      userId,
+      machineId,
+      rootPath: realPath,
+      gitRemote: REMOTE,
+    });
     const { id: projectId } = await findOrCreateProjectByRemote(dbh.db, userId, REMOTE, "420AI");
     await remapWorkspace(dbh.db, userId, ws.id, projectId);
     // Gemini's project_key is the HASH (== events.project_path), NOT the real path.

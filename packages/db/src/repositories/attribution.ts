@@ -49,11 +49,7 @@ function normPath(p: string): string {
  * path iff `normalize(abs).endsWith(normalize(join(repoRoot, rel)))` (separators
  * normalized). repoRoot == the session's project_path == the commit's repo_root_path.
  */
-function fileOverlapCount(
-  repoRoot: string,
-  sessionPaths: string[],
-  commitFiles: string[],
-): number {
+function fileOverlapCount(repoRoot: string, sessionPaths: string[], commitFiles: string[]): number {
   const root = normPath(repoRoot);
   const normSession = sessionPaths.map(normPath);
   let count = 0;
@@ -70,10 +66,7 @@ function fileOverlapCount(
  * `transcript.ts` precedent — the 2nd such read), `JSON.parse`s, and collects the
  * `.path` field (deduped). Throws on a key/tag error (silent library).
  */
-export async function sessionModifiedPaths(
-  db: DbClient,
-  sessionId: string,
-): Promise<string[]> {
+export async function sessionModifiedPaths(db: DbClient, sessionId: string): Promise<string[]> {
   const rows = await db
     .select({
       ciphertext: events.payloadCiphertext,
@@ -224,7 +217,12 @@ export async function computeSessionGitSuggestions(
   const fileRows = await db
     .select({ commitId: gitCommitFiles.commitId, filePath: gitCommitFiles.filePath })
     .from(gitCommitFiles)
-    .where(inArray(gitCommitFiles.commitId, candidates.map((c) => c.id)));
+    .where(
+      inArray(
+        gitCommitFiles.commitId,
+        candidates.map((c) => c.id),
+      ),
+    );
   const filesByCommit = new Map<string, string[]>();
   for (const fr of fileRows) {
     const list = filesByCommit.get(fr.commitId);

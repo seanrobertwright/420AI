@@ -1,40 +1,38 @@
-"use client"
+"use client";
 
-import * as React from "react"
-import { cn } from "@/lib/utils"
+import * as React from "react";
+import { cn } from "@/lib/utils";
 
 interface DataFieldProps {
-  label: string
-  value: string
-  highlight?: boolean
+  label: string;
+  value: string;
+  highlight?: boolean;
 }
 
 function DataField({ label, value, highlight = false }: DataFieldProps) {
   return (
     <div className="space-y-1">
-      <div className="text-[10px] uppercase tracking-widest text-foreground/80">
-        {label}
-      </div>
+      <div className="text-[10px] uppercase tracking-widest text-foreground/80">{label}</div>
       <div className="flex items-center gap-2">
         <span className="text-primary">|</span>
         <span
           className={cn(
             "font-mono text-sm uppercase tracking-wide",
-            highlight && "bg-primary/20 px-2 py-0.5"
+            highlight && "bg-primary/20 px-2 py-0.5",
           )}
         >
           {value}
         </span>
       </div>
     </div>
-  )
+  );
 }
 
 interface DataCardProps extends React.HTMLAttributes<HTMLDivElement> {
-  title?: string
-  subtitle?: string
-  fields: { label: string; value: string; highlight?: boolean }[]
-  status?: "active" | "inactive" | "alert"
+  title?: string;
+  subtitle?: string;
+  fields: { label: string; value: string; highlight?: boolean }[];
+  status?: "active" | "inactive" | "alert";
 }
 
 export function DataCard({
@@ -49,7 +47,7 @@ export function DataCard({
     active: "border-primary/50",
     inactive: "border-muted",
     alert: "border-destructive/50",
-  }
+  };
 
   return (
     <div
@@ -58,7 +56,7 @@ export function DataCard({
       className={cn(
         "relative overflow-hidden rounded border bg-card/80 backdrop-blur-sm",
         statusColors[status],
-        className
+        className,
       )}
       {...props}
     >
@@ -76,9 +74,7 @@ export function DataCard({
           {title && (
             <div className="flex items-center gap-2">
               <span className="text-primary">|</span>
-              <h3 className="text-lg font-bold uppercase tracking-wider">
-                {title}
-              </h3>
+              <h3 className="text-lg font-bold uppercase tracking-wider">{title}</h3>
             </div>
           )}
         </div>
@@ -102,5 +98,5 @@ export function DataCard({
       <div className="pointer-events-none absolute bottom-0 left-0 h-4 w-4 border-b-2 border-l-2 border-primary/50" />
       <div className="pointer-events-none absolute bottom-0 right-0 h-4 w-4 border-b-2 border-r-2 border-primary/50" />
     </div>
-  )
+  );
 }

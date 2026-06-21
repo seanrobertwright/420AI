@@ -4,9 +4,12 @@ import {
   deriveAlerts,
   deriveBacklogTrendAlerts,
   deriveCatalogAlerts,
+  deriveAuthFailureAlerts,
+  deriveArchiveUnreachableAlerts,
   sortAlerts,
   isBacklogHigh,
   BACKLOG_TREND_WINDOW_MS,
+  AUTH_FAILURE_ALERT,
   MONITOR_VERSION,
   emptyMonitorSnapshot,
   type LiveMonitorSnapshot,
@@ -17,7 +20,9 @@ import {
   connectorHealth,
   recentBacklogSamples,
   reconcileAlertFirings,
+  deliverPendingFirings,
   countPendingCatalogs,
+  countRecentAuthFailures,
   findUserIdByEmail,
   type DbClient,
 } from "@420ai/db";
@@ -40,17 +45,23 @@ const ACTIVE_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
  * samples, merged + re-sorted by `sortAlerts`), it reconciles them against the persisted
  * open firings (evaluate-on-read — no background dispatcher) and attaches `alertFirings`.
  */
-async function buildSnapshot(db: DbClient, userId: string, now: Date): Promise<LiveMonitorSnapshot> {
+async function buildSnapshot(
+  db: DbClient,
+  userId: string,
+  now: Date,
+): Promise<LiveMonitorSnapshot> {
   const nowMs = now.getTime();
   const sinceIso = new Date(nowMs - ACTIVE_WINDOW_MS).toISOString();
   const trendSince = new Date(nowMs - BACKLOG_TREND_WINDOW_MS);
-  const [machines, connectors, sessions, samplesByMachine, pendingCatalogs] = await Promise.all([
-    machineStatuses(db, userId),
-    connectorHealth(db, userId),
-    activeSessions(db, userId, sinceIso),
-    recentBacklogSamples(db, userId, trendSince),
-    countPendingCatalogs(db),
-  ]);
+  const [machines, connectors, sessions, samplesByMachine, pendingCatalogs, authFailureCount] =
+    await Promise.all([
+      machineStatuses(db, userId),
+      connectorHealth(db, userId),
+      activeSessions(db, userId, sinceIso),
+      recentBacklogSamples(db, userId, trendSince),
+      countPendingCatalogs(db),
+      countRecentAuthFailures(db, new Date(nowMs - AUTH_FAILURE_ALERT.windowMs)),
+    ]);
   // Assemble the derived-state snapshot first, then fold in alerts — deriveAlerts reads the
   // already-derived machine status/backlogHigh + connector rows (no clock, no re-derivation, D3).
   const machineRows = machines.map((m) => ({
@@ -73,10 +84,27 @@ async function buildSnapshot(db: DbClient, userId: string, now: Date): Promise<L
     ...deriveAlerts(built),
     ...deriveBacklogTrendAlerts(machineRows, samplesByMachine),
     ...deriveCatalogAlerts(pendingCatalogs),
+    ...deriveArchiveUnreachableAlerts(machineRows),
+    ...deriveAuthFailureAlerts(authFailureCount),
   ]);
   // The new WRITE (D1): reconcile firing state against the derived alerts (route owns `now`).
   const alertFirings = await reconcileAlertFirings(db, userId, alerts, now);
   return { ...built, alerts, alertFirings };
+}
+
+/**
+ * M12 12.6 alert delivery — push any newly-opened firing to the injected deliverer, AFTER the
+ * snapshot has reconciled firing state. Kept as a route-boundary helper (NOT folded into the
+ * load-bearing `buildSnapshot(db,userId,now)`) so the delivery I/O is explicitly best-effort:
+ * a webhook problem NEVER 500s GET /v1/monitor or breaks the SSE stream. Early-returns (no
+ * query) when no deliverer is wired. Uses the SAME `now` the snapshot reconciled with.
+ */
+async function deliverFirings(app: FastifyInstance, userId: string, now: Date): Promise<void> {
+  try {
+    await deliverPendingFirings(app.db, userId, app.alertDeliverer, now, (e) => app.log.error(e));
+  } catch (e) {
+    app.log.error(e);
+  }
 }
 
 /**
@@ -100,7 +128,9 @@ export default async function monitorRoutes(app: FastifyInstance): Promise<void>
     const userId = await findUserIdByEmail(app.db, app.adminEmail);
     const now = new Date();
     if (!userId) return reply.code(200).send(emptyMonitorSnapshot(now.toISOString()));
-    return reply.code(200).send(await buildSnapshot(app.db, userId, now));
+    const snap = await buildSnapshot(app.db, userId, now);
+    await deliverFirings(app, userId, now); // best-effort; never throws
+    return reply.code(200).send(snap);
   });
 
   app.get("/v1/monitor/stream", async (request, reply) => {
@@ -135,11 +165,16 @@ export default async function monitorRoutes(app: FastifyInstance): Promise<void>
         const snap = userId
           ? await buildSnapshot(app.db, userId, now)
           : emptyMonitorSnapshot(now.toISOString());
+        // Deliver newly-opened firings before writing the frame (best-effort; guarded on
+        // still-connected so a deliver query never runs against a dropped client).
+        if (userId && !closed) await deliverFirings(app, userId, now);
         if (!closed) reply.raw.write(`data: ${JSON.stringify(snap)}\n\n`);
       } catch (err) {
         // The error handler is bypassed post-hijack — emit + keep the stream alive.
         if (!closed) {
-          reply.raw.write(`event: error\ndata: ${JSON.stringify({ error: "snapshot failed" })}\n\n`);
+          reply.raw.write(
+            `event: error\ndata: ${JSON.stringify({ error: "snapshot failed" })}\n\n`,
+          );
         }
         request.log.error(err);
       }

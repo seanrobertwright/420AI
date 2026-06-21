@@ -24,16 +24,22 @@ export async function proxyJson(path: string, init: Init = {}): Promise<NextResp
   try {
     const res = await fetch(`${ingestUrl()}${path}`, {
       method: init.method ?? "GET",
-      headers: { ...(await adminHeaders()), ...(init.contentType ? { "content-type": init.contentType } : {}) },
+      headers: {
+        ...(await adminHeaders()),
+        ...(init.contentType ? { "content-type": init.contentType } : {}),
+      },
       body: init.body ?? null,
       cache: "no-store",
     });
     const text = await res.text(); // ingest always replies JSON; pass through verbatim
     if (!res.ok) {
-      return new NextResponse(text || JSON.stringify({ error: "ingest error", status: res.status }), {
-        status: res.status, // forward 400/401/404 so the UI can react (404 → "not found")
-        headers: { "content-type": "application/json" },
-      });
+      return new NextResponse(
+        text || JSON.stringify({ error: "ingest error", status: res.status }),
+        {
+          status: res.status, // forward 400/401/404 so the UI can react (404 → "not found")
+          headers: { "content-type": "application/json" },
+        },
+      );
     }
     return new NextResponse(text, { status: 200, headers: { "content-type": "application/json" } });
   } catch {
@@ -51,11 +57,16 @@ export async function proxyStream(path: string, signal: AbortSignal): Promise<Re
   const reqHeaders = await adminHeaders();
   let upstream: Response;
   try {
-    upstream = await fetch(`${ingestUrl()}${path}`, { headers: reqHeaders, cache: "no-store", signal });
+    upstream = await fetch(`${ingestUrl()}${path}`, {
+      headers: reqHeaders,
+      cache: "no-store",
+      signal,
+    });
   } catch {
     return new Response("ingest unreachable", { status: 502 });
   }
-  if (!upstream.ok || !upstream.body) return new Response("ingest error", { status: upstream.status || 502 });
+  if (!upstream.ok || !upstream.body)
+    return new Response("ingest error", { status: upstream.status || 502 });
   const headers = new Headers({ "cache-control": "no-store" });
   for (const h of [
     "content-type",

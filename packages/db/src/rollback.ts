@@ -43,7 +43,9 @@ export async function rollbackLast(
         const s = stmt.trim();
         if (s) await client.query(s);
       }
-      await client.query(`delete from drizzle.__drizzle_migrations where created_at = $1`, [createdAt]);
+      await client.query(`delete from drizzle.__drizzle_migrations where created_at = $1`, [
+        createdAt,
+      ]);
       await client.query("commit");
     } catch (e) {
       await client.query("rollback");

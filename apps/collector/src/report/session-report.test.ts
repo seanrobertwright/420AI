@@ -3,10 +3,7 @@ import { readFileSync } from "node:fs";
 import { parseClaudeCodeSession } from "../connectors/claude-code.js";
 import { renderSessionReport } from "./session-report.js";
 
-const fixture = readFileSync(
-  new URL("../fixtures/sample-session.jsonl", import.meta.url),
-  "utf8",
-);
+const fixture = readFileSync(new URL("../fixtures/sample-session.jsonl", import.meta.url), "utf8");
 
 describe("renderSessionReport", () => {
   const { events } = parseClaudeCodeSession(fixture, { ingestedAt: "2026-06-13T00:00:00Z" });

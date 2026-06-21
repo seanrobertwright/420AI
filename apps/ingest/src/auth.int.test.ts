@@ -4,7 +4,11 @@ import type { FastifyInstance } from "fastify";
 import { createDb, setUserPassword } from "@420ai/db";
 import { buildApp } from "./app.js";
 import { hashPassword } from "./password.js";
-import { AnalysisProviderError, type AnalysisProvider, type AnalysisRequest } from "./analysis/provider.js";
+import {
+  AnalysisProviderError,
+  type AnalysisProvider,
+  type AnalysisRequest,
+} from "./analysis/provider.js";
 
 const TEST_URL = process.env.DATABASE_URL_TEST;
 const SERVICE_TOKEN = "svc-token";
@@ -74,7 +78,9 @@ describe.skipIf(!TEST_URL)("auth API (login → session bearer, HTTP e2e via inj
     const unknown = await login("ghost@test.local", PASSWORD);
     expect(wrongPw.statusCode).toBe(401);
     expect(unknown.statusCode).toBe(401);
-    expect((wrongPw.json() as { error: string }).error).toBe((unknown.json() as { error: string }).error);
+    expect((wrongPw.json() as { error: string }).error).toBe(
+      (unknown.json() as { error: string }).error,
+    );
   });
 
   it("400s a malformed login body (missing password)", async () => {

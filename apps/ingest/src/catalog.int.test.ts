@@ -6,7 +6,11 @@ import { createDb } from "@420ai/db";
 import { canonicalizeCatalog, type CatalogContent, type ModelPricing } from "@420ai/shared";
 import type { IngestBatch } from "@420ai/shared";
 import { buildApp } from "./app.js";
-import { AnalysisProviderError, type AnalysisProvider, type AnalysisRequest } from "./analysis/provider.js";
+import {
+  AnalysisProviderError,
+  type AnalysisProvider,
+  type AnalysisRequest,
+} from "./analysis/provider.js";
 
 const TEST_URL = process.env.DATABASE_URL_TEST;
 const ADMIN = "test-admin";
@@ -24,7 +28,15 @@ const EPHEMERAL_PUB = publicKey.export({ type: "spki", format: "pem" }).toString
 const EPHEMERAL_PRIV = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
 
 function rate(over: Partial<ModelPricing> = {}): ModelPricing {
-  return { input: 1e-6, output: 2e-6, cache_read: 0, cache_write: 0, sourceUrl: "x", asOf: "2026-06-20", ...over };
+  return {
+    input: 1e-6,
+    output: 2e-6,
+    cache_read: 0,
+    cache_write: 0,
+    sourceUrl: "x",
+    asOf: "2026-06-20",
+    ...over,
+  };
 }
 
 const CONTENT: CatalogContent = {
@@ -33,7 +45,11 @@ const CONTENT: CatalogContent = {
 };
 
 function sign(content: CatalogContent): string {
-  return cryptoSign(null, Buffer.from(canonicalizeCatalog(content), "utf8"), EPHEMERAL_PRIV).toString("base64");
+  return cryptoSign(
+    null,
+    Buffer.from(canonicalizeCatalog(content), "utf8"),
+    EPHEMERAL_PRIV,
+  ).toString("base64");
 }
 
 /** A cost-bearing batch (cost.estimated event with cost+tokens+model). */
@@ -52,7 +68,15 @@ function costBatch(): IngestBatch {
         sessionId: "cat-s1",
         model: "claude-opus-4-8",
         ts: "2026-06-14T00:00:00.000Z",
-        tokens: { input: 1000, output: 0, cache_read: 0, cache_write: 0, reasoning: 0, tool: 0, total: 1000 },
+        tokens: {
+          input: 1000,
+          output: 0,
+          cache_read: 0,
+          cache_write: 0,
+          reasoning: 0,
+          tool: 0,
+          total: 1000,
+        },
         cost: { usd: 0.005, confidence: "estimated-model-known", model: "claude-opus-4-8" },
       },
     ],
@@ -100,7 +124,11 @@ describe.skipIf(!TEST_URL)("catalog API (HTTP e2e via inject) — M10 3d", () =>
   }
 
   async function pair(code: string): Promise<{ token: string; machineId: string }> {
-    const res = await app.inject({ method: "POST", url: "/v1/pair", payload: { code, machine: { name: "test-machine" } } });
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/pair",
+      payload: { code, machine: { name: "test-machine" } },
+    });
     expect(res.statusCode).toBe(200);
     return res.json();
   }
@@ -197,7 +225,9 @@ describe.skipIf(!TEST_URL)("catalog API (HTTP e2e via inject) — M10 3d", () =>
 
   it("approve/reject guard the id: malformed → 404, unknown uuid → 404", async () => {
     expect((await adminPost("/v1/catalog/not-a-uuid/approve")).statusCode).toBe(404);
-    expect((await adminPost("/v1/catalog/00000000-0000-4000-8000-000000000000/approve")).statusCode).toBe(404);
+    expect(
+      (await adminPost("/v1/catalog/00000000-0000-4000-8000-000000000000/approve")).statusCode,
+    ).toBe(404);
     expect((await adminPost("/v1/catalog/not-a-uuid/reject")).statusCode).toBe(404);
   });
 

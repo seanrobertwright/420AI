@@ -33,8 +33,7 @@ export function adminAuthorized(app: FastifyInstance, request: FastifyRequest): 
   return verifySession(token, app.sessionSecret) !== null;
 }
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * True if `s` is a canonical UUID. Routes guard path/body ids with this so a

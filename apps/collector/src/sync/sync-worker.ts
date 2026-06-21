@@ -1,11 +1,7 @@
 import { postIngest, isUnauthorized } from "../ingest-client.js";
 import type { QueueStore, SyncOutcome } from "../queue/queue-store.js";
 import { maybeSendHeartbeat, newHeartbeatState } from "../heartbeat.js";
-import type {
-  IngestBatch,
-  RawRecordPayload,
-  EventPayload,
-} from "@420ai/shared";
+import type { IngestBatch, RawRecordPayload, EventPayload } from "@420ai/shared";
 
 /**
  * Sync worker: drains the durable queue to the M2 Ingest API. Library file —
@@ -107,7 +103,10 @@ export async function runSyncLoop(
   const retryMs = deps.retryMs ?? 1000;
   // M9: one throttle state per loop; heartbeats are sent only when collectorVersion is set.
   const heartbeatState = newHeartbeatState();
-  const sendHeartbeat = async (): Promise<void> => {
+  // M12 12.6: consecutive collector→archive sync failures — reset on "ok", ++ on "retry".
+  // The heartbeat reports the latest accumulated count so the server can derive archive.unreachable.
+  let consecutiveSyncFailures = 0;
+  const sendHeartbeat = async (count: number): Promise<void> => {
     if (!deps.collectorVersion) return; // heartbeat disabled (no version wired)
     await maybeSendHeartbeat(
       {
@@ -117,15 +116,17 @@ export async function runSyncLoop(
         collectorVersion: deps.collectorVersion,
         intervalMs: deps.heartbeatIntervalMs ?? 30000,
         now: deps.now ?? (() => new Date()),
+        consecutiveSyncFailures: count,
         post: deps.postHeartbeat,
       },
       heartbeatState,
     );
   };
   while (!signal.aborted) {
-    // Best-effort liveness ping (throttled) before each drain — a failure is swallowed
-    // inside maybeSendHeartbeat and never affects the sync outcome (residual risk e).
-    await sendHeartbeat();
+    // Best-effort liveness ping (throttled) before each drain — reports the count accumulated
+    // by prior iterations. A failure is swallowed inside maybeSendHeartbeat and never affects
+    // the sync outcome or the counter (residual risk e).
+    await sendHeartbeat(consecutiveSyncFailures);
     const outcome = await syncOnce(deps);
     if (outcome === "stop") {
       deps.onStop?.();
@@ -133,10 +134,12 @@ export async function runSyncLoop(
     }
     if (signal.aborted) break;
     if (outcome === "ok") {
+      consecutiveSyncFailures = 0; // archive reachable — clear the failure streak
       // Empty/clean drain — idle. (A non-empty 2xx returns "ok" too; we still
       // idle briefly, then the next claim pulls any remaining batch.)
       await delay(idleMs, signal);
     } else {
+      consecutiveSyncFailures += 1; // network/5xx — couldn't reach the archive
       // retry — short delay; due-time enforced by next_attempt_at.
       await delay(retryMs, signal);
     }

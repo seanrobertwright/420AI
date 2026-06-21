@@ -41,6 +41,7 @@ export interface MachineStatusRow {
   queuePending: number | null;
   queueInflight: number | null;
   collectorVersion: string | null;
+  consecutiveSyncFailures: number | null; // M12 12.6 archive.unreachable signal (collector-reported)
 }
 
 /** One currently-active tool session (recent activity window), projected over `events`. */
@@ -97,5 +98,13 @@ export const isBacklogHigh = (pending: number | null): boolean =>
  * empty shape is defined ONCE.
  */
 export function emptyMonitorSnapshot(generatedAt: string): LiveMonitorSnapshot {
-  return { monitorVersion: MONITOR_VERSION, generatedAt, machines: [], connectors: [], activeSessions: [], alerts: [], alertFirings: [] };
+  return {
+    monitorVersion: MONITOR_VERSION,
+    generatedAt,
+    machines: [],
+    connectors: [],
+    activeSessions: [],
+    alerts: [],
+    alertFirings: [],
+  };
 }

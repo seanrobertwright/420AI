@@ -8,13 +8,7 @@ import type {
 } from "@420ai/shared";
 import { getMonitorSnapshot, onControlEvent } from "@/lib/bridge";
 import { Badge } from "@/components/ui/badge";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Table,
   TableBody,
@@ -150,7 +144,8 @@ export function SyncHealth() {
           <div className="text-sm">
             <p className="text-destructive">{serverError}</p>
             <p className="text-muted-foreground mt-1 text-xs">
-              The server fleet view needs <code>ADMIN_TOKEN</code> — full Settings land in a later slice.
+              The server fleet view needs <code>ADMIN_TOKEN</code> — full Settings land in a later
+              slice.
             </p>
           </div>
         ) : snapshot ? (
@@ -182,7 +177,9 @@ export function SyncHealth() {
                         <TableCell className="text-muted-foreground text-xs">
                           {a.machineName ?? a.connector ?? "—"}
                         </TableCell>
-                        <TableCell className="text-muted-foreground">{formatAgo(a.since, nowMs)}</TableCell>
+                        <TableCell className="text-muted-foreground">
+                          {formatAgo(a.since, nowMs)}
+                        </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
@@ -210,7 +207,9 @@ function SummaryRow({ snapshot }: { snapshot: LiveMonitorSnapshot }) {
         <span className="text-muted-foreground text-xs uppercase tracking-wide">Collectors</span>
         <span className="flex items-center gap-1.5 text-sm">
           <Badge className={cn(STATUS_BADGE.online)}>{counts.online} online</Badge>
-          {counts.stale > 0 ? <Badge className={cn(STATUS_BADGE.stale)}>{counts.stale} stale</Badge> : null}
+          {counts.stale > 0 ? (
+            <Badge className={cn(STATUS_BADGE.stale)}>{counts.stale} stale</Badge>
+          ) : null}
           {counts.offline > 0 ? (
             <Badge className={cn(STATUS_BADGE.offline)}>{counts.offline} offline</Badge>
           ) : null}

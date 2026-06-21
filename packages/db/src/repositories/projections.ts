@@ -28,6 +28,7 @@ import { events, machines, workspaceKeys, workspaces } from "../schema.js";
  * the shared `lowestConfidence` ladder (lowest-wins, PRD §13.3).
  */
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- the runtime `as const` array is the single source for the TokenField union below (used only via `typeof`)
 const TOKEN_FIELDS = ["input", "output", "cache_read", "cache_write"] as const;
 type TokenField = (typeof TOKEN_FIELDS)[number];
 
@@ -42,7 +43,9 @@ const tokenSum = (field: TokenField) =>
 const costSum = sql<string>`coalesce(sum((${events.cost} ->> 'usd')::numeric) filter (where ${events.eventType} = 'cost.estimated'), 0)`;
 
 /** Distinct cost-confidence labels (text[] → string[]); reduced in TS. */
-const costConfidences = sql<string[]>`coalesce(array_agg(distinct ${events.cost} ->> 'confidence') filter (where ${events.eventType} = 'cost.estimated'), '{}')`;
+const costConfidences = sql<
+  string[]
+>`coalesce(array_agg(distinct ${events.cost} ->> 'confidence') filter (where ${events.eventType} = 'cost.estimated'), '{}')`;
 
 /** The token-subtype select columns, reused across the project/usage/session queries. */
 const tokenColumns = {
@@ -159,7 +162,9 @@ const sessionAggregateColumns = {
   sourceConnector: sql<string>`max(${events.sourceConnector})`,
   projectPath: sql<string | null>`max(${events.projectPath})`,
   gitBranch: sql<string | null>`max(${events.gitBranch})`,
-  models: sql<string[]>`coalesce(array_agg(distinct ${events.model}) filter (where ${events.model} is not null), '{}')`,
+  models: sql<
+    string[]
+  >`coalesce(array_agg(distinct ${events.model}) filter (where ${events.model} is not null), '{}')`,
   startedAt: sql<string | null>`min(${events.ts})`,
   endedAt: sql<string | null>`max(${events.ts})`,
   eventCount: sql<number>`count(${events.fingerprint})::int`,
@@ -256,10 +261,7 @@ export async function sessionDetail(db: DbClient, sessionId: string): Promise<Se
  * through workspace_keys and drop them. Clock-free: returns `lastEventAt`; the
  * "N seconds ago" framing is computed by the consumer.
  */
-export async function connectorHealth(
-  db: DbClient,
-  userId: string,
-): Promise<ConnectorHealthRow[]> {
+export async function connectorHealth(db: DbClient, userId: string): Promise<ConnectorHealthRow[]> {
   const rows = await db
     .select({
       sourceConnector: events.sourceConnector,
@@ -271,7 +273,9 @@ export async function connectorHealth(
       toolCalls: sql<number>`count(*) filter (where ${events.eventType} in ('tool.call.completed', 'tool.call.failed'))::int`,
       toolsFailed: sql<number>`count(*) filter (where ${events.eventType} = 'tool.call.failed')::int`,
       parserVersions: sql<string[]>`coalesce(array_agg(distinct ${events.parserVersion}), '{}')`,
-      models: sql<string[]>`coalesce(array_agg(distinct ${events.model}) filter (where ${events.model} is not null), '{}')`,
+      models: sql<
+        string[]
+      >`coalesce(array_agg(distinct ${events.model}) filter (where ${events.model} is not null), '{}')`,
     })
     .from(events)
     .innerJoin(machines, eq(events.machineId, machines.id))
@@ -299,8 +303,12 @@ export async function projectGitMetadata(
 ): Promise<ProjectGitMetadata> {
   const [row] = await db
     .select({
-      branches: sql<string[]>`coalesce(array_agg(distinct ${events.gitBranch}) filter (where ${events.gitBranch} is not null), '{}')`,
-      projectPaths: sql<string[]>`coalesce(array_agg(distinct ${events.projectPath}) filter (where ${events.projectPath} is not null), '{}')`,
+      branches: sql<
+        string[]
+      >`coalesce(array_agg(distinct ${events.gitBranch}) filter (where ${events.gitBranch} is not null), '{}')`,
+      projectPaths: sql<
+        string[]
+      >`coalesce(array_agg(distinct ${events.projectPath}) filter (where ${events.projectPath} is not null), '{}')`,
     })
     .from(events)
     .innerJoin(workspaceKeys, eq(events.projectPath, workspaceKeys.projectKey))

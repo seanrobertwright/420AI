@@ -4,7 +4,11 @@ import type { FastifyInstance } from "fastify";
 import { createDb } from "@420ai/db";
 import type { IngestBatch, GitCaptureRequest, SessionGitLink } from "@420ai/shared";
 import { buildApp } from "./app.js";
-import { AnalysisProviderError, type AnalysisProvider, type AnalysisRequest } from "./analysis/provider.js";
+import {
+  AnalysisProviderError,
+  type AnalysisProvider,
+  type AnalysisRequest,
+} from "./analysis/provider.js";
 
 const TEST_URL = process.env.DATABASE_URL_TEST;
 const ADMIN = "test-admin";
@@ -84,7 +88,12 @@ describe.skipIf(!TEST_URL)("git outcomes + attribution API (HTTP e2e via inject)
 
   beforeAll(async () => {
     dbh = createDb(TEST_URL!);
-    app = buildApp({ db: dbh.db, adminToken: ADMIN, analysisProvider: stubProvider, logger: false });
+    app = buildApp({
+      db: dbh.db,
+      adminToken: ADMIN,
+      analysisProvider: stubProvider,
+      logger: false,
+    });
     await app.ready();
   });
 

@@ -16,6 +16,7 @@ export {
   sessionGitLinks,
   machineHeartbeats,
   alertFirings,
+  ingestAuthFailures,
   pricingCatalogs,
 } from "./schema.js";
 export { createDb } from "./client.js";
@@ -36,7 +37,9 @@ export {
   reconcileAlertFirings,
   listAlertFirings,
   ackAlertFiring,
+  deliverPendingFirings,
 } from "./repositories/alert-firings.js";
+export { recordIngestAuthFailure, countRecentAuthFailures } from "./repositories/auth-failures.js";
 export {
   findUserIdByEmail,
   ensureUserByEmail,
@@ -78,18 +81,11 @@ export {
   listReportArtifacts,
 } from "./repositories/reports.js";
 export type { ReportArtifactRow } from "./repositories/reports.js";
-export {
-  sessionTranscript,
-  DEFAULT_TRANSCRIPT_CAPS,
-} from "./repositories/transcript.js";
+export { sessionTranscript, DEFAULT_TRANSCRIPT_CAPS } from "./repositories/transcript.js";
 export type { TranscriptEntry, TranscriptCaps } from "./repositories/transcript.js";
 export { exportEvents, EXPORT_MAX_ROWS } from "./repositories/exports.js";
 export type { EventExportRow, EventExportFilters } from "./repositories/exports.js";
-export {
-  recordGitCommits,
-  gitCommitsByProject,
-  gitCommitDetail,
-} from "./repositories/git.js";
+export { recordGitCommits, gitCommitsByProject, gitCommitDetail } from "./repositories/git.js";
 export type { GitCommitDetail } from "./repositories/git.js";
 export {
   sessionModifiedPaths,

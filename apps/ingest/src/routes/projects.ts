@@ -42,12 +42,7 @@ export default async function projectRoutes(app: FastifyInstance): Promise<void>
         return reply.code(401).send({ error: "admin authorization required" });
       }
       const userId = await ensureUserByEmail(app.db, app.adminEmail);
-      const { id } = await createProject(
-        app.db,
-        userId,
-        request.body.name,
-        request.body.gitRemote,
-      );
+      const { id } = await createProject(app.db, userId, request.body.name, request.body.gitRemote);
       return reply.code(200).send({ id });
     },
   );
@@ -68,17 +63,14 @@ export default async function projectRoutes(app: FastifyInstance): Promise<void>
     },
   );
 
-  app.get<{ Params: { id: string } }>(
-    "/v1/projects/:id/summary",
-    async (request, reply) => {
-      if (!adminAuthorized(app, request)) {
-        return reply.code(401).send({ error: "admin authorization required" });
-      }
-      if (!isUuid(request.params.id)) {
-        return reply.code(404).send({ error: "project not found" });
-      }
-      const summary = await projectEventSummary(app.db, request.params.id);
-      return reply.code(200).send(summary);
-    },
-  );
+  app.get<{ Params: { id: string } }>("/v1/projects/:id/summary", async (request, reply) => {
+    if (!adminAuthorized(app, request)) {
+      return reply.code(401).send({ error: "admin authorization required" });
+    }
+    if (!isUuid(request.params.id)) {
+      return reply.code(404).send({ error: "project not found" });
+    }
+    const summary = await projectEventSummary(app.db, request.params.id);
+    return reply.code(200).send(summary);
+  });
 }

@@ -1,7 +1,7 @@
 import fp from "fastify-plugin";
 import type { FastifyReply, FastifyRequest, preHandlerHookHandler } from "fastify";
 import type { Db } from "@420ai/db";
-import { findMachineIdByToken, touchLastSeen } from "@420ai/db";
+import { findMachineIdByToken, recordIngestAuthFailure, touchLastSeen } from "@420ai/db";
 import type { AnalysisProvider } from "../analysis/provider.js";
 
 // Module augmentation: make the injected deps + per-request machineId typed
@@ -27,6 +27,8 @@ declare module "fastify" {
     /** M12 12.4c per-route login rate limit ({max,timeWindow}) or false when off. Decorated
      * BEFORE routes so routes/auth.ts's `config.rateLimit` resolves either way. */
     rateLimitLogin: { max: number; timeWindow: string } | false;
+    /** M12 12.6 injected alert deliverer (webhook in server.ts; spy in tests); null = delivery off. */
+    alertDeliverer: import("../delivery/alert-deliverer.js").AlertDeliverer | null;
     /** preHandler that 401s unless a valid bearer token resolves to a machine. */
     authenticate: preHandlerHookHandler;
   }
@@ -46,16 +48,22 @@ function bearer(req: FastifyRequest): string | null {
 export default fp(async function authPlugin(app) {
   app.decorateRequest("machineId", "");
 
-  app.decorate("authenticate", async function (this: typeof app, request: FastifyRequest, reply: FastifyReply) {
-    const token = bearer(request);
-    if (!token) {
-      return reply.code(401).send({ error: "missing or malformed authorization header" });
-    }
-    const machineId = await findMachineIdByToken(app.db, token);
-    if (!machineId) {
-      return reply.code(401).send({ error: "invalid or revoked token" });
-    }
-    request.machineId = machineId;
-    await touchLastSeen(app.db, machineId);
-  });
+  app.decorate(
+    "authenticate",
+    async function (this: typeof app, request: FastifyRequest, reply: FastifyReply) {
+      const token = bearer(request);
+      if (!token) {
+        return reply.code(401).send({ error: "missing or malformed authorization header" });
+      }
+      const machineId = await findMachineIdByToken(app.db, token);
+      if (!machineId) {
+        // Best-effort §20 audit (M12 12.6) — fire-and-forget so a logging write never alters
+        // the 401 latency/contract (CLAUDE.md silent libs). Feeds the ingest.auth_failure alert.
+        void recordIngestAuthFailure(app.db, { remoteIp: request.ip }).catch(() => {});
+        return reply.code(401).send({ error: "invalid or revoked token" });
+      }
+      request.machineId = machineId;
+      await touchLastSeen(app.db, machineId);
+    },
+  );
 });

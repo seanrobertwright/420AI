@@ -14,8 +14,18 @@ const RAW1_PAYLOAD = JSON.stringify({ model: "claude-opus", text: SECRET });
 function makeBatch(): IngestBatch {
   return {
     records: [
-      { sourceConnector: "claude-code", sessionId: "s1", sourceRecordId: "r1", payload: RAW1_PAYLOAD },
-      { sourceConnector: "claude-code", sessionId: "s1", sourceRecordId: "r2", payload: "plain line two" },
+      {
+        sourceConnector: "claude-code",
+        sessionId: "s1",
+        sourceRecordId: "r1",
+        payload: RAW1_PAYLOAD,
+      },
+      {
+        sourceConnector: "claude-code",
+        sessionId: "s1",
+        sourceRecordId: "r2",
+        payload: "plain line two",
+      },
     ],
     events: [
       {
@@ -27,7 +37,15 @@ function makeBatch(): IngestBatch {
         eventType: "usage.reported",
         sessionId: "s1",
         ts: "2026-06-13T00:00:00.000Z",
-        tokens: { input: 10, output: 20, cache_read: 0, cache_write: 0, reasoning: 0, tool: 0, total: 30 },
+        tokens: {
+          input: 10,
+          output: 20,
+          cache_read: 0,
+          cache_write: 0,
+          reasoning: 0,
+          tool: 0,
+          total: 30,
+        },
         cost: { usd: 0.5, confidence: "estimated-model-known", model: "claude-opus" },
       },
       {
@@ -61,7 +79,10 @@ describe.skipIf(!TEST_URL)("ingestBatch (integration)", () => {
     await dbh.db.execute(
       sql`TRUNCATE raw_source_records, events, ingest_tokens, pairing_codes, machines, users RESTART IDENTITY CASCADE`,
     );
-    const [u] = await dbh.db.insert(users).values({ email: "test@example.com" }).returning({ id: users.id });
+    const [u] = await dbh.db
+      .insert(users)
+      .values({ email: "test@example.com" })
+      .returning({ id: users.id });
     const [m] = await dbh.db
       .insert(machines)
       .values({ userId: u!.id, name: "test-machine" })
@@ -79,9 +100,9 @@ describe.skipIf(!TEST_URL)("ingestBatch (integration)", () => {
     const second = await ingestBatch(dbh.db, machineId, makeBatch());
     expect(second.recordsInserted).toBe(0);
 
-    const [{ n }] = (
-      await dbh.db.execute(sql`SELECT count(*)::int AS n FROM events`)
-    ).rows as { n: number }[];
+    const [{ n }] = (await dbh.db.execute(sql`SELECT count(*)::int AS n FROM events`)).rows as {
+      n: number;
+    }[];
     expect(n).toBe(2);
   });
 
@@ -133,9 +154,9 @@ describe.skipIf(!TEST_URL)("ingestBatch (integration)", () => {
 
   it("leaves catalog_version NULL when the event carries none (custom connector / back-compat)", async () => {
     await ingestBatch(dbh.db, machineId, makeBatch()); // makeBatch() stamps no catalogVersion
-    const rows = (
-      await dbh.db.execute(sql`SELECT catalog_version FROM events`)
-    ).rows as { catalog_version: string | null }[];
+    const rows = (await dbh.db.execute(sql`SELECT catalog_version FROM events`)).rows as {
+      catalog_version: string | null;
+    }[];
     expect(rows.every((r) => r.catalog_version === null)).toBe(true);
   });
 
@@ -151,7 +172,11 @@ describe.skipIf(!TEST_URL)("ingestBatch (integration)", () => {
     expect(row!.payloadCiphertext).not.toContain("claude-opus");
     // and it decrypts back to the exact original line
     expect(
-      decryptField({ ciphertext: row!.payloadCiphertext, iv: row!.payloadIv, tag: row!.payloadTag }),
+      decryptField({
+        ciphertext: row!.payloadCiphertext,
+        iv: row!.payloadIv,
+        tag: row!.payloadTag,
+      }),
     ).toBe(RAW1_PAYLOAD);
   });
 
@@ -168,8 +193,14 @@ describe.skipIf(!TEST_URL)("ingestBatch (integration)", () => {
 
   it("encrypts event tool payloads and leaves NULLs for payloadless events", async () => {
     await ingestBatch(dbh.db, machineId, makeBatch());
-    const [withPayload] = await dbh.db.select().from(events).where(eq(events.fingerprint, "fp-tool"));
-    const [noPayload] = await dbh.db.select().from(events).where(eq(events.fingerprint, "fp-usage"));
+    const [withPayload] = await dbh.db
+      .select()
+      .from(events)
+      .where(eq(events.fingerprint, "fp-tool"));
+    const [noPayload] = await dbh.db
+      .select()
+      .from(events)
+      .where(eq(events.fingerprint, "fp-usage"));
 
     expect(withPayload!.payloadCiphertext).not.toBeNull();
     expect(

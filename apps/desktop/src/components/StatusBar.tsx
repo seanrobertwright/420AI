@@ -3,13 +3,7 @@ import type { UnlistenFn } from "@tauri-apps/api/event";
 import type { ControlCommand, ControlEvent } from "@420ai/shared";
 import { onControlEvent, sendCommand } from "@/lib/bridge";
 import { Badge } from "@/components/ui/badge";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
 type CaptureState = "running" | "paused" | "idle" | "error" | "connecting";
 
@@ -31,7 +25,10 @@ const INITIAL: StatusView = {
   paired: false,
 };
 
-const STATE_BADGE: Record<CaptureState, { variant: "default" | "secondary" | "destructive" | "outline"; label: string }> = {
+const STATE_BADGE: Record<
+  CaptureState,
+  { variant: "default" | "secondary" | "destructive" | "outline"; label: string }
+> = {
   running: { variant: "default", label: "running" },
   paused: { variant: "secondary", label: "paused" },
   idle: { variant: "outline", label: "idle" },
@@ -115,9 +112,21 @@ export function StatusBar() {
             </CardDescription>
           </div>
           <div className="flex gap-2">
-            <ControlButton label="Start" disabled={!canStart} onClick={() => run({ cmd: "start" })} />
-            <ControlButton label="Pause" disabled={!canPause} onClick={() => run({ cmd: "pause" })} />
-            <ControlButton label="Resume" disabled={!canResume} onClick={() => run({ cmd: "resume" })} />
+            <ControlButton
+              label="Start"
+              disabled={!canStart}
+              onClick={() => run({ cmd: "start" })}
+            />
+            <ControlButton
+              label="Pause"
+              disabled={!canPause}
+              onClick={() => run({ cmd: "pause" })}
+            />
+            <ControlButton
+              label="Resume"
+              disabled={!canResume}
+              onClick={() => run({ cmd: "resume" })}
+            />
           </div>
         </div>
       </CardHeader>

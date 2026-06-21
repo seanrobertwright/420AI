@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach } from
 import { sql } from "drizzle-orm";
 import { randomBytes } from "node:crypto";
 import { createDb, ingestBatch, reencryptAll, decryptField } from "../index.js";
-import { users, machines, rawSourceRecords, events } from "../schema.js";
+import { users, machines, rawSourceRecords } from "../schema.js";
 import type { IngestBatch } from "@420ai/shared";
 
 const TEST_URL = process.env.DATABASE_URL_TEST;
@@ -14,7 +14,12 @@ function makeBatch(): IngestBatch {
   return {
     records: [
       { sourceConnector: "claude-code", sessionId: "s1", sourceRecordId: "r1", payload: RAW1 },
-      { sourceConnector: "claude-code", sessionId: "s1", sourceRecordId: "r2", payload: "plain line two" },
+      {
+        sourceConnector: "claude-code",
+        sessionId: "s1",
+        sourceRecordId: "r2",
+        payload: "plain line two",
+      },
     ],
     events: [
       {
@@ -55,7 +60,10 @@ describe.skipIf(!TEST_URL)("key rotation (reencryptAll, integration)", () => {
     await dbh.db.execute(
       sql`TRUNCATE raw_source_records, events, ingest_tokens, pairing_codes, machines, users RESTART IDENTITY CASCADE`,
     );
-    const [u] = await dbh.db.insert(users).values({ email: "rot@example.com" }).returning({ id: users.id });
+    const [u] = await dbh.db
+      .insert(users)
+      .values({ email: "rot@example.com" })
+      .returning({ id: users.id });
     const [m] = await dbh.db
       .insert(machines)
       .values({ userId: u!.id, name: "rot-machine" })

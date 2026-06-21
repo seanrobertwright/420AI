@@ -54,7 +54,10 @@ describe.skipIf(!TEST_URL)("projections repository (integration)", () => {
     await dbh.db.execute(
       sql`TRUNCATE workspace_keys, workspaces, projects, raw_source_records, events, ingest_tokens, pairing_codes, machines, users RESTART IDENTITY CASCADE`,
     );
-    const [u] = await dbh.db.insert(users).values({ email: "test@example.com" }).returning({ id: users.id });
+    const [u] = await dbh.db
+      .insert(users)
+      .values({ email: "test@example.com" })
+      .returning({ id: users.id });
     userId = u!.id;
     const [m] = await dbh.db
       .insert(machines)
@@ -63,7 +66,12 @@ describe.skipIf(!TEST_URL)("projections repository (integration)", () => {
     machineId = m!.id;
 
     // Map PROJECT_KEY → workspace → project (the M5 attribution join).
-    const ws = await upsertWorkspace(dbh.db, { userId, machineId, rootPath: PROJECT_KEY, gitRemote: REMOTE });
+    const ws = await upsertWorkspace(dbh.db, {
+      userId,
+      machineId,
+      rootPath: PROJECT_KEY,
+      gitRemote: REMOTE,
+    });
     const proj = await findOrCreateProjectByRemote(dbh.db, userId, REMOTE, "420AI");
     projectId = proj.id;
     await remapWorkspace(dbh.db, userId, ws.id, projectId);
@@ -137,21 +145,28 @@ describe.skipIf(!TEST_URL)("projections repository (integration)", () => {
         ts: "2026-06-15T00:01:00.000Z",
         cost: cost(0.25, "estimated-model-unknown"),
       },
-      ...(["message.user", "message.assistant", "tool.call.completed", "tool.call.failed", "file.read", "file.modified"] as const).map(
-        (eventType, i) => ({
-          fingerprint: `m${i}`,
-          sourceConnector: "claude-code",
-          parserVersion: "2.0.0",
-          rawRecordId: `rm${i}`,
-          eventIndex: 10 + i,
-          eventType,
-          sessionId: SESSION,
-          machineId,
-          projectPath: PROJECT_KEY,
-          gitBranch: "main",
-          ts: `2026-06-14T00:1${i}:00.000Z`,
-        }),
-      ),
+      ...(
+        [
+          "message.user",
+          "message.assistant",
+          "tool.call.completed",
+          "tool.call.failed",
+          "file.read",
+          "file.modified",
+        ] as const
+      ).map((eventType, i) => ({
+        fingerprint: `m${i}`,
+        sourceConnector: "claude-code",
+        parserVersion: "2.0.0",
+        rawRecordId: `rm${i}`,
+        eventIndex: 10 + i,
+        eventType,
+        sessionId: SESSION,
+        machineId,
+        projectPath: PROJECT_KEY,
+        gitBranch: "main",
+        ts: `2026-06-14T00:1${i}:00.000Z`,
+      })),
     ]);
   }
 

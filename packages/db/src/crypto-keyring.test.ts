@@ -82,9 +82,7 @@ describe("field encryption — keyring mode (M12 12.4e)", () => {
 
   it("throws when the active key id names no key in the ring", () => {
     setKeyring("v9", { legacy: K_LEGACY, v2: K_V2 });
-    expect(() => encryptField("x")).toThrow(
-      /ARCHIVE_ENCRYPTION_ACTIVE_KEY_ID must name a key/,
-    );
+    expect(() => encryptField("x")).toThrow(/ARCHIVE_ENCRYPTION_ACTIVE_KEY_ID must name a key/);
   });
 
   it("throws on a short keyring key", () => {

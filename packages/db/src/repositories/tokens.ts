@@ -20,10 +20,7 @@ export async function issueIngestToken(
  * Resolve a presented bearer token to its machine id by hash lookup. Returns
  * null for unknown or revoked tokens (the auth plugin maps that to 401).
  */
-export async function findMachineIdByToken(
-  db: DbClient,
-  token: string,
-): Promise<string | null> {
+export async function findMachineIdByToken(db: DbClient, token: string): Promise<string | null> {
   const [row] = await db
     .select({ machineId: ingestTokens.machineId })
     .from(ingestTokens)

@@ -2,10 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { parseClaudeCodeSession } from "./claude-code.js";
 
-const fixture = readFileSync(
-  new URL("../fixtures/sample-session.jsonl", import.meta.url),
-  "utf8",
-);
+const fixture = readFileSync(new URL("../fixtures/sample-session.jsonl", import.meta.url), "utf8");
 
 const toolsFixture = readFileSync(
   new URL("../fixtures/sample-session-tools.jsonl", import.meta.url),
@@ -14,7 +11,9 @@ const toolsFixture = readFileSync(
 
 describe("parseClaudeCodeSession", () => {
   it("tolerantly skips the malformed line and counts it", () => {
-    const { skippedLines } = parseClaudeCodeSession(fixture, { ingestedAt: "2026-06-13T00:00:00Z" });
+    const { skippedLines } = parseClaudeCodeSession(fixture, {
+      ingestedAt: "2026-06-13T00:00:00Z",
+    });
     expect(skippedLines).toBe(1);
   });
 

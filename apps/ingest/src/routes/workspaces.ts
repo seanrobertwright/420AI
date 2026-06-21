@@ -12,10 +12,7 @@ import {
   createProject,
   getProjectName,
 } from "@420ai/db";
-import {
-  discoverBodySchema,
-  patchWorkspaceBodySchema,
-} from "../schemas.js";
+import { discoverBodySchema, patchWorkspaceBodySchema } from "../schemas.js";
 import { adminAuthorized, isUuid } from "../auth.js";
 
 interface PatchWorkspaceBody {
@@ -64,12 +61,7 @@ export default async function workspaceRoutes(app: FastifyInstance): Promise<voi
           if (!projectId) {
             if (w.gitRemote) {
               projectName = repoNameFromRemote(w.gitRemote);
-              const proj = await findOrCreateProjectByRemote(
-                tx,
-                userId,
-                w.gitRemote,
-                projectName,
-              );
+              const proj = await findOrCreateProjectByRemote(tx, userId, w.gitRemote, projectName);
               projectId = proj.id;
               if (proj.created) projectsCreated += 1;
             } else {

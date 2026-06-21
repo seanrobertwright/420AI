@@ -465,7 +465,8 @@ async function main(argv: string[]): Promise<void> {
       controller.abort();
     });
     process.stdout.write("watching… Ctrl-C to stop\n");
-    const heartbeatFlag = getFlag(args, "--heartbeat-interval") ?? process.env.HEARTBEAT_INTERVAL_MS;
+    const heartbeatFlag =
+      getFlag(args, "--heartbeat-interval") ?? process.env.HEARTBEAT_INTERVAL_MS;
     await runWatch({
       url: getFlag(args, "--url"),
       token: getFlag(args, "--token"),
@@ -483,9 +484,7 @@ async function main(argv: string[]): Promise<void> {
       url: getFlag(args, "--url"),
       token: getFlag(args, "--token"),
     });
-    process.stdout.write(
-      `Sync complete. pending=${stats.pending}, inflight=${stats.inflight}\n`,
-    );
+    process.stdout.write(`Sync complete. pending=${stats.pending}, inflight=${stats.inflight}\n`);
     return;
   }
 

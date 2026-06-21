@@ -90,7 +90,12 @@ describe("parseGitLog (the highest-risk parser — Phase-0 edge cases)", () => {
     expect(c.filesChanged).toBe(2);
     expect(c.insertions).toBe(15);
     expect(c.deletions).toBe(2);
-    expect(c.files[0]).toEqual({ path: "src/a.ts", status: "modified", insertions: 10, deletions: 2 });
+    expect(c.files[0]).toEqual({
+      path: "src/a.ts",
+      status: "modified",
+      insertions: 10,
+      deletions: 2,
+    });
     expect(c.message).toContain("feat: multi-file change");
     expect(c.message).toContain("line one\nline two");
     expect(c.isRevert).toBe(false);

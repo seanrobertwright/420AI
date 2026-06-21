@@ -1,4 +1,4 @@
-import { and, eq, gte, notInArray, or, sql } from "drizzle-orm";
+import { and, eq, gte, isNull, notInArray, or, sql } from "drizzle-orm";
 import {
   alertKey,
   ALERT_FIRINGS_RESOLVED_WINDOW_MS,
@@ -41,6 +41,9 @@ const firingColumns = {
   lastSeenAt: alertFirings.lastSeenAt,
   resolvedAt: alertFirings.resolvedAt,
   ackedAt: alertFirings.ackedAt,
+  // M12 12.6 delivery marker — selected so deliverPendingFirings can filter on it; NOT
+  // surfaced on the AlertFiring wire shape (toFiring accepts it in the row, ignores it).
+  deliveryAttemptedAt: alertFirings.deliveryAttemptedAt,
 };
 
 /** Map a raw firing row (text unions, Date timestamps) onto the typed AlertFiring wire shape. */
@@ -59,6 +62,7 @@ function toFiring(r: {
   lastSeenAt: Date;
   resolvedAt: Date | null;
   ackedAt: Date | null;
+  deliveryAttemptedAt: Date | null; // M12 12.6 — selected by firingColumns; not on the wire shape
 }): AlertFiring {
   return {
     id: r.id,
@@ -161,12 +165,14 @@ export async function listAlertFirings(
         ),
       ),
     );
-  return rows.map(toFiring).sort(
-    (a, b) =>
-      rank(a) - rank(b) ||
-      SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity] ||
-      Date.parse(a.firstFiredAt) - Date.parse(b.firstFiredAt),
-  );
+  return rows
+    .map(toFiring)
+    .sort(
+      (a, b) =>
+        rank(a) - rank(b) ||
+        SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity] ||
+        Date.parse(a.firstFiredAt) - Date.parse(b.firstFiredAt),
+    );
 }
 
 /**
@@ -193,4 +199,46 @@ export async function ackAlertFiring(
     .where(eq(alertFirings.id, id))
     .limit(1);
   return row ? toFiring(row) : undefined;
+}
+
+/**
+ * M12 12.6 alert delivery (PRD §20). Deliver any OPEN firing not yet attempted, then stamp
+ * `delivery_attempted_at` (on success OR failure → at-most-ONE attempt; the firing row itself
+ * stays the durable record — no 3 s retry spam to a dead webhook). Best-effort: a per-firing
+ * `deliver()` throw is caught + handed to `log`, NEVER propagated, so the evaluate-on-read
+ * snapshot path can't 500. Early-returns (no query) when no deliverer is wired — the default
+ * no-webhook case stays cheap on the 3 s SSE tick. `now` is route-owned (CLAUDE.md). The
+ * deliverer is an INLINE structural type so @420ai/db gains no dep on @420ai/shared/apps-ingest.
+ */
+export async function deliverPendingFirings(
+  db: DbClient,
+  userId: string,
+  deliverer: { deliver(firing: AlertFiring): Promise<void> } | null,
+  now: Date,
+  log?: (err: unknown) => void,
+): Promise<void> {
+  if (!deliverer) return; // delivery disabled — no query
+  const rows = await db
+    .select(firingColumns)
+    .from(alertFirings)
+    .where(
+      and(
+        eq(alertFirings.userId, userId),
+        eq(alertFirings.status, "open"),
+        isNull(alertFirings.deliveryAttemptedAt),
+      ),
+    );
+  for (const r of rows) {
+    const firing = toFiring(r);
+    try {
+      await deliverer.deliver(firing);
+    } catch (err) {
+      log?.(err);
+    }
+    // Stamp regardless of outcome — at-most-once attempt, no 3-second retry spam.
+    await db
+      .update(alertFirings)
+      .set({ deliveryAttemptedAt: now })
+      .where(eq(alertFirings.id, r.id));
+  }
 }

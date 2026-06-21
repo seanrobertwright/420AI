@@ -166,7 +166,9 @@ export function ProjectDetailView({
                 <TableBody>
                   {overTime.map((b) => (
                     <TableRow key={b.bucket}>
-                      <TableCell className="text-muted-foreground">{formatDate(b.bucket)}</TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {formatDate(b.bucket)}
+                      </TableCell>
                       <TableCell>{formatTokens(b.tokens.total)}</TableCell>
                       <TableCell>{formatUsd(b.costUsd)}</TableCell>
                     </TableRow>
@@ -208,7 +210,9 @@ export function ProjectDetailView({
                       </TableCell>
                       <TableCell>{s.eventCount}</TableCell>
                       <TableCell>{formatUsd(s.costUsd)}</TableCell>
-                      <TableCell className="text-muted-foreground">{formatDate(s.startedAt)}</TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {formatDate(s.startedAt)}
+                      </TableCell>
                       <TableCell>
                         <SessionReportActions sessionId={s.sessionId} />
                       </TableCell>
@@ -227,7 +231,9 @@ export function ProjectDetailView({
           </CardHeader>
           <CardContent className="space-y-4">
             <div>
-              <div className="text-muted-foreground mb-2 text-xs uppercase tracking-widest">Branches</div>
+              <div className="text-muted-foreground mb-2 text-xs uppercase tracking-widest">
+                Branches
+              </div>
               {git.branches.length === 0 ? (
                 <p className="text-muted-foreground text-sm">—</p>
               ) : (

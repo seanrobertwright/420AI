@@ -13,7 +13,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const cookieState = vi.hoisted(() => ({ value: undefined as string | undefined }));
 vi.mock("next/headers", () => ({
   cookies: async () => ({
-    get: (_name: string) => (cookieState.value !== undefined ? { value: cookieState.value } : undefined),
+    get: (_name: string) =>
+      cookieState.value !== undefined ? { value: cookieState.value } : undefined,
   }),
 }));
 

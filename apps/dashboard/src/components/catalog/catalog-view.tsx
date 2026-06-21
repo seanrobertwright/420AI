@@ -89,9 +89,15 @@ export function CatalogView({ catalogs }: { catalogs: PricingCatalogRow[] }) {
                     <TableCell>
                       <Badge className={cn(STATUS_BADGE[c.status])}>{c.status}</Badge>
                     </TableCell>
-                    <TableCell className="text-muted-foreground">{formatDate(c.uploadedAt)}</TableCell>
-                    <TableCell className="text-muted-foreground">{formatDate(c.approvedAt)}</TableCell>
-                    <TableCell className="text-muted-foreground text-xs">{c.approvedBy ?? "—"}</TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {formatDate(c.uploadedAt)}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {formatDate(c.approvedAt)}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground text-xs">
+                      {c.approvedBy ?? "—"}
+                    </TableCell>
                     <TableCell>
                       {c.status === "pending" ? (
                         <div className="flex gap-2">

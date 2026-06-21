@@ -68,8 +68,7 @@ const RULES: Rule[] = [
   {
     ruleId: "private_key_block",
     kind: "private_key_block",
-    build: () =>
-      /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
+    build: () => /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
     mask: PLACEHOLDER_MASK,
   },
   {
@@ -133,8 +132,7 @@ const RULES: Rule[] = [
   {
     ruleId: "generic_secret_assignment",
     kind: "generic_secret_assignment",
-    build: () =>
-      /(?:api[_-]?key|secret|token|password|passwd|pwd)\s*[:=]\s*["']?[^\s"']{6,}/gi,
+    build: () => /(?:api[_-]?key|secret|token|password|passwd|pwd)\s*[:=]\s*["']?[^\s"']{6,}/gi,
     mask: PLACEHOLDER_MASK,
   },
   {

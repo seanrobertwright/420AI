@@ -25,6 +25,9 @@ export interface HeartbeatDeps {
   collectorVersion: string;
   intervalMs: number;
   now: () => Date;
+  /** M12 12.6 archive.unreachable signal — consecutive sync failures the loop has seen
+   * (default 0 when the loop doesn't track it / older callers). */
+  consecutiveSyncFailures?: number;
   /** Injectable for tests; defaults to the real fetch-based client. */
   post?: typeof postHeartbeat;
 }
@@ -39,7 +42,10 @@ export function newHeartbeatState(): HeartbeatState {
  * Mutates `state.lastSentMs` to the attempt time (BEFORE awaiting the send) so a slow
  * or failing request never bunches up duplicate sends on the next tick.
  */
-export async function maybeSendHeartbeat(deps: HeartbeatDeps, state: HeartbeatState): Promise<void> {
+export async function maybeSendHeartbeat(
+  deps: HeartbeatDeps,
+  state: HeartbeatState,
+): Promise<void> {
   const nowMs = deps.now().getTime();
   if (nowMs - state.lastSentMs < deps.intervalMs) return; // throttle to the cadence
   state.lastSentMs = nowMs;
@@ -49,6 +55,7 @@ export async function maybeSendHeartbeat(deps: HeartbeatDeps, state: HeartbeatSt
       queuePending: pending,
       queueInflight: inflight,
       collectorVersion: deps.collectorVersion,
+      consecutiveSyncFailures: deps.consecutiveSyncFailures ?? 0,
     });
   } catch {
     /* best-effort liveness ping — never crash/stall/queue the loop (residual risk e). */
