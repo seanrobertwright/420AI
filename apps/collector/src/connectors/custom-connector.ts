@@ -312,6 +312,9 @@ export function makeCustomConnector(def: CustomConnectorDef): Connector {
           "(ideally one session per file) or lines sharing a line index across files dedup-collide",
         ...(def.tokenMap ? [] : ["no token/cost capture — this source maps no usage fields"]),
       ],
+      // §10.3: a custom connector's scope is entirely user-defined globs — echo each so
+      // the approval surface-fingerprint changes if the user later edits them (§10.4).
+      requiredPermissions: def.watchGlobs.map((g) => `Read user-configured file/log: ${g}`),
     },
     // Absolute paths; `home` is intentionally ignored (a user-pointed watcher).
     watchGlobs: () => def.watchGlobs,

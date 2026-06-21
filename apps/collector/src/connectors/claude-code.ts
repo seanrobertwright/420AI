@@ -370,6 +370,9 @@ export const claudeCodeConnector: Connector = {
       "file.referenced not emitted — no single reliable structured signal in the store (M5+)",
       "session.ended ts settles only when the file stops growing",
     ],
+    requiredPermissions: [
+      "Read Claude Code session transcripts under ~/.claude/projects/*/*.jsonl",
+    ],
     testedVersions: [],
   },
   watchGlobs: (home) => claudeWatchGlobs(home),

@@ -403,6 +403,9 @@ export const codexCliConnector: Connector = {
     knownGaps: [
       "failure classification covers environment (exit 124/127, timeouts), tool-runtime (other nonzero exits), and state-mismatch (apply_patch verification failed); model-error / permission-block / user-cancel / expected-negative are not distinguishable from Codex output (PRD §14)",
     ],
+    requiredPermissions: [
+      "Read OpenAI Codex CLI rollout logs under ~/.codex/sessions/*/*/*/rollout-*.jsonl",
+    ],
     testedVersions: ["0.137.x"],
   },
   watchGlobs: (home) => codexWatchGlobs(home),

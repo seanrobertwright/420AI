@@ -263,6 +263,10 @@ export const geminiCliConnector: Connector = {
       "M5 maps projectHash→real path via the .project_root sidecar; legacy hash-only sessions (no sidecar) stay unattributed",
       "tool>0 token additivity unobserved on disk — folded into output defensively",
     ],
+    requiredPermissions: [
+      "Read Gemini CLI session files under ~/.gemini/tmp/*/chats/session-*.json",
+      "Read ~/.gemini/tmp/*/.project_root sidecars for project attribution (discovery)",
+    ],
     testedVersions: [],
   },
   watchGlobs: (home) => geminiWatchGlobs(home),

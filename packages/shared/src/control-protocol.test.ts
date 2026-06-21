@@ -15,7 +15,7 @@ import {
  */
 describe("control-protocol", () => {
   it("pins CONTROL_PROTOCOL_VERSION (bump deliberately + move the Rust mirror)", () => {
-    expect(CONTROL_PROTOCOL_VERSION).toBe("m11-control-v2");
+    expect(CONTROL_PROTOCOL_VERSION).toBe("m12-control-v3");
   });
 
   it("ControlCommand discriminates on `cmd` and carries configure/pair fields", () => {
@@ -69,6 +69,8 @@ describe("control-protocol", () => {
       cost: "reported",
       knownGaps: [],
       watchGlobs: ["/home/u/.claude/**/*.jsonl"],
+      requiredPermissions: ["Read Claude Code session transcripts"],
+      approval: "approved",
     };
     // M10-S2: a user-defined connector carries the additive optional `custom` flag.
     const customInfo: ConnectorInfo = {
@@ -81,6 +83,8 @@ describe("control-protocol", () => {
       cost: "none",
       knownGaps: ["user-defined mapping"],
       watchGlobs: ["/tmp/mytool/*.log"],
+      requiredPermissions: ["Read user-configured file/log: /tmp/mytool/*.log"],
+      approval: "approved",
       custom: true,
     };
     const event: ControlEvent = { type: "connectors", connectors: [info, customInfo] };
@@ -92,5 +96,29 @@ describe("control-protocol", () => {
       expect(event.connectors[0]?.custom).toBeUndefined();
       expect(event.connectors[1]?.custom).toBe(true);
     }
+  });
+
+  it("carries the Slice-12.7b approval command + ConnectorInfo permission/approval fields", () => {
+    const approve: ControlCommand = { cmd: "connectors.approve", id: "claude-code" };
+    expect(approve.cmd).toBe("connectors.approve");
+    if (approve.cmd === "connectors.approve") {
+      expect(approve.id).toBe("claude-code");
+    }
+
+    const info: ConnectorInfo = {
+      id: "codex-cli",
+      enabled: true,
+      status: "stable",
+      captureMethod: "tail-jsonl",
+      liveness: "streaming",
+      tokens: "exact",
+      cost: "reported",
+      knownGaps: [],
+      watchGlobs: ["/home/u/.codex/sessions/**/rollout-*.jsonl"],
+      requiredPermissions: ["Read OpenAI Codex CLI rollout logs"],
+      approval: "needs-approval",
+    };
+    expect(info.requiredPermissions).toEqual(["Read OpenAI Codex CLI rollout logs"]);
+    expect(info.approval).toBe("needs-approval");
   });
 });
