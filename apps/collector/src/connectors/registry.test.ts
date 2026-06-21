@@ -80,7 +80,10 @@ describe("loadRegistry", () => {
     const path = tempCustomPath();
     writeFileSync(
       path,
-      JSON.stringify({ version: "m10-custom-v1", connectors: [null, 42, "oops", def("custom-ok")] }),
+      JSON.stringify({
+        version: "m10-custom-v1",
+        connectors: [null, 42, "oops", def("custom-ok")],
+      }),
     );
     let result!: ReturnType<typeof loadRegistry>;
     expect(() => {

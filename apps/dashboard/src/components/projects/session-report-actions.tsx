@@ -16,7 +16,10 @@ export function SessionReportActions({ sessionId }: { sessionId: string }) {
   const [error, setError] = useState<string | null>(null);
 
   async function generate(kind: "autopsy" | "ai"): Promise<void> {
-    if (kind === "ai" && !window.confirm("Generate an AI interpretation? This calls a billable provider.")) {
+    if (
+      kind === "ai" &&
+      !window.confirm("Generate an AI interpretation? This calls a billable provider.")
+    ) {
       return;
     }
     setBusy(kind);
@@ -59,10 +62,20 @@ export function SessionReportActions({ sessionId }: { sessionId: string }) {
 
   return (
     <div className="flex items-center gap-1.5">
-      <button type="button" className={btn} disabled={busy !== null} onClick={() => void generate("autopsy")}>
+      <button
+        type="button"
+        className={btn}
+        disabled={busy !== null}
+        onClick={() => void generate("autopsy")}
+      >
         {busy === "autopsy" ? "…" : "Autopsy"}
       </button>
-      <button type="button" className={btn} disabled={busy !== null} onClick={() => void generate("ai")}>
+      <button
+        type="button"
+        className={btn}
+        disabled={busy !== null}
+        onClick={() => void generate("ai")}
+      >
         {busy === "ai" ? "…" : "AI"}
       </button>
       {error ? <span className="text-destructive text-xs">{error}</span> : null}

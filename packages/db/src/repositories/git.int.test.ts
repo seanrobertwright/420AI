@@ -74,14 +74,18 @@ describe.skipIf(!TEST_URL)("git repository (integration)", () => {
     expect(second.commitsInserted).toBe(0); // SHA dedup
 
     // no duplicate file rows from the re-capture
-    const [{ n }] = (
-      await dbh.db.execute(sql`SELECT count(*)::int AS n FROM git_commit_files`)
-    ).rows as { n: number }[];
+    const [{ n }] = (await dbh.db.execute(sql`SELECT count(*)::int AS n FROM git_commit_files`))
+      .rows as { n: number }[];
     expect(n).toBe(2);
   });
 
   it("gitCommitsByProject returns commits via the D5 repo-root join (plaintext, no message)", async () => {
-    const ws = await upsertWorkspace(dbh.db, { userId, machineId, rootPath: ROOT, gitRemote: REMOTE });
+    const ws = await upsertWorkspace(dbh.db, {
+      userId,
+      machineId,
+      rootPath: ROOT,
+      gitRemote: REMOTE,
+    });
     const { id: projectId } = await findOrCreateProjectByRemote(dbh.db, userId, REMOTE, "420AI");
     await remapWorkspace(dbh.db, userId, ws.id, projectId);
     await addWorkspaceKey(dbh.db, {
@@ -125,9 +129,8 @@ describe.skipIf(!TEST_URL)("git repository (integration)", () => {
     const commits = await gitCommitsByProject(dbh.db, projectId);
     expect(commits).toEqual([]);
     // but it IS stored (count > 0)
-    const [{ n }] = (
-      await dbh.db.execute(sql`SELECT count(*)::int AS n FROM git_commits`)
-    ).rows as { n: number }[];
+    const [{ n }] = (await dbh.db.execute(sql`SELECT count(*)::int AS n FROM git_commits`))
+      .rows as { n: number }[];
     expect(n).toBe(1);
   });
 });

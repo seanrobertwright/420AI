@@ -5,7 +5,7 @@ coding-tool sessions. It is **desktop-first**: the [420AI Collector desktop app]
 is the primary control surface (pair, run capture, manage connectors, start/stop the server stack).
 A **Manual / headless** path (Docker + CLI) follows for power users and servers.
 
-> New to the project? Read the [README](../../README.md) for *what* 420AI is and the
+> New to the project? Read the [README](../../README.md) for _what_ 420AI is and the
 > [domain glossary](../CONTEXT.md) for the vocabulary (Collector, Sidecar, Ingest API, etc.).
 
 ---
@@ -25,13 +25,13 @@ A **Manual / headless** path (Docker + CLI) follows for power users and servers.
                                           Web Dashboard (Next.js) ── Live Monitor (read-only)
 ```
 
-| Component | What it is | Where it runs |
-|---|---|---|
-| **Collector** | Headless Node/TS capture agent; tails connector files, buffers to a durable queue, syncs to the archive. Packaged as a single `.exe` **sidecar** inside the desktop app. | Your machine |
-| **Desktop app** | Tauri (Rust + webview) shell. Pairing, tray controls, connector toggles, Sync & Health, and a Settings panel that **supervises the server stack**. | Your machine |
-| **Ingest API** | Fastify service; per-token auth, idempotent batch writes, field-level encryption, projections, reports, AI interpretation. | Archive host (port **8420**) |
-| **Central Archive** | Postgres 17 in Docker. Raw records + events + projects + reports. | Archive host (host port **5433**) |
-| **Web Dashboard** | Next.js app. **Ships only the Live Monitor** today; reports/projects/analysis are ingest-API endpoints (see [usage](./usage.md)). | Archive host |
+| Component           | What it is                                                                                                                                                               | Where it runs                     |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------- |
+| **Collector**       | Headless Node/TS capture agent; tails connector files, buffers to a durable queue, syncs to the archive. Packaged as a single `.exe` **sidecar** inside the desktop app. | Your machine                      |
+| **Desktop app**     | Tauri (Rust + webview) shell. Pairing, tray controls, connector toggles, Sync & Health, and a Settings panel that **supervises the server stack**.                       | Your machine                      |
+| **Ingest API**      | Fastify service; per-token auth, idempotent batch writes, field-level encryption, projections, reports, AI interpretation.                                               | Archive host (port **8420**)      |
+| **Central Archive** | Postgres 17 in Docker. Raw records + events + projects + reports.                                                                                                        | Archive host (host port **5433**) |
+| **Web Dashboard**   | Next.js app. **Ships only the Live Monitor** today; reports/projects/analysis are ingest-API endpoints (see [usage](./usage.md)).                                        | Archive host                      |
 
 The archive + ingest can run on the **same machine** as the collector (the common single-machine
 self-host) or a separate home server.
@@ -40,12 +40,12 @@ self-host) or a separate home server.
 
 ## Prerequisites
 
-| Need | For | Notes |
-|---|---|---|
-| **Node ≥ 24** | everything (collector uses Node 24's built-in `node:sqlite`) | see `.nvmrc` |
-| **Docker** | the Postgres archive | Docker Desktop on Windows |
-| **Rust stable + `cargo tauri`** | *building* the desktop installer | `cargo install tauri-cli` |
-| **NSIS** (`makensis`) | *building* the desktop installer | on `PATH` |
+| Need                            | For                                                          | Notes                     |
+| ------------------------------- | ------------------------------------------------------------ | ------------------------- |
+| **Node ≥ 24**                   | everything (collector uses Node 24's built-in `node:sqlite`) | see `.nvmrc`              |
+| **Docker**                      | the Postgres archive                                         | Docker Desktop on Windows |
+| **Rust stable + `cargo tauri`** | _building_ the desktop installer                             | `cargo install tauri-cli` |
+| **NSIS** (`makensis`)           | _building_ the desktop installer                             | on `PATH`                 |
 
 If someone hands you a prebuilt `420AI Collector_*_x64-setup.exe`, you don't need Rust/NSIS — but
 you **still need the cloned repo** for the archive (`docker-compose.yml`) and the built ingest, and
@@ -56,7 +56,7 @@ you **still need the cloned repo** for the archive (`docker-compose.yml`) and th
 ## One-time repo setup (required for both paths)
 
 The server stack — Postgres archive and the ingest API — lives in this repo. Even the desktop app
-*starts* those from the repo (its **Server directory** = the repo root). So set the repo up once:
+_starts_ those from the repo (its **Server directory** = the repo root). So set the repo up once:
 
 ```bash
 git clone <your-fork> 420AI && cd 420AI
@@ -91,22 +91,22 @@ npm run db:migrate   # apply Drizzle migrations (10 application tables)
 
 All ingest/db vars load from the **repo-root `.env`**. Required ones are marked ●.
 
-| Var | Purpose | Default |
-|---|---|---|
-| ● `DATABASE_URL` | Archive connection (dev DB) | `postgres://420ai:420ai@localhost:5433/420ai` |
-| ● `ADMIN_TOKEN` | Admin bearer for pairing-code issuance + all admin reads | *(you generate)* |
-| ● `ARCHIVE_ENCRYPTION_KEY` | 32-byte base64 field-encryption key | *(you generate)* |
-| `DATABASE_URL_TEST` | Integration-test DB (self-skips if unset) | `…/420ai_test` |
-| `INGEST_PORT` | Ingest API port | `8420` |
-| `ANALYSIS_PROVIDER` | `anthropic` or `openai` (AI interpretation) | `anthropic` |
-| `ANALYSIS_API_KEY` | Provider API key | *(empty)* |
-| `ANALYSIS_MODEL` | Model id | `claude-sonnet-4-6` |
-| `ANALYSIS_BASE_URL` | OpenAI-compatible base URL (e.g. Ollama `http://localhost:11434/v1`) | *(empty)* |
-| `ANALYSIS_MAX_OUTPUT_TOKENS` | Max output tokens per interpretation | `4096` |
-| `ANALYSIS_TIMEOUT_MS` | Per-call timeout | `60000` |
-| `MONITOR_STREAM_INTERVAL_MS` | Live-Monitor SSE cadence | `3000` |
-| `HEARTBEAT_INTERVAL_MS` | Collector heartbeat cadence | `30000` |
-| `INGEST_URL` | Where the dashboard proxy reaches ingest | `http://localhost:8420` |
+| Var                          | Purpose                                                              | Default                                       |
+| ---------------------------- | -------------------------------------------------------------------- | --------------------------------------------- |
+| ● `DATABASE_URL`             | Archive connection (dev DB)                                          | `postgres://420ai:420ai@localhost:5433/420ai` |
+| ● `ADMIN_TOKEN`              | Admin bearer for pairing-code issuance + all admin reads             | _(you generate)_                              |
+| ● `ARCHIVE_ENCRYPTION_KEY`   | 32-byte base64 field-encryption key                                  | _(you generate)_                              |
+| `DATABASE_URL_TEST`          | Integration-test DB (self-skips if unset)                            | `…/420ai_test`                                |
+| `INGEST_PORT`                | Ingest API port                                                      | `8420`                                        |
+| `ANALYSIS_PROVIDER`          | `anthropic` or `openai` (AI interpretation)                          | `anthropic`                                   |
+| `ANALYSIS_API_KEY`           | Provider API key                                                     | _(empty)_                                     |
+| `ANALYSIS_MODEL`             | Model id                                                             | `claude-sonnet-4-6`                           |
+| `ANALYSIS_BASE_URL`          | OpenAI-compatible base URL (e.g. Ollama `http://localhost:11434/v1`) | _(empty)_                                     |
+| `ANALYSIS_MAX_OUTPUT_TOKENS` | Max output tokens per interpretation                                 | `4096`                                        |
+| `ANALYSIS_TIMEOUT_MS`        | Per-call timeout                                                     | `60000`                                       |
+| `MONITOR_STREAM_INTERVAL_MS` | Live-Monitor SSE cadence                                             | `3000`                                        |
+| `HEARTBEAT_INTERVAL_MS`      | Collector heartbeat cadence                                          | `30000`                                       |
+| `INGEST_URL`                 | Where the dashboard proxy reaches ingest                             | `http://localhost:8420`                       |
 
 The analysis vars are optional — leave them blank and capture/reporting still work; only the AI
 interpretation endpoints return `503 not_configured`.
@@ -151,14 +151,14 @@ npm run build       # tsc -b across the backend workspaces → apps/ingest/dist/
 
 Open **Settings** in the app. Under **Server config**, fill:
 
-| Field | Value |
-|---|---|
+| Field                            | Value                                         |
+| -------------------------------- | --------------------------------------------- |
 | **Server directory (repo root)** | the absolute path to your cloned `420AI` repo |
-| **Ingest URL** | `http://localhost:8420` |
-| **Ingest port (optional)** | `8420` |
-| **Admin token** | the `ADMIN_TOKEN` you generated |
-| **Database URL** | `postgres://420ai:420ai@localhost:5433/420ai` |
-| **Archive encryption key** | the `ARCHIVE_ENCRYPTION_KEY` you generated |
+| **Ingest URL**                   | `http://localhost:8420`                       |
+| **Ingest port (optional)**       | `8420`                                        |
+| **Admin token**                  | the `ADMIN_TOKEN` you generated               |
+| **Database URL**                 | `postgres://420ai:420ai@localhost:5433/420ai` |
+| **Archive encryption key**       | the `ARCHIVE_ENCRYPTION_KEY` you generated    |
 
 (Optional **Analysis provider** section for AI interpretation: provider/API key/model/base URL.)
 

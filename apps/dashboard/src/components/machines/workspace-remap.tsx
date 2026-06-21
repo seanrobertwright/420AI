@@ -43,7 +43,13 @@ export function WorkspaceRemap({
         body: JSON.stringify({ projectId }),
       });
       if (!res.ok) {
-        setError(res.status === 404 ? "not found" : res.status === 400 ? "bad id" : `failed (${res.status})`);
+        setError(
+          res.status === 404
+            ? "not found"
+            : res.status === 400
+              ? "bad id"
+              : `failed (${res.status})`,
+        );
         return;
       }
       router.refresh();

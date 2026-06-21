@@ -87,9 +87,7 @@ export async function sessionTranscript(
         eq(rawSourceRecords.sessionId, events.sessionId),
       ),
     )
-    .where(
-      and(eq(events.sessionId, sessionId), inArray(events.eventType, [...MESSAGE_TYPES])),
-    )
+    .where(and(eq(events.sessionId, sessionId), inArray(events.eventType, [...MESSAGE_TYPES])))
     .orderBy(asc(events.ts), asc(events.eventIndex));
 
   const entries: TranscriptEntry[] = [];

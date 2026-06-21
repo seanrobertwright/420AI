@@ -40,7 +40,9 @@ function machine(over: Partial<MachineRow> & { status: MonitorStatus }): Machine
   };
 }
 
-function connector(over: Partial<ConnectorHealthRow> & { sourceConnector: string }): ConnectorHealthRow {
+function connector(
+  over: Partial<ConnectorHealthRow> & { sourceConnector: string },
+): ConnectorHealthRow {
   return {
     lastEventAt: "2026-06-15T11:59:00.000Z",
     eventCount: 0,
@@ -146,7 +148,9 @@ describe("deriveAlerts", () => {
         connector({
           sourceConnector: "claude-code",
           toolCalls: ALERT_THRESHOLDS.connectorFailMinCalls,
-          toolsFailed: Math.ceil(ALERT_THRESHOLDS.connectorFailMinCalls * ALERT_THRESHOLDS.connectorFailRatio),
+          toolsFailed: Math.ceil(
+            ALERT_THRESHOLDS.connectorFailMinCalls * ALERT_THRESHOLDS.connectorFailRatio,
+          ),
         }),
       ],
     });
@@ -193,7 +197,9 @@ describe("deriveBacklogTrend", () => {
   });
 
   it("minSamples samples rising by < minGrowth → false", () => {
-    expect(deriveBacklogTrend(samples(10, 20, 10 + BACKLOG_TREND_THRESHOLDS.minGrowth - 1))).toBe(false);
+    expect(deriveBacklogTrend(samples(10, 20, 10 + BACKLOG_TREND_THRESHOLDS.minGrowth - 1))).toBe(
+      false,
+    );
   });
 
   it("flat or declining window → false", () => {
@@ -248,7 +254,9 @@ describe("deriveCatalogAlerts", () => {
   });
 
   it("multiple pending → pluralized message", () => {
-    expect(deriveCatalogAlerts(3)[0]!.message).toContain("3 signed pricing-catalog updates awaiting approval");
+    expect(deriveCatalogAlerts(3)[0]!.message).toContain(
+      "3 signed pricing-catalog updates awaiting approval",
+    );
   });
 
   it("keys on neither machine nor connector → alertKey catalog.update_requires_approval:*", () => {
@@ -269,7 +277,9 @@ describe("deriveAuthFailureAlerts", () => {
     expect(alerts[0]!.code).toBe("ingest.auth_failure");
     expect(alerts[0]!.severity).toBe("warning");
     expect(alerts[0]!.since).toBeNull();
-    expect(alerts[0]!.message).toContain(`${AUTH_FAILURE_ALERT.minFailures} ingest authentication failures`);
+    expect(alerts[0]!.message).toContain(
+      `${AUTH_FAILURE_ALERT.minFailures} ingest authentication failures`,
+    );
     expect(alerts[0]!.message).toContain(`${AUTH_FAILURE_ALERT.windowMs / 60_000} min`);
   });
 
@@ -292,13 +302,18 @@ describe("deriveArchiveUnreachableAlerts", () => {
     expect(alerts[0]!.code).toBe("archive.unreachable");
     expect(alerts[0]!.severity).toBe("warning");
     expect(alerts[0]!.machineId).toBe("m1");
-    expect(alerts[0]!.message).toContain(`${ARCHIVE_UNREACHABLE_MIN_FAILURES} consecutive sync failures`);
+    expect(alerts[0]!.message).toContain(
+      `${ARCHIVE_UNREACHABLE_MIN_FAILURES} consecutive sync failures`,
+    );
     expect(alerts[0]!.since).toBe(HB);
     expect(alertKey(alerts[0]!)).toBe("archive.unreachable:m1");
   });
 
   it("below the threshold → no alert", () => {
-    const m = machine({ status: "online", consecutiveSyncFailures: ARCHIVE_UNREACHABLE_MIN_FAILURES - 1 });
+    const m = machine({
+      status: "online",
+      consecutiveSyncFailures: ARCHIVE_UNREACHABLE_MIN_FAILURES - 1,
+    });
     expect(deriveArchiveUnreachableAlerts([m])).toEqual([]);
   });
 
@@ -314,7 +329,10 @@ describe("deriveArchiveUnreachableAlerts", () => {
 });
 
 describe("sortAlerts", () => {
-  const a = (severity: OperationalAlert["severity"], code: OperationalAlert["code"]): OperationalAlert => ({
+  const a = (
+    severity: OperationalAlert["severity"],
+    code: OperationalAlert["code"],
+  ): OperationalAlert => ({
     code,
     severity,
     message: code,
@@ -322,7 +340,10 @@ describe("sortAlerts", () => {
   });
 
   it("orders critical before warning regardless of input order", () => {
-    const sorted = sortAlerts([a("warning", "collector.stale"), a("critical", "collector.offline")]);
+    const sorted = sortAlerts([
+      a("warning", "collector.stale"),
+      a("critical", "collector.offline"),
+    ]);
     expect(sorted.map((x) => x.severity)).toEqual(["critical", "warning"]);
   });
 
@@ -343,8 +364,8 @@ describe("alertKey", () => {
   });
 
   it("a connector alert keys on connector", () => {
-    expect(alertKey({ code: "connector.failing", machineId: undefined, connector: "claude-code" })).toBe(
-      "connector.failing:claude-code",
-    );
+    expect(
+      alertKey({ code: "connector.failing", machineId: undefined, connector: "claude-code" }),
+    ).toBe("connector.failing:claude-code");
   });
 });

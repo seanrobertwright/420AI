@@ -66,7 +66,10 @@ describe("anthropic client", () => {
   });
 
   it("maps a non-200 to AnalysisProviderError (unavailable)", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 503, json: async () => ({}) })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false, status: 503, json: async () => ({}) })),
+    );
     await expect(createAnalysisProvider(anthropicCfg).interpret(REQ)).rejects.toMatchObject({
       name: "AnalysisProviderError",
       kind: "unavailable",
@@ -86,7 +89,10 @@ describe("anthropic client", () => {
   });
 
   it("treats empty content as a provider error", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => okJson({ content: [], model: "m" })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => okJson({ content: [], model: "m" })),
+    );
     await expect(createAnalysisProvider(anthropicCfg).interpret(REQ)).rejects.toBeInstanceOf(
       AnalysisProviderError,
     );
@@ -123,7 +129,10 @@ describe("openai-compatible client", () => {
   });
 
   it("maps a non-200 to AnalysisProviderError", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 500, json: async () => ({}) })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false, status: 500, json: async () => ({}) })),
+    );
     await expect(createAnalysisProvider(openaiCfg).interpret(REQ)).rejects.toBeInstanceOf(
       AnalysisProviderError,
     );

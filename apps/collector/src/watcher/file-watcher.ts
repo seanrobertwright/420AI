@@ -65,9 +65,7 @@ export class FileWatcher {
         // `size := mtimeMs` (see snapshot.ts). Commit-point ordering preserved:
         // saveCursor runs only AFTER onChange succeeds.
         const prev =
-          cursor !== undefined
-            ? { sizeBytes: cursor.byteOffset, mtimeMs: cursor.size }
-            : undefined;
+          cursor !== undefined ? { sizeBytes: cursor.byteOffset, mtimeMs: cursor.size } : undefined;
         const snap = readSnapshot(path, prev);
         if (!snap.changed) continue;
         await this.deps.onChange(connector, snap.text);

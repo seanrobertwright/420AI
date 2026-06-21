@@ -8,14 +8,34 @@ import type { IngestBatch } from "@420ai/shared";
 const TEST_URL = process.env.DATABASE_URL_TEST;
 
 function rate(over: Partial<ModelPricing> = {}): ModelPricing {
-  return { input: 1e-6, output: 2e-6, cache_read: 0, cache_write: 0, sourceUrl: "x", asOf: "2026-06-20", ...over };
+  return {
+    input: 1e-6,
+    output: 2e-6,
+    cache_read: 0,
+    cache_write: 0,
+    sourceUrl: "x",
+    asOf: "2026-06-20",
+    ...over,
+  };
 }
 
 /** The active catalog re-pricing targets: 1000 input × 10e-6 = 0.01. */
 const ACTIVE = { version: "v-new", rates: { "claude-opus-4-8": rate({ input: 10e-6 }) } };
 
-const TOKENS = { input: 1000, output: 0, cache_read: 0, cache_write: 0, reasoning: 0, tool: 0, total: 1000 };
-const WIRE_COST = { usd: 0.005, confidence: "estimated-model-known" as const, model: "claude-opus-4-8" };
+const TOKENS = {
+  input: 1000,
+  output: 0,
+  cache_read: 0,
+  cache_write: 0,
+  reasoning: 0,
+  tool: 0,
+  total: 1000,
+};
+const WIRE_COST = {
+  usd: 0.005,
+  confidence: "estimated-model-known" as const,
+  model: "claude-opus-4-8",
+};
 
 /**
  * Four seeded events (the planning spike, productionized). Seeded via ingestBatch with NO
@@ -121,7 +141,10 @@ describe.skipIf(!TEST_URL)("repriceAll repository (integration) — M12 12.5a", 
     await dbh.db.execute(
       sql`TRUNCATE pricing_catalogs, raw_source_records, events, ingest_tokens, pairing_codes, machines, users RESTART IDENTITY CASCADE`,
     );
-    const [u] = await dbh.db.insert(users).values({ email: "test@example.com" }).returning({ id: users.id });
+    const [u] = await dbh.db
+      .insert(users)
+      .values({ email: "test@example.com" })
+      .returning({ id: users.id });
     const [m] = await dbh.db
       .insert(machines)
       .values({ userId: u!.id, name: "test-machine" })

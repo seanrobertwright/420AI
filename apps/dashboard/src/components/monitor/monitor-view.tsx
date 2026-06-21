@@ -25,13 +25,7 @@ function dataCardStatus(s: MonitorStatus): "active" | "inactive" | "alert" {
   return s === "online" ? "active" : s === "stale" ? "inactive" : "alert";
 }
 
-export function MonitorView({
-  snapshot,
-  nowMs,
-}: {
-  snapshot: LiveMonitorSnapshot;
-  nowMs: number;
-}) {
+export function MonitorView({ snapshot, nowMs }: { snapshot: LiveMonitorSnapshot; nowMs: number }) {
   const { machines, connectors, activeSessions } = snapshot;
   const counts: Record<MonitorStatus, number> = { online: 0, stale: 0, offline: 0 };
   for (const m of machines) counts[m.status]++;
@@ -58,7 +52,13 @@ export function MonitorView({
           title={`${totalBacklog}`}
           subtitle="Sync backlog (pending)"
           status={anyBacklogHigh ? "alert" : "active"}
-          fields={[{ label: "Backlog high", value: anyBacklogHigh ? "YES" : "no", highlight: anyBacklogHigh }]}
+          fields={[
+            {
+              label: "Backlog high",
+              value: anyBacklogHigh ? "YES" : "no",
+              highlight: anyBacklogHigh,
+            },
+          ]}
         />
         <DataCard
           title={`${activeSessions.length}`}
@@ -103,7 +103,10 @@ export function MonitorView({
                       <span className={cn(m.backlogHigh && "text-destructive font-semibold")}>
                         {m.queuePending ?? 0}
                       </span>
-                      <span className="text-muted-foreground text-xs"> ({m.queueInflight ?? 0} in-flight)</span>
+                      <span className="text-muted-foreground text-xs">
+                        {" "}
+                        ({m.queueInflight ?? 0} in-flight)
+                      </span>
                     </TableCell>
                     <TableCell className="font-mono text-xs">{m.collectorVersion ?? "—"}</TableCell>
                     <TableCell className="text-muted-foreground">
@@ -140,7 +143,9 @@ export function MonitorView({
                 {connectors.map((c) => (
                   <TableRow key={c.sourceConnector}>
                     <TableCell className="font-medium">{c.sourceConnector}</TableCell>
-                    <TableCell className="text-muted-foreground">{formatAgo(c.lastEventAt, nowMs)}</TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {formatAgo(c.lastEventAt, nowMs)}
+                    </TableCell>
                     <TableCell>{c.eventCount}</TableCell>
                     <TableCell>
                       <span className={cn(c.toolsFailed > 0 && "text-destructive font-semibold")}>
@@ -165,7 +170,9 @@ export function MonitorView({
         </CardHeader>
         <CardContent>
           {activeSessions.length === 0 ? (
-            <p className="text-muted-foreground text-sm">No sessions active in the last 15 minutes.</p>
+            <p className="text-muted-foreground text-sm">
+              No sessions active in the last 15 minutes.
+            </p>
           ) : (
             <Table>
               <TableHeader>
@@ -187,7 +194,9 @@ export function MonitorView({
                       {s.gitBranch ? ` @ ${s.gitBranch}` : ""}
                     </TableCell>
                     <TableCell>{s.eventCount}</TableCell>
-                    <TableCell className="text-muted-foreground">{formatAgo(s.lastEventAt, nowMs)}</TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {formatAgo(s.lastEventAt, nowMs)}
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>

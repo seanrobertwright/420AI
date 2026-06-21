@@ -4,7 +4,11 @@ import type { FastifyInstance } from "fastify";
 import { createDb, recordHeartbeat } from "@420ai/db";
 import type { IngestBatch, LiveMonitorSnapshot } from "@420ai/shared";
 import { buildApp } from "./app.js";
-import { AnalysisProviderError, type AnalysisProvider, type AnalysisRequest } from "./analysis/provider.js";
+import {
+  AnalysisProviderError,
+  type AnalysisProvider,
+  type AnalysisRequest,
+} from "./analysis/provider.js";
 
 const TEST_URL = process.env.DATABASE_URL_TEST;
 const ADMIN = "test-admin";
@@ -21,7 +25,11 @@ const stubProvider: AnalysisProvider = {
     if (providerMode === "throw") {
       throw new AnalysisProviderError("provider is down", "unavailable");
     }
-    return { markdown: STUB_MARKDOWN, model: "stub-model", usage: { inputTokens: 5, outputTokens: 7 } };
+    return {
+      markdown: STUB_MARKDOWN,
+      model: "stub-model",
+      usage: { inputTokens: 5, outputTokens: 7 },
+    };
   },
 };
 
@@ -464,7 +472,15 @@ describe.skipIf(!TEST_URL)("ingest API (HTTP e2e via inject)", () => {
           eventType: "usage.reported",
           model: "claude-opus-4-8",
           ts: "2026-06-14T00:00:00.000Z",
-          tokens: { input: 100, output: 50, cache_read: 30, cache_write: 20, reasoning: 0, tool: 0, total: 200 },
+          tokens: {
+            input: 100,
+            output: 50,
+            cache_read: 30,
+            cache_write: 20,
+            reasoning: 0,
+            tool: 0,
+            total: 200,
+          },
         },
         {
           ...base,
@@ -539,7 +555,11 @@ describe.skipIf(!TEST_URL)("ingest API (HTTP e2e via inject)", () => {
       headers: { authorization: `Bearer ${ADMIN}` },
     });
     expect(sessions.statusCode).toBe(200);
-    const sessionRows = sessions.json() as { sessionId: string; userMessages: number; toolsFailed: number }[];
+    const sessionRows = sessions.json() as {
+      sessionId: string;
+      userMessages: number;
+      toolsFailed: number;
+    }[];
     expect(sessionRows).toHaveLength(1);
     expect(sessionRows[0]!.sessionId).toBe("ms1");
     expect(sessionRows[0]!.userMessages).toBe(1);
@@ -795,7 +815,10 @@ describe.skipIf(!TEST_URL)("ingest API (HTTP e2e via inject)", () => {
           sourceConnector: "claude-code",
           sessionId: AI_SESSION,
           sourceRecordId: "ar1",
-          payload: JSON.stringify({ role: "user", text: `please use ${AI_SECRET} to call the API` }),
+          payload: JSON.stringify({
+            role: "user",
+            text: `please use ${AI_SECRET} to call the API`,
+          }),
         },
         {
           sourceConnector: "claude-code",
@@ -1034,7 +1057,9 @@ describe.skipIf(!TEST_URL)("ingest API (HTTP e2e via inject)", () => {
     expect(body.connectors.map((c) => c.sourceConnector)).toContain("claude-code");
     // M10: alerts ride the snapshot — a fresh-heartbeat machine raises no liveness alert.
     expect(Array.isArray(body.alerts)).toBe(true);
-    expect(body.alerts.some((a) => a.code === "collector.offline" && a.machineId === machineId)).toBe(false);
+    expect(
+      body.alerts.some((a) => a.code === "collector.offline" && a.machineId === machineId),
+    ).toBe(false);
     // M10 3c: the persisted firing list rides the snapshot too — no open offline firing for an online machine.
     expect(Array.isArray(body.alertFirings)).toBe(true);
     expect(
@@ -1064,7 +1089,9 @@ describe.skipIf(!TEST_URL)("ingest API (HTTP e2e via inject)", () => {
     expect(snap.statusCode).toBe(200);
     const body = snap.json() as LiveMonitorSnapshot;
     expect(body.machines[0]!.status).toBe("offline");
-    const offline = body.alerts.find((a) => a.code === "collector.offline" && a.machineId === machineId);
+    const offline = body.alerts.find(
+      (a) => a.code === "collector.offline" && a.machineId === machineId,
+    );
     expect(offline).toBeDefined();
     expect(offline!.severity).toBe("critical");
   });

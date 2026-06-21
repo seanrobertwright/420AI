@@ -18,8 +18,18 @@ function makeBatch(): IngestBatch {
   return {
     records: [
       { sourceConnector: "claude-code", sessionId: "s1", sourceRecordId: "r1", payload: USER_TEXT },
-      { sourceConnector: "claude-code", sessionId: "s1", sourceRecordId: "r2", payload: ASSISTANT_TEXT },
-      { sourceConnector: "claude-code", sessionId: "s1", sourceRecordId: "r3", payload: ATTACHMENT_TEXT },
+      {
+        sourceConnector: "claude-code",
+        sessionId: "s1",
+        sourceRecordId: "r2",
+        payload: ASSISTANT_TEXT,
+      },
+      {
+        sourceConnector: "claude-code",
+        sessionId: "s1",
+        sourceRecordId: "r3",
+        payload: ATTACHMENT_TEXT,
+      },
     ],
     events: [
       {
@@ -84,7 +94,10 @@ describe.skipIf(!TEST_URL)("sessionTranscript (integration)", () => {
     await dbh.db.execute(
       sql`TRUNCATE raw_source_records, events, ingest_tokens, pairing_codes, machines, users RESTART IDENTITY CASCADE`,
     );
-    const [u] = await dbh.db.insert(users).values({ email: "test@example.com" }).returning({ id: users.id });
+    const [u] = await dbh.db
+      .insert(users)
+      .values({ email: "test@example.com" })
+      .returning({ id: users.id });
     const [m] = await dbh.db
       .insert(machines)
       .values({ userId: u!.id, name: "test-machine" })

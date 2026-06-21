@@ -1,11 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { PairRequest, PairResponse } from "@420ai/shared";
-import {
-  createMachine,
-  issueIngestToken,
-  redeemPairingCode,
-  PairingError,
-} from "@420ai/db";
+import { createMachine, issueIngestToken, redeemPairingCode, PairingError } from "@420ai/db";
 import { pairBodySchema } from "../schemas.js";
 
 /**

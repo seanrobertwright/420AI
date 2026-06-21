@@ -5,10 +5,7 @@ import { join } from "node:path";
 import { SqliteStore } from "./sqlite-store.js";
 import { parseClaudeCodeSession } from "../connectors/claude-code.js";
 
-const fixture = readFileSync(
-  new URL("../fixtures/sample-session.jsonl", import.meta.url),
-  "utf8",
-);
+const fixture = readFileSync(new URL("../fixtures/sample-session.jsonl", import.meta.url), "utf8");
 
 let dbPath: string | undefined;
 

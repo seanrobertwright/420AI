@@ -41,7 +41,10 @@ describe.skipIf(!TEST_URL)("collector push (real-socket e2e)", () => {
   });
 
   it("pairs then pushes the fixture, and a re-push is idempotent", async () => {
-    const [u] = await dbh.db.insert(users).values({ email: "test@example.com" }).returning({ id: users.id });
+    const [u] = await dbh.db
+      .insert(users)
+      .values({ email: "test@example.com" })
+      .returning({ id: users.id });
     const { code } = await createPairingCode(dbh.db, u!.id);
 
     const { token } = await runPair({ url: baseUrl, code, name: "win-test", persist: false });

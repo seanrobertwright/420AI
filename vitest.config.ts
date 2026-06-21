@@ -12,9 +12,7 @@ loadEnv({ path: fileURLToPath(new URL("./.env", import.meta.url)) });
 export default defineConfig({
   resolve: {
     alias: {
-      "@420ai/shared": fileURLToPath(
-        new URL("./packages/shared/src/index.ts", import.meta.url),
-      ),
+      "@420ai/shared": fileURLToPath(new URL("./packages/shared/src/index.ts", import.meta.url)),
       "@420ai/db": fileURLToPath(new URL("./packages/db/src/index.ts", import.meta.url)),
       // The dashboard uses the `@/*` → `apps/dashboard/src/*` path alias (its tsconfig
       // `paths`); vitest resolves via Vite aliases, not tsconfig paths, so mirror it here so

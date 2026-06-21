@@ -31,8 +31,7 @@ function main(): void {
   }
 
   const keyFlagIndex = argv.indexOf("--key");
-  const keyPath =
-    keyFlagIndex >= 0 ? argv[keyFlagIndex + 1] : process.env.CATALOG_SIGNING_KEY;
+  const keyPath = keyFlagIndex >= 0 ? argv[keyFlagIndex + 1] : process.env.CATALOG_SIGNING_KEY;
   if (!keyPath) {
     fail("no private key: pass --key <pem path> or set $CATALOG_SIGNING_KEY");
   }
@@ -43,7 +42,11 @@ function main(): void {
   } catch (err) {
     fail(`cannot read/parse ${catalogPath}: ${(err as Error).message}`);
   }
-  if (typeof parsed.version !== "string" || typeof parsed.payload !== "object" || parsed.payload === null) {
+  if (
+    typeof parsed.version !== "string" ||
+    typeof parsed.payload !== "object" ||
+    parsed.payload === null
+  ) {
     fail("catalog must be { version: string, payload: object }");
   }
 

@@ -9,10 +9,7 @@ import { users } from "../schema.js";
  */
 
 /** Resolve a user id by email, or undefined if none exists yet. */
-export async function findUserIdByEmail(
-  db: DbClient,
-  email: string,
-): Promise<string | undefined> {
+export async function findUserIdByEmail(db: DbClient, email: string): Promise<string | undefined> {
   const [row] = await db
     .select({ id: users.id })
     .from(users)

@@ -98,9 +98,7 @@ export async function exportEvents(
         .innerJoin(machines, eq(events.machineId, machines.id))
         .where(and(eq(machines.userId, userId), ...conditions));
 
-  const fetched = await scoped
-    .orderBy(asc(events.ts), asc(events.eventIndex))
-    .limit(cap + 1);
+  const fetched = await scoped.orderBy(asc(events.ts), asc(events.eventIndex)).limit(cap + 1);
 
   const truncated = fetched.length > cap;
   const page = truncated ? fetched.slice(0, cap) : fetched;

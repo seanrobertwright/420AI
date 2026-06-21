@@ -19,6 +19,7 @@ The repo is **public**, so branch protection is free. Make `repo-health` blockin
 reported on at least one PR:
 
 **UI (recommended):** Settings → Branches → Add branch protection rule for `main` →
+
 - ☑ Require a pull request before merging
 - ☑ Require status checks to pass before merging → select **`repo-health`**
 - ☑ Do not allow bypassing the above settings
@@ -48,7 +49,7 @@ Verify: open a throwaway PR with a deliberately failing change → merge is bloc
 **removed** from every log line (`redact … remove:true`) — a bearer/session cookie never lands
 in a log. Example: `LOG_LEVEL=debug npm run ingest:dev`.
 
-**Metrics.** `GET /v1/metrics` is **admin-gated** (service token *or* a session bearer) and
+**Metrics.** `GET /v1/metrics` is **admin-gated** (service token _or_ a session bearer) and
 returns a JSON snapshot — not Prometheus; a single-user box runs no scraper:
 
 ```sh
@@ -101,7 +102,7 @@ docker compose exec -T archive psql -U 420ai -d scratch -c 'select count(*) from
 - **cron (Linux/macOS):** `0 3 * * * cd /path/to/420AI && npm run backup >> backups/backup.log 2>&1`
 
 **Optional row prune (default OFF).** Raw records are **never pruned** (PRD §8.5 "raw sacred").
-*Re-buildable* rows (events, report_artifacts older than N days) MAY be pruned by an operator who
+_Re-buildable_ rows (events, report_artifacts older than N days) MAY be pruned by an operator who
 opts in — they re-derive from raw via the §23 replay engine. The in-DB precedent is
 `recordHeartbeat` (`packages/db/src/repositories/machines.ts`), which appends then
 `delete … where ts < now - retention`. **`raw_source_records` is never pruned.**
@@ -171,8 +172,8 @@ recomputes `cost = tokens × catalog rate`, and re-stamps `catalog_version`. Thi
 correcting (PRD §23/§25 12.5).
 
 It is a **pure data pass over `events`**: no decrypt, no re-parse, **raw records and the event
-fingerprint are untouched**, and there is no schema change. It only ever *recomputes* an existing
-cost — it never *adds* a cost to a costless event (`usage.reported`/`message.*` pass through).
+fingerprint are untouched**, and there is no schema change. It only ever _recomputes_ an existing
+cost — it never _adds_ a cost to a costless event (`usage.reported`/`message.*` pass through).
 
 **Run it (CLI — for cron/manual ops):**
 
@@ -197,7 +198,7 @@ curl -X POST localhost:8420/v1/replay/reprice -H "authorization: Bearer $ADMIN_T
   are already at the bundled baseline from capture, so there is nothing to apply.
 - An **incomplete uploaded catalog zeroes** the cost of any model it omits (`usd 0`,
   `estimated-model-unknown`) — identical to the going-forward ingest path (the same `computeCost`
-  call), which looks up *only* the active catalog with no fallback to the bundled baseline. Upload a
+  call), which looks up _only_ the active catalog with no fallback to the bundled baseline. Upload a
   complete catalog.
 - It is **idempotent** — safe to re-run; rows already at the active version are skipped (so a second
   run reprices 0). Run it after each catalog approval.
@@ -240,5 +241,5 @@ ALERT_WEBHOOK_TIMEOUT_MS=5000   # optional; per-delivery timeout, defaults to 50
   is offline** (`collector.offline` already covers a total outage), and back-compat with older collectors
   that don't send the field (treated as 0).
 
-**Deferred → 12.6b:** the windowed connector-failure *rate* (the existing `connector.failing` stays a
+**Deferred → 12.6b:** the windowed connector-failure _rate_ (the existing `connector.failing` stays a
 lifetime ratio), SMTP/email delivery, and deliver-on-resolve.

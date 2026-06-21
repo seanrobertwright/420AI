@@ -150,7 +150,7 @@ A persisted record that an Operational Alert is (or was) active: it carries when
 
 ## Alert Delivery
 
-The push of a newly-opened Alert Firing to a configured external sink (a webhook today — Slack/Discord/n8n/email-bridge; email later behind the same interface). At-most-one delivery *attempt* per firing (stamped on success or failure), so a misconfigured sink is never spammed; the Alert Firing in the dashboard remains the durable record. Disabled unless a webhook URL is configured.
+The push of a newly-opened Alert Firing to a configured external sink (a webhook today — Slack/Discord/n8n/email-bridge; email later behind the same interface). At-most-one delivery _attempt_ per firing (stamped on success or failure), so a misconfigured sink is never spammed; the Alert Firing in the dashboard remains the durable record. Disabled unless a webhook URL is configured.
 
 ## Heartbeat Sample
 

@@ -65,7 +65,10 @@ describe("maybeSendHeartbeat", () => {
   it("carries the consecutiveSyncFailures count when set (M12 12.6 archive.unreachable signal)", async () => {
     const nowRef = { ms: T0 };
     const post = vi.fn().mockResolvedValue({ ok: true });
-    const deps = { ...makeDeps({ nowRef, post, pending: 1, inflight: 0 }), consecutiveSyncFailures: 4 };
+    const deps = {
+      ...makeDeps({ nowRef, post, pending: 1, inflight: 0 }),
+      consecutiveSyncFailures: 4,
+    };
 
     await maybeSendHeartbeat(deps, newHeartbeatState());
 

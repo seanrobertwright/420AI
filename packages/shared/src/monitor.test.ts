@@ -19,7 +19,10 @@ describe("deriveMachineStatus", () => {
 
   it("heartbeat exactly at the stale boundary is still online (strict >)", () => {
     expect(
-      deriveMachineStatus({ lastHeartbeatAt: ago(MONITOR_THRESHOLDS.staleMs), lastSeenAt: null }, NOW),
+      deriveMachineStatus(
+        { lastHeartbeatAt: ago(MONITOR_THRESHOLDS.staleMs), lastSeenAt: null },
+        NOW,
+      ),
     ).toBe("online");
   });
 
@@ -56,7 +59,10 @@ describe("deriveMachineStatus", () => {
       "online",
     );
     expect(
-      deriveMachineStatus({ lastHeartbeatAt: null, lastSeenAt: ago(MONITOR_THRESHOLDS.offlineMs + 1) }, NOW),
+      deriveMachineStatus(
+        { lastHeartbeatAt: null, lastSeenAt: ago(MONITOR_THRESHOLDS.offlineMs + 1) },
+        NOW,
+      ),
     ).toBe("offline");
   });
 

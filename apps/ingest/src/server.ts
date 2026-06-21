@@ -36,11 +36,17 @@ function parsePositiveInt(raw: string | undefined, name: string, defaultValue: n
 // M1–M7 endpoints work; only POST …/interpretations returns 503 (D9).
 const analysisProviderName = process.env.ANALYSIS_PROVIDER;
 const analysisApiKey = process.env.ANALYSIS_API_KEY;
-const analysisMaxOutputTokens = parsePositiveInt(process.env.ANALYSIS_MAX_OUTPUT_TOKENS, "ANALYSIS_MAX_OUTPUT_TOKENS", 4096);
+const analysisMaxOutputTokens = parsePositiveInt(
+  process.env.ANALYSIS_MAX_OUTPUT_TOKENS,
+  "ANALYSIS_MAX_OUTPUT_TOKENS",
+  4096,
+);
 let analysisConfig: AnalysisProviderConfig | null = null;
 if (analysisProviderName && analysisApiKey) {
   if (analysisProviderName !== "anthropic" && analysisProviderName !== "openai") {
-    throw new Error(`ANALYSIS_PROVIDER must be "anthropic" or "openai" (got "${analysisProviderName}")`);
+    throw new Error(
+      `ANALYSIS_PROVIDER must be "anthropic" or "openai" (got "${analysisProviderName}")`,
+    );
   }
   analysisConfig = {
     provider: analysisProviderName,
@@ -86,7 +92,11 @@ const alertDeliverer = createWebhookDeliverer(
   alertWebhookUrl
     ? {
         url: alertWebhookUrl,
-        timeoutMs: parsePositiveInt(process.env.ALERT_WEBHOOK_TIMEOUT_MS, "ALERT_WEBHOOK_TIMEOUT_MS", 5000),
+        timeoutMs: parsePositiveInt(
+          process.env.ALERT_WEBHOOK_TIMEOUT_MS,
+          "ALERT_WEBHOOK_TIMEOUT_MS",
+          5000,
+        ),
       }
     : null,
 );
@@ -99,7 +109,9 @@ const { db } = createDb(databaseUrl);
 if (adminPassword) {
   await setUserPassword(db, adminEmail, hashPassword(adminPassword));
 } else {
-  console.warn("ADMIN_PASSWORD is not set — dashboard login disabled until it is (set it + restart).");
+  console.warn(
+    "ADMIN_PASSWORD is not set — dashboard login disabled until it is (set it + restart).",
+  );
 }
 
 const app = buildApp({

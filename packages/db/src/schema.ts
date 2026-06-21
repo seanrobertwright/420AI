@@ -281,12 +281,7 @@ export const reportArtifacts = pgTable(
   },
   (t) => [
     // History lookup + the version-bump backstop (one row per (user, type, scope, version)).
-    uniqueIndex("report_artifacts_scope_version").on(
-      t.userId,
-      t.reportType,
-      t.scopeId,
-      t.version,
-    ),
+    uniqueIndex("report_artifacts_scope_version").on(t.userId, t.reportType, t.scopeId, t.version),
     index("report_artifacts_by_scope").on(t.userId, t.reportType, t.scopeId),
   ],
 );
@@ -401,7 +396,9 @@ export const machineHeartbeats = pgTable(
   "machine_heartbeats",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    machineId: uuid("machine_id").notNull().references(() => machines.id),
+    machineId: uuid("machine_id")
+      .notNull()
+      .references(() => machines.id),
     ts: timestamp("ts", { withTimezone: true }).notNull().defaultNow(),
     queuePending: integer("queue_pending").notNull(),
     queueInflight: integer("queue_inflight").notNull(),
@@ -435,7 +432,9 @@ export const alertFirings = pgTable(
   "alert_firings",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    userId: uuid("user_id").notNull().references(() => users.id),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
     alertKey: text("alert_key").notNull(),
     code: text("code").notNull(),
     severity: text("severity").notNull(),
@@ -455,7 +454,9 @@ export const alertFirings = pgTable(
   },
   (t) => [
     // At most ONE open firing per (user, alert_key) — the reconcile idempotency key (D3).
-    uniqueIndex("alert_firings_open_key").on(t.userId, t.alertKey).where(sql`${t.status} = 'open'`),
+    uniqueIndex("alert_firings_open_key")
+      .on(t.userId, t.alertKey)
+      .where(sql`${t.status} = 'open'`),
     index("alert_firings_by_user_status").on(t.userId, t.status),
   ],
 );
@@ -483,7 +484,9 @@ export const pricingCatalogs = pgTable(
   },
   (t) => [
     uniqueIndex("pricing_catalogs_version").on(t.version), // idempotent upload (re-upload same version = no-op)
-    uniqueIndex("pricing_catalogs_one_active").on(t.status).where(sql`${t.status} = 'active'`),
+    uniqueIndex("pricing_catalogs_one_active")
+      .on(t.status)
+      .where(sql`${t.status} = 'active'`),
   ],
 );
 

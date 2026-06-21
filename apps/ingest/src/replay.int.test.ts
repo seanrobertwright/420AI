@@ -1,10 +1,21 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from "vitest";
 import { sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
-import { createDb, ingestBatch, insertPendingCatalog, approveCatalog, users, machines } from "@420ai/db";
+import {
+  createDb,
+  ingestBatch,
+  insertPendingCatalog,
+  approveCatalog,
+  users,
+  machines,
+} from "@420ai/db";
 import type { IngestBatch, ModelPricing } from "@420ai/shared";
 import { buildApp } from "./app.js";
-import { AnalysisProviderError, type AnalysisProvider, type AnalysisRequest } from "./analysis/provider.js";
+import {
+  AnalysisProviderError,
+  type AnalysisProvider,
+  type AnalysisRequest,
+} from "./analysis/provider.js";
 
 const TEST_URL = process.env.DATABASE_URL_TEST;
 const ADMIN = "test-admin";
@@ -17,7 +28,15 @@ const stubProvider: AnalysisProvider = {
 };
 
 function rate(over: Partial<ModelPricing> = {}): ModelPricing {
-  return { input: 1e-6, output: 2e-6, cache_read: 0, cache_write: 0, sourceUrl: "x", asOf: "2026-06-20", ...over };
+  return {
+    input: 1e-6,
+    output: 2e-6,
+    cache_read: 0,
+    cache_write: 0,
+    sourceUrl: "x",
+    asOf: "2026-06-20",
+    ...over,
+  };
 }
 
 // The active catalog re-prices opus at 10e-6/input → 1000 input = 0.01 (≠ the wire 0.005).
@@ -39,7 +58,15 @@ function costBatch(): IngestBatch {
         sessionId: "rp-route-s1",
         model: "claude-opus-4-8",
         ts: "2026-06-14T00:00:00.000Z",
-        tokens: { input: 1000, output: 0, cache_read: 0, cache_write: 0, reasoning: 0, tool: 0, total: 1000 },
+        tokens: {
+          input: 1000,
+          output: 0,
+          cache_read: 0,
+          cache_write: 0,
+          reasoning: 0,
+          tool: 0,
+          total: 1000,
+        },
         cost: { usd: 0.005, confidence: "estimated-model-known", model: "claude-opus-4-8" },
       },
     ],
@@ -53,7 +80,12 @@ describe.skipIf(!TEST_URL)("POST /v1/replay/reprice (integration) — M12 12.5a"
 
   beforeAll(async () => {
     dbh = createDb(TEST_URL!);
-    app = buildApp({ db: dbh.db, adminToken: ADMIN, analysisProvider: stubProvider, logger: false });
+    app = buildApp({
+      db: dbh.db,
+      adminToken: ADMIN,
+      analysisProvider: stubProvider,
+      logger: false,
+    });
     await app.ready();
   });
 
@@ -66,7 +98,10 @@ describe.skipIf(!TEST_URL)("POST /v1/replay/reprice (integration) — M12 12.5a"
     await dbh.db.execute(
       sql`TRUNCATE pricing_catalogs, raw_source_records, events, ingest_tokens, pairing_codes, machines, users RESTART IDENTITY CASCADE`,
     );
-    const [u] = await dbh.db.insert(users).values({ email: "test@example.com" }).returning({ id: users.id });
+    const [u] = await dbh.db
+      .insert(users)
+      .values({ email: "test@example.com" })
+      .returning({ id: users.id });
     const [m] = await dbh.db
       .insert(machines)
       .values({ userId: u!.id, name: "test-machine" })

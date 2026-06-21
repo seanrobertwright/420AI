@@ -71,7 +71,11 @@ describe("discoverWorkspaces", () => {
   });
 
   it("preserves a Gemini hash projectKey while resolving rootPath to the real path", async () => {
-    const root = makeRepo("420ai", "m5-project-mapping", "https://github.com/seanrobertwright/420AI.git");
+    const root = makeRepo(
+      "420ai",
+      "m5-project-mapping",
+      "https://github.com/seanrobertwright/420AI.git",
+    );
     const hash = "2025fdb554a6deadbeef";
     const connectors = [fakeConnector("gemini-cli", [{ projectKey: hash, rootPath: root }])];
     const { workspaces } = await discoverWorkspaces({ connectors, home: dir });

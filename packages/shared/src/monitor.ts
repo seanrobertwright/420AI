@@ -98,5 +98,13 @@ export const isBacklogHigh = (pending: number | null): boolean =>
  * empty shape is defined ONCE.
  */
 export function emptyMonitorSnapshot(generatedAt: string): LiveMonitorSnapshot {
-  return { monitorVersion: MONITOR_VERSION, generatedAt, machines: [], connectors: [], activeSessions: [], alerts: [], alertFirings: [] };
+  return {
+    monitorVersion: MONITOR_VERSION,
+    generatedAt,
+    machines: [],
+    connectors: [],
+    activeSessions: [],
+    alerts: [],
+    alertFirings: [],
+  };
 }

@@ -111,9 +111,7 @@ export async function runCaptureEngine(opts: CaptureEngineOptions): Promise<void
 
   const watcher = new FileWatcher({ connectors, home, queue, onChange });
 
-  log(
-    `watching ${connectors.length} connector(s) under ${home}; syncing to ${opts.creds.url}`,
-  );
+  log(`watching ${connectors.length} connector(s) under ${home}; syncing to ${opts.creds.url}`);
 
   try {
     // Run watcher + sync loops concurrently. A fatal 401 ("stop") or SIGINT ends
@@ -133,7 +131,9 @@ export async function runCaptureEngine(opts: CaptureEngineOptions): Promise<void
         collectorVersion: opts.collectorVersion,
         heartbeatIntervalMs: opts.heartbeatIntervalMs,
         onStop: () => {
-          log("ingest returned 401 — token revoked. Re-pair needed: `collector pair <code>`. Stopping sync.");
+          log(
+            "ingest returned 401 — token revoked. Re-pair needed: `collector pair <code>`. Stopping sync.",
+          );
           internal.abort();
         },
       },

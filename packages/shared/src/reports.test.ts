@@ -5,7 +5,6 @@ import {
   fmtUsd,
   REPORT_VERSION,
   type CostOverTimeReportInput,
-  type SessionAutopsyReportInput,
 } from "./reports.js";
 import { zeroTokens, type NormalizedTokens } from "./tokens.js";
 import type { SessionDetail } from "./projections.js";
@@ -153,9 +152,7 @@ describe("renderSessionAutopsyReport", () => {
     expect(md).toContain("# Session Autopsy — ms1");
     expect(md).toContain("- **Connector:** claude-code");
     expect(md).toContain("- **Model(s):** claude-opus-4-8");
-    expect(md).toContain(
-      "- **Time range:** 2026-06-14T00:00:00.000Z → 2026-06-14T00:03:00.000Z",
-    );
+    expect(md).toContain("- **Time range:** 2026-06-14T00:00:00.000Z → 2026-06-14T00:03:00.000Z");
     expect(md).toContain("- **Events:** 4 (user: 1, assistant: 0, tool calls: 1)");
     expect(md).toContain("- **Tool outcomes:** 0 completed, 1 failed");
     expect(md).toContain("| 100 | 50 | 30 | 20 | 200 |");

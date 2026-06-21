@@ -16,7 +16,15 @@ describe("toEventPayload", () => {
       gitBranch: "main",
       model: "claude-opus",
       ts: "2026-06-13T00:00:00.000Z",
-      tokens: { input: 1, output: 2, cache_read: 0, cache_write: 0, reasoning: 0, tool: 0, total: 3 },
+      tokens: {
+        input: 1,
+        output: 2,
+        cache_read: 0,
+        cache_write: 0,
+        reasoning: 0,
+        tool: 0,
+        total: 3,
+      },
       cost: { usd: 0.01, confidence: "estimated-model-known", model: "claude-opus" },
       payload: { name: "Read" },
     };

@@ -34,7 +34,10 @@ describe("readGitMeta", () => {
   });
 
   it("parses an scp-style git@ remote and a feature branch", () => {
-    writeGit("ref: refs/heads/feature-x\n", '[remote "origin"]\n\turl = git@github.com:me/repo.git\n');
+    writeGit(
+      "ref: refs/heads/feature-x\n",
+      '[remote "origin"]\n\turl = git@github.com:me/repo.git\n',
+    );
     expect(readGitMeta(dir)).toEqual({ remote: "git@github.com:me/repo.git", branch: "feature-x" });
   });
 
@@ -43,7 +46,10 @@ describe("readGitMeta", () => {
   });
 
   it("returns branch undefined for a detached HEAD (bare sha)", () => {
-    writeGit("9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f0e\n", '[remote "origin"]\n\turl = https://x/y.git\n');
+    writeGit(
+      "9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f0e\n",
+      '[remote "origin"]\n\turl = https://x/y.git\n',
+    );
     const meta = readGitMeta(dir);
     expect(meta.branch).toBeUndefined();
     expect(meta.remote).toBe("https://x/y.git");

@@ -50,12 +50,12 @@ flowchart LR
     D -->|reports + analysis| U((User))
 ```
 
-| Component | Role |
-| --- | --- |
-| **Collector** | Windows-first headless Node/TS background service (Tauri tray control surface deferred to a later iteration). Runs connectors, captures data via file-watch, buffers to a local durable queue for offline capture. |
-| **Ingest API** | Authenticates machines per-token, validates/batches/deduplicates payloads, handles idempotency and version compatibility, orchestrates writes. |
-| **Central Archive** | Self-hosted Docker Supabase (PostgreSQL-compatible where practical). Stores raw source records, normalized events, entities, metrics, costs, Git outcomes, reports, and redaction findings. |
-| **Web Dashboard** | Self-hosted Next.js app: live monitor, reports, project views, search, connector catalog, machine management, pairing, settings, and export. |
+| Component           | Role                                                                                                                                                                                                               |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Collector**       | Windows-first headless Node/TS background service (Tauri tray control surface deferred to a later iteration). Runs connectors, captures data via file-watch, buffers to a local durable queue for offline capture. |
+| **Ingest API**      | Authenticates machines per-token, validates/batches/deduplicates payloads, handles idempotency and version compatibility, orchestrates writes.                                                                     |
+| **Central Archive** | Self-hosted Docker Supabase (PostgreSQL-compatible where practical). Stores raw source records, normalized events, entities, metrics, costs, Git outcomes, reports, and redaction findings.                        |
+| **Web Dashboard**   | Self-hosted Next.js app: live monitor, reports, project views, search, connector catalog, machine management, pairing, settings, and export.                                                                       |
 
 ## Technology Choices
 
@@ -310,8 +310,9 @@ Five new internal pieces (all in `apps/collector`): a typed **machine identity**
 `node:sqlite`) with content-hash dedup and a claim/ack/retry-backoff state machine; a pure
 **byte-offset tailer** that reads only complete lines (a partial trailing line is never captured) and
 detects truncation; a typed **connector framework** (`id` + PRD §10.3 fidelity fields + `watchGlobs`
-+ `parse`) with Claude Code as the one stable connector; a **poll-based file watcher**; and a
-**retrying sync worker** (capped exponential backoff on network/5xx, stop-and-surface on 401).
+
+- `parse`) with Claude Code as the one stable connector; a **poll-based file watcher**; and a
+  **retrying sync worker** (capped exponential backoff on network/5xx, stop-and-surface on 401).
 
 The M3 connector was **Claude Code only**. **M4 fills out the connector layer to three at full
 fidelity** (see below) — still no server code and no new Postgres tables.

@@ -12,7 +12,11 @@ describe("redact — known-pattern rules", () => {
     const { redacted, findings } = redact(`my key is ${secret} ok`);
     expect(redacted).toBe("my key is [REDACTED:anthropic_key] ok");
     const f = find(findings, "anthropic_key");
-    expect(f).toMatchObject({ kind: "anthropic_key", count: 1, placeholder: "[REDACTED:anthropic_key]" });
+    expect(f).toMatchObject({
+      kind: "anthropic_key",
+      count: 1,
+      placeholder: "[REDACTED:anthropic_key]",
+    });
     // The raw secret must not survive anywhere — neither in the text nor the metadata.
     expect(redacted).not.toContain(secret);
     expect(JSON.stringify(findings)).not.toContain(secret);

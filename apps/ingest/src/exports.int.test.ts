@@ -120,7 +120,15 @@ describe.skipIf(!TEST_URL)("export API (HTTP e2e via inject) — PRD §22", () =
           eventType: "usage.reported",
           model: "claude-opus-4-8",
           ts: "2026-06-14T00:00:00.000Z",
-          tokens: { input: 100, output: 50, cache_read: 30, cache_write: 20, reasoning: 0, tool: 0, total: 200 },
+          tokens: {
+            input: 100,
+            output: 50,
+            cache_read: 30,
+            cache_write: 20,
+            reasoning: 0,
+            tool: 0,
+            total: 200,
+          },
         },
         {
           ...base,
@@ -186,7 +194,10 @@ describe.skipIf(!TEST_URL)("export API (HTTP e2e via inject) — PRD §22", () =
           sourceConnector: "claude-code",
           sessionId: AI_SESSION,
           sourceRecordId: "ar1",
-          payload: JSON.stringify({ role: "user", text: `please use ${AI_SECRET} to call the API` }),
+          payload: JSON.stringify({
+            role: "user",
+            text: `please use ${AI_SECRET} to call the API`,
+          }),
         },
         {
           sourceConnector: "claude-code",
@@ -247,7 +258,10 @@ describe.skipIf(!TEST_URL)("export API (HTTP e2e via inject) — PRD §22", () =
     expect(res.headers["x-export-truncated"]).toBe("false");
     expect(res.headers["x-export-redaction-version"]).toBe("m8-redact-v1");
 
-    const rows = res.body.split("\n").filter((l) => l.length > 0).map((l) => JSON.parse(l));
+    const rows = res.body
+      .split("\n")
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l));
     expect(rows).toHaveLength(4);
     for (const r of rows) {
       expect(r.projectPath).toBe("/home/[REDACTED:home_user_path]/420ai");
@@ -279,7 +293,10 @@ describe.skipIf(!TEST_URL)("export API (HTTP e2e via inject) — PRD §22", () =
     const res = await adminGet(`/v1/exports/events?format=json&projectId=${projectId}`);
     expect(res.statusCode).toBe(200);
     expect(res.headers["content-type"]).toContain("application/json");
-    const body = res.json() as { manifest: { redactionVersion: string; rowCount: number; truncated: boolean }; rows: unknown[] };
+    const body = res.json() as {
+      manifest: { redactionVersion: string; rowCount: number; truncated: boolean };
+      rows: unknown[];
+    };
     expect(body.manifest.redactionVersion).toBe("m8-redact-v1");
     expect(body.manifest.rowCount).toBe(4);
     expect(body.manifest.truncated).toBe(false);
@@ -330,7 +347,10 @@ describe.skipIf(!TEST_URL)("export API (HTTP e2e via inject) — PRD §22", () =
 
     const json = await adminGet(`/v1/reports/${id}/export?format=json`);
     expect(json.statusCode).toBe(200);
-    const body = json.json() as { manifest: { redactionVersion: string }; report: { markdown: string } };
+    const body = json.json() as {
+      manifest: { redactionVersion: string };
+      report: { markdown: string };
+    };
     expect(body.manifest.redactionVersion).toBe("m8-redact-v1");
     expect(body.report.markdown).toContain("# Project Cost Report — 420AI");
   });
@@ -388,7 +408,8 @@ describe.skipIf(!TEST_URL)("export API (HTTP e2e via inject) — PRD §22", () =
     // report id guards
     expect((await adminGet("/v1/reports/not-a-uuid/export?format=md")).statusCode).toBe(404);
     expect(
-      (await adminGet("/v1/reports/00000000-0000-4000-8000-000000000000/export?format=md")).statusCode,
+      (await adminGet("/v1/reports/00000000-0000-4000-8000-000000000000/export?format=md"))
+        .statusCode,
     ).toBe(404);
 
     // well-formed unknown project id → 200 empty (M6 read semantics)
@@ -399,11 +420,13 @@ describe.skipIf(!TEST_URL)("export API (HTTP e2e via inject) — PRD §22", () =
     expect((unknownProject.json() as { manifest: { rowCount: number } }).manifest.rowCount).toBe(0);
 
     // malformed project id → 404
-    expect(
-      (await adminGet("/v1/exports/events?format=json&projectId=not-a-uuid")).statusCode,
-    ).toBe(404);
+    expect((await adminGet("/v1/exports/events?format=json&projectId=not-a-uuid")).statusCode).toBe(
+      404,
+    );
 
     // a valid known project still works (sanity)
-    expect((await adminGet(`/v1/exports/events?format=json&projectId=${projectId}`)).statusCode).toBe(200);
+    expect(
+      (await adminGet(`/v1/exports/events?format=json&projectId=${projectId}`)).statusCode,
+    ).toBe(200);
   });
 });

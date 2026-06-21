@@ -20,8 +20,7 @@ import type { GitFileChange } from "@420ai/shared";
 const execFileAsync = promisify(execFile);
 
 /** Pinned `git log` format (Phase-0). %x1f = unit-sep field delimiter, %x1e = record-sep ending the header. */
-const GIT_LOG_FORMAT =
-  "%x1fCOMMIT%x1f%H%x1f%an%x1f%ae%x1f%aI%x1f%cI%x1f%P%x1f%s%x1f%b%x1e";
+const GIT_LOG_FORMAT = "%x1fCOMMIT%x1f%H%x1f%an%x1f%ae%x1f%aI%x1f%cI%x1f%P%x1f%s%x1f%b%x1e";
 const RECORD_SEP = "\x1fCOMMIT\x1f";
 const FIELD_SEP = "\x1f";
 const BODY_SEP = "\x1e";
@@ -156,15 +155,21 @@ async function totalCommits(repoRoot: string): Promise<number> {
  * `[]` (never throws) when git is missing (ENOENT) or the path is not a repo — a
  * non-repo root is normal in a sweep. Sets `capped` when more history exists than read.
  */
-export async function readGitLog(
-  repoRoot: string,
-  opts?: { cap?: number },
-): Promise<GitLogResult> {
+export async function readGitLog(repoRoot: string, opts?: { cap?: number }): Promise<GitLogResult> {
   const cap = opts?.cap ?? DEFAULT_CAP;
   try {
     const { stdout } = await execFileAsync(
       "git",
-      ["-C", repoRoot, "log", "-n", String(cap), "--numstat", "--date=iso-strict", `--format=${GIT_LOG_FORMAT}`],
+      [
+        "-C",
+        repoRoot,
+        "log",
+        "-n",
+        String(cap),
+        "--numstat",
+        "--date=iso-strict",
+        `--format=${GIT_LOG_FORMAT}`,
+      ],
       { maxBuffer: MAX_BUFFER },
     );
     const commits = parseGitLog(stdout);

@@ -61,9 +61,7 @@ export function LiveMonitor({ initial }: { initial: LiveMonitorSnapshot }) {
           aria-live="polite"
         >
           <span
-            className={
-              "h-2 w-2 rounded-full " + (connected ? "bg-emerald-400" : "bg-amber-400")
-            }
+            className={"h-2 w-2 rounded-full " + (connected ? "bg-emerald-400" : "bg-amber-400")}
           />
           {connected ? "live" : "reconnecting…"}
         </span>

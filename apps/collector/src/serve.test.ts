@@ -234,7 +234,10 @@ describe("serve connector management (Slice 2)", () => {
       loadConnectorConfig: store.load,
       saveConnectorConfig: store.save,
     });
-    await h.send({ cmd: "connectors.set", id: "codex-cli", enabled: false }, (e) => e.type === "ack");
+    await h.send(
+      { cmd: "connectors.set", id: "codex-cli", enabled: false },
+      (e) => e.type === "ack",
+    );
     const ev = (await h.send(
       { cmd: "connectors.list" },
       (e) => e.type === "connectors",
