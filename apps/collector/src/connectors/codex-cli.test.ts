@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
-import { parseCodexSession } from "./codex-cli.js";
+import { parseCodexSession, classifyCodexOutput } from "./codex-cli.js";
 
 const fixture = readFileSync(
   new URL("../fixtures/sample-codex-rollout.jsonl", import.meta.url),
@@ -69,15 +69,47 @@ describe("parseCodexSession", () => {
     const { events } = parseCodexSession(fixture, opts);
     const started = events.filter((e) => e.eventType === "tool.call.started");
     const completed = events.filter((e) => e.eventType === "tool.call.completed");
-    expect(started).toHaveLength(2); // shell + apply_patch
-    expect(completed).toHaveLength(1); // only the shell call has an output record
+    expect(started).toHaveLength(3); // shell call-1 + apply_patch call-2 + custom shell call-3
+    expect(completed).toHaveLength(2); // call-1 old synthetic + call-6 structured exit 0
     expect(started[0]!.payload).toMatchObject({ name: "shell", call_id: "call-1" });
   });
 
-  it("emits file.modified for patch_apply_end", () => {
+  it("emits file.modified for patch_apply_end (success only)", () => {
     const { events } = parseCodexSession(fixture, opts);
     const files = events.filter((e) => e.eventType === "file.modified");
-    expect(files).toHaveLength(1);
+    expect(files).toHaveLength(1); // only the success:true line; success:false is a failure
+  });
+
+  it("classifies tool-output failures into tool.call.failed with §14 classes", () => {
+    const { events } = parseCodexSession(fixture, opts);
+    const failed = events.filter((e) => e.eventType === "tool.call.failed");
+    // call-3 env/127, call-4 tool-runtime/1, call-5 state-mismatch, patch_apply_end success:false
+    expect(failed).toHaveLength(4);
+    expect(
+      failed.find((e) => (e.payload as Record<string, unknown>)?.call_id === "call-3")?.payload,
+    ).toMatchObject({
+      failureClass: "environment",
+      exitCode: 127,
+    });
+    expect(
+      failed.find((e) => (e.payload as Record<string, unknown>)?.call_id === "call-4")?.payload,
+    ).toMatchObject({
+      failureClass: "tool-runtime",
+      exitCode: 1,
+    });
+    expect(
+      failed.find((e) => (e.payload as Record<string, unknown>)?.call_id === "call-5")?.payload,
+    ).toMatchObject({
+      failureClass: "state-mismatch",
+    });
+    // the defensive patch_apply_end success:false carries no call_id, just the class
+    expect(
+      failed.some(
+        (e) =>
+          (e.payload as Record<string, unknown>)?.failureClass === "state-mismatch" &&
+          !(e.payload as Record<string, unknown>)?.call_id,
+      ),
+    ).toBe(true);
   });
 
   it("brackets the session with session.started/ended", () => {
@@ -94,5 +126,61 @@ describe("parseCodexSession", () => {
     expect(a.events.map((e) => e.fingerprint)).toEqual(b.events.map((e) => e.fingerprint));
     const fps = a.events.map((e) => e.fingerprint);
     expect(new Set(fps).size).toBe(fps.length);
+  });
+});
+
+describe("classifyCodexOutput", () => {
+  it("structured exit 0 envelope ⇒ completed (with exitCode echoed)", () => {
+    expect(
+      classifyCodexOutput('{"output":"ok","metadata":{"exit_code":0,"duration_seconds":0.7}}'),
+    ).toEqual({ failed: false, exitCode: 0 });
+  });
+
+  it("structured nonzero exit ⇒ failed/tool-runtime", () => {
+    expect(classifyCodexOutput('{"output":"Cannot find path","metadata":{"exit_code":1}}')).toEqual(
+      { failed: true, failureClass: "tool-runtime", exitCode: 1 },
+    );
+  });
+
+  it("structured exit 124 (timeout) ⇒ failed/environment", () => {
+    expect(
+      classifyCodexOutput(
+        '{"output":"command timed out after 10304 ms","metadata":{"exit_code":124}}',
+      ),
+    ).toEqual({ failed: true, failureClass: "environment", exitCode: 124 });
+  });
+
+  it("structured exit 127 (not found) ⇒ failed/environment", () => {
+    expect(
+      classifyCodexOutput('{"output":"bash: x: command not found","metadata":{"exit_code":127}}'),
+    ).toEqual({ failed: true, failureClass: "environment", exitCode: 127 });
+  });
+
+  it("bare-string apply_patch verification failed ⇒ failed/state-mismatch (no exitCode)", () => {
+    expect(
+      classifyCodexOutput("apply_patch verification failed: Failed to find expected lines in x"),
+    ).toEqual({ failed: true, failureClass: "state-mismatch" });
+  });
+
+  it("bare-string command-timeout text (no envelope) ⇒ failed/environment", () => {
+    expect(classifyCodexOutput("command timed out after 5000 ms")).toEqual({
+      failed: true,
+      failureClass: "environment",
+    });
+  });
+
+  it("old synthetic non-JSON 'Exit code: 0' string ⇒ completed (regression guard)", () => {
+    expect(classifyCodexOutput("Exit code: 0\nWall time: 0.5 seconds\nOutput:\nfile.ts")).toEqual({
+      failed: false,
+    });
+  });
+
+  it("envelope without metadata ⇒ completed (no exit_code signal)", () => {
+    expect(classifyCodexOutput('{"output":"hi"}')).toEqual({ failed: false });
+  });
+
+  it("non-string output ⇒ completed, never throws", () => {
+    expect(classifyCodexOutput(undefined)).toEqual({ failed: false });
+    expect(classifyCodexOutput({ output: "x" })).toEqual({ failed: false });
   });
 });

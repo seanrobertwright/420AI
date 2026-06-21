@@ -18,8 +18,14 @@ import { scanLines } from "../discovery/read-head.js";
 /** Connector source id — used in fingerprints and stamped on every record/event. */
 export const CODEX_CLI_CONNECTOR = "codex-cli";
 
-/** Parser version (new connector starts at 1.0.0; bumping re-derives on replay). */
-export const PARSER_VERSION = "1.0.0";
+/**
+ * Parser version (bumping re-derives on replay). 2.0.0 (12.7a): tool-output
+ * failure classification — a tool call that was `tool.call.completed` under 1.0.0
+ * can now be `tool.call.failed`, which is a fingerprint input, so its fingerprint
+ * changes. Going-forward ingest is correct; the stale-typed-event GC on re-parse
+ * is owned by the deferred 12.5b replay engine (NOTES).
+ */
+export const PARSER_VERSION = "2.0.0";
 
 /**
  * The Codex `last_token_usage` / `total_token_usage` block (the fields we map;
@@ -64,6 +70,12 @@ interface CodexPayload {
   };
   // patch_apply_end
   path?: string;
+  // function_call_output / custom_tool_call_output — the tool-output string
+  // (often a JSON envelope `{"output":"…","metadata":{"exit_code":N}}`).
+  output?: string;
+  // patch_apply_end — defensive failure outcome (does not occur in real rollouts;
+  // apply_patch failures arrive via custom_tool_call_output text instead).
+  success?: boolean;
 }
 
 interface CodexRecord {
@@ -94,6 +106,46 @@ function mapTokens(usage: CodexTokenUsage): NormalizedTokens {
   tokens.tool = 0;
   tokens.total = computeTotal(tokens);
   return tokens;
+}
+
+/** PRD §14 failure classes detectable from Codex tool output (subset — see knownGaps). */
+export type CodexFailureClass = "environment" | "state-mismatch" | "tool-runtime";
+
+/**
+ * Classify a Codex tool-output payload (`function_call_output` / `custom_tool_call_output`).
+ * Two spike-verified signals (112 real rollouts): a JSON envelope `{output, metadata:{exit_code}}`,
+ * else bare-string failure phrases. No signal / non-string ⇒ not failed (completed). Never throws.
+ */
+export function classifyCodexOutput(output: unknown): {
+  failed: boolean;
+  failureClass?: CodexFailureClass;
+  exitCode?: number;
+} {
+  if (typeof output !== "string") return { failed: false };
+  // 1. Structured: the output string is itself a JSON envelope carrying metadata.exit_code.
+  let exitCode: number | undefined;
+  try {
+    const parsed = JSON.parse(output) as { metadata?: { exit_code?: unknown } };
+    if (parsed && typeof parsed === "object" && typeof parsed.metadata?.exit_code === "number") {
+      exitCode = parsed.metadata.exit_code;
+    }
+  } catch {
+    // not a JSON envelope — fall through to plain-text signals
+  }
+  if (exitCode !== undefined) {
+    if (exitCode === 0) return { failed: false, exitCode };
+    const failureClass: CodexFailureClass =
+      exitCode === 124 || exitCode === 127 ? "environment" : "tool-runtime";
+    return { failed: true, failureClass, exitCode };
+  }
+  // 2. Plain-text signals (no structured exit code).
+  if (output.startsWith("apply_patch verification failed")) {
+    return { failed: true, failureClass: "state-mismatch" };
+  }
+  if (/command timed out after/i.test(output)) {
+    return { failed: true, failureClass: "environment" };
+  }
+  return { failed: false };
 }
 
 /**
@@ -213,11 +265,22 @@ export function parseCodexSession(fileText: string, opts?: { ingestedAt?: string
           events.push(makeEvent(rawId, 1, "cost.estimated", ts, currentModel, { tokens, cost }));
         }
       } else if (subType === "patch_apply_end") {
-        events.push(
-          makeEvent(rawId, 0, "file.modified", ts, currentModel, {
-            payload: { path: payload.path },
-          }),
-        );
+        // DEFENSIVE (12.7a): real rollouts never emit patch_apply_end; apply_patch
+        // failures arrive via custom_tool_call_output text. Handle a structured
+        // `success: false` as a state-mismatch failure, else the existing modify.
+        if (payload.success === false) {
+          events.push(
+            makeEvent(rawId, 0, "tool.call.failed", ts, currentModel, {
+              payload: { failureClass: "state-mismatch" },
+            }),
+          );
+        } else {
+          events.push(
+            makeEvent(rawId, 0, "file.modified", ts, currentModel, {
+              payload: { path: payload.path },
+            }),
+          );
+        }
       }
       continue;
     }
@@ -230,14 +293,27 @@ export function parseCodexSession(fileText: string, opts?: { ingestedAt?: string
           }),
         );
       } else if (subType === "function_call_output" || subType === "custom_tool_call_output") {
-        // VERIFIED (D3): outputs are plain strings with no structured is_error
-        // signal, so emit `completed` for every output and DEFER failure
-        // classification (see knownGaps).
-        events.push(
-          makeEvent(rawId, 0, "tool.call.completed", ts, currentModel, {
-            payload: { call_id: payload.call_id },
-          }),
-        );
+        // 12.7a (VERIFIED, 112 real rollouts): outputs DO carry failure signals —
+        // a JSON envelope `metadata.exit_code` or bare-string failure phrases.
+        // Classify and emit `failed` (with §14 class + exit code) or `completed`.
+        const outcome = classifyCodexOutput(payload.output);
+        if (outcome.failed) {
+          events.push(
+            makeEvent(rawId, 0, "tool.call.failed", ts, currentModel, {
+              payload: {
+                call_id: payload.call_id,
+                failureClass: outcome.failureClass,
+                ...(outcome.exitCode !== undefined ? { exitCode: outcome.exitCode } : {}),
+              },
+            }),
+          );
+        } else {
+          events.push(
+            makeEvent(rawId, 0, "tool.call.completed", ts, currentModel, {
+              payload: { call_id: payload.call_id },
+            }),
+          );
+        }
       } else if (subType === "message") {
         const eventType: EventType = payload.role === "user" ? "message.user" : "message.assistant";
         events.push(makeEvent(rawId, 0, eventType, ts, currentModel));
@@ -324,7 +400,9 @@ export const codexCliConnector: Connector = {
     liveness: "streaming",
     tokens: "exact",
     cost: "computed",
-    knownGaps: ["tool-call failure classification deferred — outputs carry no structured is_error"],
+    knownGaps: [
+      "failure classification covers environment (exit 124/127, timeouts), tool-runtime (other nonzero exits), and state-mismatch (apply_patch verification failed); model-error / permission-block / user-cancel / expected-negative are not distinguishable from Codex output (PRD §14)",
+    ],
     testedVersions: ["0.137.x"],
   },
   watchGlobs: (home) => codexWatchGlobs(home),
