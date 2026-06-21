@@ -12,8 +12,8 @@
 
 import type { RedactionFinding } from "./redaction.js";
 
-/** The four V1 export formats (PRD §22; Parquet deferred). */
-export type ExportFormat = "md" | "json" | "jsonl" | "csv";
+/** The V1 export formats (PRD §22). Parquet is events-only (the flat tabular subject). */
+export type ExportFormat = "md" | "json" | "jsonl" | "csv" | "parquet";
 
 /**
  * Self-describing export header attached to every bundle: what it is, when it was

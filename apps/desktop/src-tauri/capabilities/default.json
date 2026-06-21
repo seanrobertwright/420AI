@@ -11,6 +11,8 @@
       "allow": [{ "name": "binaries/collector", "sidecar": true, "args": ["serve"] }]
     },
     "shell:allow-stdin-write",
-    "shell:allow-kill"
+    "shell:allow-kill",
+    "updater:default",
+    "process:allow-restart"
   ]
 }

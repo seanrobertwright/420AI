@@ -171,3 +171,13 @@ export function getServerHealth(): Promise<ServerHealth> {
 export function unpair(): Promise<void> {
   return invoke("unpair");
 }
+
+/**
+ * Restore the archive from a gzipped pg_dump (slice 12.8b). DESTRUCTIVE — the caller MUST
+ * confirm first (Rust does not gate). Rust decompresses in-process (a corrupt gzip rejects
+ * before any SQL runs) then streams the SQL into `psql` inside the compose archive container.
+ * The `backupPath` (camelCase) maps to the Rust `backup_path` (snake) automatically.
+ */
+export function restoreArchive(backupPath: string): Promise<void> {
+  return invoke("restore_archive", { backupPath });
+}

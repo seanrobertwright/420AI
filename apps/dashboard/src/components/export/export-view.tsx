@@ -36,7 +36,7 @@ function buildUrl(base: string, params: Record<string, string>): string {
  */
 export function ExportView() {
   // Events
-  const [evFormat, setEvFormat] = useState<"json" | "jsonl" | "csv">("jsonl");
+  const [evFormat, setEvFormat] = useState<"json" | "jsonl" | "csv" | "parquet">("jsonl");
   const [evProjectId, setEvProjectId] = useState("");
   const [evConnector, setEvConnector] = useState("");
   const [evStart, setEvStart] = useState("");
@@ -83,13 +83,16 @@ export function ExportView() {
             <div className="flex flex-wrap items-center gap-3">
               <select
                 value={evFormat}
-                onChange={(e) => setEvFormat(e.target.value as "json" | "jsonl" | "csv")}
+                onChange={(e) =>
+                  setEvFormat(e.target.value as "json" | "jsonl" | "csv" | "parquet")
+                }
                 className={selectCls}
                 aria-label="Events format"
               >
                 <option value="jsonl">JSONL</option>
                 <option value="json">JSON</option>
                 <option value="csv">CSV</option>
+                <option value="parquet">Parquet</option>
               </select>
               <input
                 value={evProjectId}

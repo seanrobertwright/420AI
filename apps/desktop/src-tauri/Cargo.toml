@@ -31,3 +31,12 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 keyring = { version = "3", default-features = false, features = ["windows-native"] }
 # Run-on-login (HKCU\…\Run on Windows). Called from Rust #[command]s, so no npm package needed.
 tauri-plugin-autostart = "2"
+# In-process gzip decode for the desktop restore command (slice 12.8b). GzDecoder errors on a
+# corrupt gzip → that IS the integrity check, replacing `gunzip -t` with no host binary dependency.
+flate2 = "1"
+# Auto-update via GitHub Releases (slice 12.8c). Verifies the update payload against the baked-in
+# updater pubkey (its OWN free minisign key — NOT an OS Authenticode cert; code signing is parked).
+tauri-plugin-updater = "2"
+# Provides the `process:allow-restart` capability + `relaunch()` so the webview can restart the app
+# after an update installs (the Rust side of @tauri-apps/plugin-process).
+tauri-plugin-process = "2"

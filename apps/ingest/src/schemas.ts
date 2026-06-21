@@ -243,7 +243,7 @@ export const exportEventsQuerySchema = {
   required: ["format"],
   additionalProperties: false,
   properties: {
-    format: { type: "string", enum: ["json", "jsonl", "csv"] },
+    format: { type: "string", enum: ["json", "jsonl", "csv", "parquet"] },
     projectId: { type: "string" },
     sessionId: { type: "string" },
     connector: { type: "string" },

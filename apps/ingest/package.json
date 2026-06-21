@@ -9,7 +9,11 @@
     "@fastify/rate-limit": "^11.0.0",
     "dotenv": "^17.4.2",
     "fastify": "^5.8.5",
-    "fastify-plugin": "^6.0.0"
+    "fastify-plugin": "^6.0.0",
+    "hyparquet-writer": "^0.16.1"
+  },
+  "devDependencies": {
+    "hyparquet": "^1.26.1"
   },
   "scripts": {
     "build": "tsc -b",

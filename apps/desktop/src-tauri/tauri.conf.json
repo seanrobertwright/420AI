@@ -26,6 +26,7 @@
     "active": true,
     "targets": ["nsis"],
     "publisher": "420AI",
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -34,5 +35,14 @@
       "icons/icon.ico"
     ],
     "externalBin": ["binaries/collector"]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "REPLACE_WITH_TAURI_UPDATER_PUBKEY",
+      "endpoints": [
+        "https://github.com/seanrobertwright/420AI/releases/latest/download/latest.json"
+      ],
+      "windows": { "installMode": "passive" }
+    }
   }
 }

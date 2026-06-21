@@ -17,6 +17,7 @@ import {
   type RedactionFinding,
 } from "@420ai/shared";
 import { adminAuthorized, isUuid } from "../auth.js";
+import { eventsToParquetBuffer } from "../exports-parquet.js";
 import {
   exportEventsQuerySchema,
   exportReportQuerySchema,
@@ -44,6 +45,7 @@ const CONTENT_TYPE: Record<ExportFormat, string> = {
   json: "application/json",
   jsonl: "application/x-ndjson",
   csv: "text/csv",
+  parquet: "application/vnd.apache.parquet", // binary, events-only
 };
 
 /** Flatten the jsonb token/cost objects into scalar CSV columns (CSV is row-flat). */
@@ -120,7 +122,7 @@ function sendExport(
     exportedAt: string;
     rowCount: number;
     truncated: boolean;
-    body: string;
+    body: string | Buffer;
   },
 ): FastifyReply {
   const stamp = opts.exportedAt.replace(/:/g, "-");
@@ -198,13 +200,16 @@ export default async function exportRoutes(app: FastifyInstance): Promise<void> 
         redactionFindings: findings,
       };
 
-      let body: string;
+      let body: string | Buffer;
       if (format === "json") {
         body = JSON.stringify({ manifest, rows: redacted });
       } else if (format === "jsonl") {
         body = toJsonl(redacted);
-      } else {
+      } else if (format === "csv") {
         body = toCsv(redacted.map(flattenEventRow), EVENT_CSV_COLUMNS);
+      } else {
+        // parquet (events-only): same flat tabular schema as CSV, columnar binary.
+        body = eventsToParquetBuffer(redacted.map(flattenEventRow), EVENT_CSV_COLUMNS);
       }
 
       return sendExport(reply, {

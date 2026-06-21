@@ -6,6 +6,7 @@ import {
   stopArchive,
   startIngest,
   stopIngest,
+  restoreArchive,
   getServerHealth,
   unpair,
   getPairingStatus,
@@ -72,6 +73,8 @@ export function Settings() {
   const [saving, setSaving] = useState(false);
   const [archiveBusy, setArchiveBusy] = useState(false);
   const [ingestBusy, setIngestBusy] = useState(false);
+  const [restoreBusy, setRestoreBusy] = useState(false);
+  const [restorePath, setRestorePath] = useState("");
   const [healthLoading, setHealthLoading] = useState(false);
   const [unpairing, setUnpairing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -211,6 +214,23 @@ export function Settings() {
     setIngestBusy(true);
     await run(action);
     setIngestBusy(false);
+    refreshHealth();
+  };
+
+  // Restore is DESTRUCTIVE — confirm BEFORE invoking (Rust does not gate). Takes the absolute
+  // path to a `420ai-<stamp>.sql.gz` backup; a corrupt gzip / missing file surfaces as `error`.
+  const onRestore = async (): Promise<void> => {
+    const path = restorePath.trim();
+    if (path === "") {
+      setError("Enter the absolute path to a .sql.gz backup to restore.");
+      return;
+    }
+    if (!window.confirm("Restore will OVERWRITE the current archive. Continue?")) return;
+    setRestoreBusy(true);
+    setSavedNote(null);
+    const ok = await runOk(() => restoreArchive(path));
+    setRestoreBusy(false);
+    if (ok) setSavedNote(`Restored from ${path}.`);
     refreshHealth();
   };
 
@@ -414,6 +434,30 @@ export function Settings() {
             <StackButton onClick={() => onIngest(stopIngest)} disabled={ingestBusy}>
               Stop Ingest
             </StackButton>
+          </div>
+
+          {/* Restore from a gzipped pg_dump backup (slice 12.8b). DESTRUCTIVE → confirm-gated. */}
+          <div className="border-border space-y-2 border-t pt-4">
+            <p className="text-muted-foreground text-xs uppercase tracking-wide">
+              Restore from backup
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                type="text"
+                value={restorePath}
+                onChange={(e) => setRestorePath(e.target.value)}
+                placeholder={"C:\\path\\to\\backups\\420ai-<stamp>.sql.gz"}
+                className={cn(inputClass, "min-w-0 flex-1 font-mono text-xs")}
+                aria-label="Backup file path"
+              />
+              <StackButton onClick={onRestore} disabled={restoreBusy || restorePath.trim() === ""}>
+                {restoreBusy ? "Restoring…" : "Restore Archive"}
+              </StackButton>
+            </div>
+            <p className="text-muted-foreground text-xs">
+              Overwrites the live archive after a confirm. For maximum safety, restore into a
+              scratch DB first via <code>scripts/restore-archive.sh</code>.
+            </p>
           </div>
         </section>
 

@@ -288,6 +288,20 @@ describe.skipIf(!TEST_URL)("export API (HTTP e2e via inject) — PRD §22", () =
     expect(res.body).toContain("/home/[REDACTED:home_user_path]/420ai");
   });
 
+  it("events export (parquet): binary PAR1 body, parquet content-type, redaction header", async () => {
+    const { projectId } = await discoverIngestAndGetProject();
+    const res = await adminGet(`/v1/exports/events?format=parquet&projectId=${projectId}`);
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-type"]).toContain("application/vnd.apache.parquet");
+    expect(res.headers["x-export-row-count"]).toBe("4");
+    expect(res.headers["x-export-redaction-version"]).toBe("m8-redact-v1");
+    // rawPayload is the Buffer body (res.payload would utf-8-decode and corrupt the binary).
+    const buf = res.rawPayload;
+    expect(Buffer.isBuffer(buf)).toBe(true);
+    expect(buf.subarray(0, 4).toString("latin1")).toBe("PAR1");
+    expect(buf.subarray(buf.length - 4).toString("latin1")).toBe("PAR1");
+  });
+
   it("events export (json): carries a stamped manifest", async () => {
     const { projectId } = await discoverIngestAndGetProject();
     const res = await adminGet(`/v1/exports/events?format=json&projectId=${projectId}`);
@@ -401,8 +415,8 @@ describe.skipIf(!TEST_URL)("export API (HTTP e2e via inject) — PRD §22", () =
     const noAuth = await app.inject({ method: "GET", url: "/v1/exports/events?format=json" });
     expect(noAuth.statusCode).toBe(401);
 
-    // bad / missing format enum → 400
-    expect((await adminGet("/v1/exports/events?format=parquet")).statusCode).toBe(400);
+    // bad / missing format enum → 400 (parquet is now valid; xml is not)
+    expect((await adminGet("/v1/exports/events?format=xml")).statusCode).toBe(400);
     expect((await adminGet("/v1/exports/events")).statusCode).toBe(400);
 
     // report id guards
