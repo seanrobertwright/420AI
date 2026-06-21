@@ -284,3 +284,111 @@ ALERT_WEBHOOK_TIMEOUT_MS=5000   # optional; per-delivery timeout, defaults to 50
 
 **Deferred → 12.6b:** the windowed connector-failure _rate_ (the existing `connector.failing` stays a
 lifetime ratio), SMTP/email delivery, and deliver-on-resolve.
+
+---
+
+## 12.8 — Export, restore & releases
+
+The final M12 slice: three independent "polish" capabilities — a Parquet export format, a
+restore-from-backup button in the desktop app, and desktop auto-update via GitHub Releases.
+
+### Parquet events export
+
+The events export (`GET /v1/exports/events`) now offers **`format=parquet`** alongside
+`json`/`jsonl`/`csv` — a binary, columnar, SNAPPY-compressed file that loads natively into DuckDB,
+pandas, or Spark. It is the **same flattened, redacted row schema as CSV** (`EVENT_CSV_COLUMNS`); the
+export manifest rides the `X-Export-*` response headers exactly as it does for CSV (the binary stays a
+pure event table). Parquet is **events-only** — the report and transcript exports are document-shaped
+and stay text (`md`/`json`/`jsonl`).
+
+```sh
+curl -s -H "authorization: Bearer $ADMIN_TOKEN" \
+  "$INGEST_URL/v1/exports/events?format=parquet&projectId=<uuid>" -o events.parquet
+# then, in DuckDB:  SELECT count(*) FROM 'events.parquet';
+```
+
+The dashboard **Export** panel offers **Parquet** in the events format dropdown; the download proxies
+through the same server hop (no token in the browser) and streams the `.parquet` bytes verbatim.
+
+### Restore from the desktop (12.8b)
+
+The desktop **Settings → Server stack → Restore from backup** field takes the absolute path to a
+`420ai-<stamp>.sql.gz` backup (produced by [`scripts/backup-archive.sh`](../../scripts/backup-archive.sh))
+and, **after a confirm**, overwrites the live archive — the same flow as
+[`scripts/restore-archive.sh`](../../scripts/restore-archive.sh), driven from the UI. Rust decompresses
+the gzip **in-process** (a corrupt/truncated archive is rejected before a single SQL statement runs, so
+a partial restore is impossible) and streams the plain SQL into `psql` inside the compose `archive`
+container — no host `gunzip`/`sh` is required (Windows-safe).
+
+> **The restore OVERWRITES the current archive.** It is a direct restore after a single confirm. For
+> maximum safety on a populated DB, restore into a **scratch database** first to verify, via the CLI
+> `sh scripts/restore-archive.sh <backup.sql.gz>` (point it at a throwaway DB) — then promote. The UI
+> path is the convenience flow for the single-admin self-hosted case.
+
+The dashboard (browser) deliberately offers **no** restore — it has no shell/Docker access. Restore
+lives only in the Tauri desktop app, which already supervises the stack.
+
+### Releasing a desktop update (12.8c)
+
+The installed desktop app checks **GitHub Releases** on launch, verifies the update payload against a
+baked-in **updater public key**, downloads, and relaunches. This updater key is Tauri's **own free
+minisign-style key** (`tauri signer generate`) — **NOT** an OS Authenticode/code-signing cert. CA code
+signing and MSI/WiX are **parked**; the first install is still an unsigned-by-CA NSIS (Windows
+SmartScreen warns once), but auto-update works regardless via the updater key.
+
+**One-time setup — generate the updater signing key:**
+
+```sh
+cd apps/desktop
+npm run tauri signer generate -- -w ~/.tauri/420ai.key   # choose + record a password
+```
+
+This emits `~/.tauri/420ai.key` (PRIVATE — **never commit**; store like the catalog signing keys in
+`.secrets/` and/or a GitHub Actions secret) and `~/.tauri/420ai.key.pub` (PUBLIC). Paste the **`.pub`
+content** into `apps/desktop/src-tauri/tauri.conf.json` → `plugins.updater.pubkey` (it currently holds
+the `REPLACE_WITH_TAURI_UPDATER_PUBKEY` placeholder). Losing the private key means existing installs
+will reject all future updates — back it up.
+
+**Cut a release:**
+
+```sh
+# 1. bump the version in BOTH apps/desktop/src-tauri/tauri.conf.json and Cargo.toml (e.g. 0.1.0 → 0.1.1)
+# 2. export the signing key so the build emits a .sig next to the installer
+export TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/420ai.key)"
+export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="<the password from setup>"
+# 3. build the NSIS bundle (+ updater artifacts, since bundle.createUpdaterArtifacts is true)
+npm run build:desktop
+# → …/release/bundle/nsis/420AI Collector_0.1.1_x64-setup.exe  AND  …_x64-setup.exe.sig
+```
+
+**Author `latest.json`** (the shape the updater fetches — paste the `.sig` content and the
+release-asset download URL):
+
+```json
+{
+  "version": "0.1.1",
+  "notes": "…",
+  "pub_date": "2026-06-21T00:00:00Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "<CONTENT of the _x64-setup.exe.sig file>",
+      "url": "https://github.com/seanrobertwright/420AI/releases/download/v0.1.1/420AI.Collector_0.1.1_x64-setup.exe"
+    }
+  }
+}
+```
+
+**Publish** (the `latest.json` asset is what the configured `…/releases/latest/download/latest.json`
+endpoint resolves to):
+
+```sh
+gh release create v0.1.1 "<path to _x64-setup.exe>" latest.json \
+  --title "420AI Collector 0.1.1" --notes "…"
+```
+
+A running older install detects the newer release on next launch, verifies the signature against the
+baked pubkey, installs (passive NSIS), and relaunches. A **tampered** `latest.json`/installer fails the
+signature check and is rejected — the app starts normally on the current version.
+
+> **Parked (not built):** CA/Authenticode code signing, MSI/WiX, and a CI release workflow
+> (`tauri-action`). The manual `gh release create` runbook above is the validated release path.

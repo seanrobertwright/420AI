@@ -406,8 +406,21 @@ original M10 "hardening bundle" (exports, catalog signing, replay metadata, pers
       partial token data, model in `composerData.modelConfig`, **secret keys to avoid**) — recoverable but
       it needs a NEW **SQLite poll capture mode** (the `parse(fileText)` contract is text-based), so it's
       its own future slice, not a hardening bolt-on. Antigravity = schema-less binary protobuf with no
-      token/cost ⇒ drop/keep-gated. Neither blocks GA. 8. **12.8 Export & distribution polish** — Parquet export; restore/import path; signed installer +
-      auto-update + MSI/WiX (needs a code-signing cert). _Last — refinement, unblocks nothing._
+      token/cost ⇒ drop/keep-gated. Neither blocks GA. 8. ✅ **12.8 Export & distribution polish DONE** (2026-06-21) — three independent legs: (a) **Parquet
+      events export** — `format=parquet` on `/v1/exports/events` via a pure `eventsToParquetBuffer`
+      (`hyparquet-writer`, SNAPPY, same flat redacted schema as CSV; events-only, manifest on the
+      `X-Export-*` headers); `sendExport` now carries `string | Buffer`; dashboard export form offers it.
+      (b) **Desktop restore-from-backup UI** — a confirm-gated `restore_archive` `#[tauri::command]`
+      mirroring `restore-archive.sh`: `flate2` decodes the `.gz` in-process (corrupt → abort before any
+      SQL) and streams into `psql` in the compose archive container; surfaced in `Settings.tsx`. (c)
+      **Auto-update via GitHub Releases** — `tauri-plugin-updater` (+ `-process` for `relaunch`),
+      `plugins.updater` config + `createUpdaterArtifacts`, `updater:default`/`process:allow-restart`
+      caps, check-on-launch in `App.tsx`. See `docs/guide/operations.md` (12.8). **Parked (not built):**
+      CA/Authenticode **code signing**, **MSI/WiX**, a CI release workflow, and Parquet for
+      report/transcript (document-shaped). The updater uses Tauri's own free minisign key (not a CA
+      cert); the manual `gh release create` runbook is the validated release path. _Manual Level-4
+      acceptance (restore + live update E2E) and the one-time signing-key ceremony remain for the
+      maintainer._
 - [x] **M11 (Tauri desktop)** — built across Slices 1–5; both open design points resolved (see the M11
       subsection in §4): JSON-lines control protocol (`m11-control-v2`) and Rust `std::process::Command`
       server-stack supervision. Signed off 2026-06-16.

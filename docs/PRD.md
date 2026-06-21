@@ -798,10 +798,18 @@ Requirements:
       SQLite that the text-based `parse(fileText)` contract can't ingest, so Cursor needs a new **SQLite
       poll capture mode** and moves to its own post-GA slice; Antigravity is schema-less binary protobuf
       with **no token/cost** ⇒ dropped/kept-gated. Neither blocks GA (the point of the gate).
-    - **Slice 12.8 — Export & distribution polish.** **Parquet** export (deferred past V1); a **restore/
-      import** path (V1 exports are inspection-grade only); and desktop distribution: a \*\*signed installer
-      - auto-update** and the **MSI/WiX\*\* target (both need a code-signing certificate — the gating cost).
-        Last because it is refinement and unblocks nothing else.
+    - **Slice 12.8 — Export & distribution polish. DONE (2026-06-21).** Three independent legs: (1)
+      **Parquet** export (deferred past V1) — `format=parquet` on `/v1/exports/events`, the same flat
+      redacted event schema as CSV serialized to a SNAPPY columnar buffer (`hyparquet-writer`), offered
+      in the dashboard export form; **events-only** (report/transcript stay document-shaped text). (2) A
+      desktop **restore-from-backup** UI — a confirm-gated `restore_archive` Tauri command mirroring
+      `scripts/restore-archive.sh` (`flate2` in-process gzip decode → `psql` in the compose archive
+      container). (3) **Auto-update** via GitHub Releases (`tauri-plugin-updater`, check-on-launch,
+      verified against a baked updater key), distributed as the existing NSIS bundle. **Parked
+      indefinitely (NOT built):** CA/Authenticode **code signing**, the **MSI/WiX** target, and a CI
+      release workflow — the auto-updater uses Tauri's own free minisign key (separate from an OS
+      code-signing cert), so distribution + update work without the gating certificate cost; the manual
+      `gh release create` runbook (`docs/guide/operations.md` §12.8) is the validated release path.
 
     **Deferred from M12 (kept as V2 / explicit non-goals — do NOT pull in):** General AI Chat capture;
     multi-user product experience / RBAC / tenancy; cloud-hosted SaaS; mobile; browser-extension capture;
@@ -811,8 +819,8 @@ Requirements:
 
 ### Post-V1 / V2 roadmap (TENTATIVE SKETCH — not committed scope)
 
-> **Status: a planning sketch, not a plan.** M12 is the last *defined* milestone and the V1-GA finish
-> line. Everything below is the deferred-to-V2 bucket (PRD §1, §4) grouped into a *candidate* milestone
+> **Status: a planning sketch, not a plan.** M12 is the last _defined_ milestone and the V1-GA finish
+> line. Everything below is the deferred-to-V2 bucket (PRD §1, §4) grouped into a _candidate_ milestone
 > sequence so the direction is visible — numbering, scope, and order are provisional. **Do not execute
 > from this.** When M12 ships, run the same deferral-audit + scope conversation that produced M12, then
 > promote one of these into a real, sliced milestone. Each is sized at "milestone", and several will
@@ -820,37 +828,37 @@ Requirements:
 
 Recommended order is value- and dependency-first:
 
-13. **General AI Chat capture (V2 flagship).** The one net-new *capture* surface and the PRD's stated V2
-    headline — ChatGPT / Claude / Gemini **web & desktop** sessions (vs. V1's AI *coding tools*). Starts
+13. **General AI Chat capture (V2 flagship).** The one net-new _capture_ surface and the PRD's stated V2
+    headline — ChatGPT / Claude / Gemini **web & desktop** sessions (vs. V1's AI _coding tools_). Starts
     with a capture-surface spike (official data exports vs. local app stores vs. a **browser extension** —
     so this milestone likely delivers the deferred browser-extension capture mechanism), then new
     connectors normalizing onto the **existing event taxonomy**, plus attribution for non-repo chats
-    (Work-Session/topic grouping rather than project/git). *Largest new-capability bet; mostly independent
-    of the multi-user track, so it can lead.*
+    (Work-Session/topic grouping rather than project/git). _Largest new-capability bet; mostly independent
+    of the multi-user track, so it can lead._
 
 14. **Multi-user & access control.** Turn the already-multi-user-capable **schema** into a real
-    multi-user *product*: authentication beyond M12's single-admin login, per-user data isolation,
-    roles/RBAC, and team/org concepts. *Builds directly on M12 §12.3 (auth hardening); the foundation for
-    SaaS.*
+    multi-user _product_: authentication beyond M12's single-admin login, per-user data isolation,
+    roles/RBAC, and team/org concepts. _Builds directly on M12 §12.3 (auth hardening); the foundation for
+    SaaS._
 
 15. **Cloud-hosted SaaS.** Multi-tenant hosted deployment: tenancy isolation, a managed/hosted archive,
     scale hardening (quotas + rate limits beyond M12 §12.4), billing/subscriptions, and hosted onboarding.
-    *Depends on M14 (multi-user) and the M12 ops baseline. The biggest architectural shift — local-first
-    stays a first-class deployment mode alongside hosted.*
+    _Depends on M14 (multi-user) and the M12 ops baseline. The biggest architectural shift — local-first
+    stays a first-class deployment mode alongside hosted._
 
 16. **Cross-platform collectors.** macOS + Linux collectors (V1/M11 are Windows-first), and portable,
-    signed installers + auto-update across OSes (extends M12 §12.8 distribution). *The architecture was
-    kept portable for exactly this; largely parallelizable with the M13–M15 track.*
+    signed installers + auto-update across OSes (extends M12 §12.8 distribution). _The architecture was
+    kept portable for exactly this; largely parallelizable with the M13–M15 track._
 
 17. **Advanced intelligence & automation.** Semantic / vector search (V1 ships keyword FTS in §12.1),
     **scheduled** report generation + analysis (V1 is manual-first), active **in-tool context-rule
     enforcement** (V1 only recommends), richer trend/anomaly detection, and subscription cost
-    amortization. *Deepens the value of data already captured; benefits from M13's larger corpus.*
+    amortization. _Deepens the value of data already captured; benefits from M13's larger corpus._
 
 18. **Connector ecosystem & local models.** A **script/plugin custom-connector runtime** (V1 is
     config-only), full **local-model lifecycle management** (V1 supports hosted + OpenAI-compatible APIs),
     graduating the experimental connector catalog (opencode, Aider, Copilot, Windsurf, Continue, Cline,
-    etc.), and a **mobile** consumption app. *Extensibility + breadth; naturally last.*
+    etc.), and a **mobile** consumption app. _Extensibility + breadth; naturally last._
 
 **Still unsequenced / fold-in candidates:** mobile app (sketched in M18 but could pair with M15 SaaS as a
 consumption surface); browser-extension capture (sketched as M13's mechanism but could be its own slice).

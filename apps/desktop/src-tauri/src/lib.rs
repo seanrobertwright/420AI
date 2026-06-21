@@ -21,6 +21,12 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
+        // Auto-update via GitHub Releases (slice 12.8c). The webview runs a check-on-launch;
+        // the payload is verified against the baked updater pubkey before install + relaunch.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        // Process control (slice 12.8c) — supplies `relaunch()` / `process:allow-restart` so the
+        // app can restart itself after an update installs.
+        .plugin(tauri_plugin_process::init())
         .manage(sidecar::SidecarState::default())
         .manage(server::ServerState::default())
         .invoke_handler(tauri::generate_handler![
@@ -36,6 +42,7 @@ pub fn run() {
             server::stop_archive,
             server::start_ingest,
             server::stop_ingest,
+            server::restore_archive,
             server::get_server_health,
             server::unpair
         ])

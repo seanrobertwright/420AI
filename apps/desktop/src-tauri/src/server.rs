@@ -14,11 +14,13 @@
 //! MASKED view (presence booleans, never the secret strings — same as `PairResult`
 //! carrying no token). The injected env is NEVER logged or `Debug`-printed.
 
+use std::io::{Read, Write};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
+use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
@@ -388,6 +390,73 @@ pub async fn stop_ingest(app: tauri::AppHandle) -> Result<(), String> {
         let _ = child.wait(); // reap so no zombie lingers
     }
     Ok(())
+}
+
+/// Restore the archive from a gzipped pg_dump (mirrors `scripts/restore-archive.sh`).
+/// DESTRUCTIVE on a populated DB — the WEBVIEW owns the confirm gate before calling this.
+/// flate2 decodes in-process (GzDecoder errors on a corrupt gzip → that IS the integrity
+/// check, replacing `gunzip -t`), then the plain SQL is streamed into `psql` inside the
+/// compose `archive` container. No host gunzip/sh dependency; `psql` ships in the postgres:17
+/// image. Decompressing FULLY before spawning psql means a corrupt archive aborts with zero
+/// statements applied.
+#[tauri::command]
+pub async fn restore_archive(backup_path: String) -> Result<(), String> {
+    let cfg = keychain::load_server().ok_or("server not configured")?;
+    let path = std::path::PathBuf::from(&backup_path);
+    if !path.exists() {
+        return Err(format!("backup file not found: {backup_path}"));
+    }
+    let args = compose_args(
+        &cfg.server_dir,
+        &["exec", "-T", "archive", "psql", "-U", "420ai", "-d", "420ai"],
+    );
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        // Decompress fully in-process — a corrupt gzip fails HERE, before any psql statement runs.
+        let file = std::fs::File::open(&path).map_err(|e| format!("open backup: {e}"))?;
+        let mut sql = Vec::new();
+        GzDecoder::new(file)
+            .read_to_end(&mut sql)
+            .map_err(|_| "corrupt gzip archive — aborting restore".to_string())?;
+        let mut child = Command::new("docker")
+            .args(&args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    "Docker not installed/not running (docker not found on PATH)".to_string()
+                } else {
+                    format!("failed to run docker: {e}")
+                }
+            })?;
+        // Write stdin on a SEPARATE thread so wait_with_output() drains psql's stderr
+        // concurrently. Writing the whole dump inline before reading stderr deadlocks once
+        // psql's stderr (NOTICE/ERROR lines from a restore) fills the ~64KB pipe buffer: psql
+        // blocks on stderr → stops reading stdin → our write blocks. The CLI `gunzip -c | psql`
+        // avoids this by streaming both ends at once; we must too.
+        let mut stdin = child.stdin.take().ok_or("no stdin")?;
+        let writer = std::thread::spawn(move || stdin.write_all(&sql));
+        let out = child.wait_with_output().map_err(|e| format!("psql wait: {e}"))?;
+        // Check psql's own status FIRST: if it failed, its stderr is the meaningful error — a
+        // BrokenPipe from the writer (psql died mid-stream) would only be a symptom. The writer
+        // thread gets BrokenPipe and finishes on its own; dropping its handle never blocks.
+        if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            return Err(format!(
+                "restore failed: {}",
+                if stderr.is_empty() { out.status.to_string() } else { stderr }
+            ));
+        }
+        // psql succeeded (it consumed all stdin to EOF) — surface any genuine write error.
+        writer
+            .join()
+            .map_err(|_| "stdin writer thread panicked".to_string())?
+            .map_err(|e| format!("write sql: {e}"))?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("task error: {e}"))?
 }
 
 /// Poll both halves of the stack. Both probes are best-effort — a failed probe maps to
