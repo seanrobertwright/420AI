@@ -808,3 +808,50 @@ Requirements:
     in-tool context-rule _enforcement_ (V1 recommends only); full local-model lifecycle management;
     script/plugin custom-connector runtime; advanced semantic/vector search; subscription cost
     amortization; scheduled report generation / scheduled analysis (manual-first stays the default).
+
+### Post-V1 / V2 roadmap (TENTATIVE SKETCH — not committed scope)
+
+> **Status: a planning sketch, not a plan.** M12 is the last *defined* milestone and the V1-GA finish
+> line. Everything below is the deferred-to-V2 bucket (PRD §1, §4) grouped into a *candidate* milestone
+> sequence so the direction is visible — numbering, scope, and order are provisional. **Do not execute
+> from this.** When M12 ships, run the same deferral-audit + scope conversation that produced M12, then
+> promote one of these into a real, sliced milestone. Each is sized at "milestone", and several will
+> sub-slice like M12 did.
+
+Recommended order is value- and dependency-first:
+
+13. **General AI Chat capture (V2 flagship).** The one net-new *capture* surface and the PRD's stated V2
+    headline — ChatGPT / Claude / Gemini **web & desktop** sessions (vs. V1's AI *coding tools*). Starts
+    with a capture-surface spike (official data exports vs. local app stores vs. a **browser extension** —
+    so this milestone likely delivers the deferred browser-extension capture mechanism), then new
+    connectors normalizing onto the **existing event taxonomy**, plus attribution for non-repo chats
+    (Work-Session/topic grouping rather than project/git). *Largest new-capability bet; mostly independent
+    of the multi-user track, so it can lead.*
+
+14. **Multi-user & access control.** Turn the already-multi-user-capable **schema** into a real
+    multi-user *product*: authentication beyond M12's single-admin login, per-user data isolation,
+    roles/RBAC, and team/org concepts. *Builds directly on M12 §12.3 (auth hardening); the foundation for
+    SaaS.*
+
+15. **Cloud-hosted SaaS.** Multi-tenant hosted deployment: tenancy isolation, a managed/hosted archive,
+    scale hardening (quotas + rate limits beyond M12 §12.4), billing/subscriptions, and hosted onboarding.
+    *Depends on M14 (multi-user) and the M12 ops baseline. The biggest architectural shift — local-first
+    stays a first-class deployment mode alongside hosted.*
+
+16. **Cross-platform collectors.** macOS + Linux collectors (V1/M11 are Windows-first), and portable,
+    signed installers + auto-update across OSes (extends M12 §12.8 distribution). *The architecture was
+    kept portable for exactly this; largely parallelizable with the M13–M15 track.*
+
+17. **Advanced intelligence & automation.** Semantic / vector search (V1 ships keyword FTS in §12.1),
+    **scheduled** report generation + analysis (V1 is manual-first), active **in-tool context-rule
+    enforcement** (V1 only recommends), richer trend/anomaly detection, and subscription cost
+    amortization. *Deepens the value of data already captured; benefits from M13's larger corpus.*
+
+18. **Connector ecosystem & local models.** A **script/plugin custom-connector runtime** (V1 is
+    config-only), full **local-model lifecycle management** (V1 supports hosted + OpenAI-compatible APIs),
+    graduating the experimental connector catalog (opencode, Aider, Copilot, Windsurf, Continue, Cline,
+    etc.), and a **mobile** consumption app. *Extensibility + breadth; naturally last.*
+
+**Still unsequenced / fold-in candidates:** mobile app (sketched in M18 but could pair with M15 SaaS as a
+consumption surface); browser-extension capture (sketched as M13's mechanism but could be its own slice).
+These are deliberately left loose until the post-GA scope conversation.
