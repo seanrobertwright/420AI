@@ -162,6 +162,22 @@ export const patchProjectBodySchema = {
   },
 } as const;
 
+// --- M13 13.4 list pagination. Fastify coerces the querystring strings to
+// integers; out-of-range values are a 400 via the err.validation branch. An
+// OMITTED limit returns the full list (several consumers — project-detail
+// existence authority, workspace-remap picker, collector mapping — need
+// completeness); the paged dashboard lists pass an explicit limit. ---
+
+/** ?limit=1..200&offset=0.. for GET /v1/projects (omitted → full list). */
+export const listProjectsQuerySchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    limit: { type: "integer", minimum: 1, maximum: 200 },
+    offset: { type: "integer", minimum: 0 },
+  },
+} as const;
+
 export const patchWorkspaceBodySchema = {
   type: "object",
   required: ["projectId"],
@@ -238,13 +254,15 @@ export const generateProjectInterpretationBodySchema = {
   },
 } as const;
 
-/** ?type=&scopeId= for the report history list (both optional filters). */
+/** ?type=&scopeId=[&limit=1..200][&offset=0..] for the report history list (13.4 adds paging). */
 export const listReportsQuerySchema = {
   type: "object",
   additionalProperties: false,
   properties: {
     type: { type: "string" },
     scopeId: { type: "string" },
+    limit: { type: "integer", minimum: 1, maximum: 200 },
+    offset: { type: "integer", minimum: 0 },
   },
 } as const;
 
@@ -414,7 +432,7 @@ export const connectorCatalogUploadBodySchema = {
 // query is a 400 (via the err.validation branch) before the handler runs;
 // `type`/`projectId`/`limit` are optional filters. ---
 
-/** ?q=…[&type=session|report|project][&projectId=…][&limit=1..100] for GET /v1/search. */
+/** ?q=…[&type=session|report|project][&projectId=…][&limit=1..100][&offset=0..] for GET /v1/search. */
 export const searchQuerySchema = {
   type: "object",
   additionalProperties: false,
@@ -424,5 +442,6 @@ export const searchQuerySchema = {
     type: { type: "string", enum: ["session", "report", "project"] },
     projectId: { type: "string" },
     limit: { type: "integer", minimum: 1, maximum: 100 },
+    offset: { type: "integer", minimum: 0 },
   },
 } as const;

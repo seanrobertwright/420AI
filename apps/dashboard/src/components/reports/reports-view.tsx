@@ -16,17 +16,44 @@ import {
 import { cn } from "@/lib/utils";
 import { formatDate } from "@/lib/format";
 import { ReportCompare } from "@/components/reports/report-compare";
+import { ReportMarkdown } from "@/components/reports/report-markdown";
+
+/** Page size — matches the server's default `limit` on GET /v1/reports (13.4). */
+const REPORTS_PAGE = 50;
 
 /**
- * Reports list + read + compare (M12; 12.2a list/read, 12.2b compare). Client component
- * because selecting a row is local state — no fetch on select: the list endpoint already
- * returns each artifact's `markdown` inline. Markdown is shown as PREFORMATTED text this slice
- * (a rich Markdown/Mermaid renderer is deferred). Generation lives on the project/session
- * surfaces (those carry the scope id); this view adds the two-version Compare (12.2b).
+ * Reports list + read + compare (M12; 12.2a list/read, 12.2b compare; M13 13.4 rich
+ * markdown + pagination). Client component because selecting a row is local state — no
+ * fetch on select: the list endpoint already returns each artifact's `markdown` inline.
+ * The server page passes the FIRST page; "Load more" appends further pages through the
+ * same-origin `/api/reports` proxy (offset paging, deduped by id). Generation lives on
+ * the project/session surfaces (those carry the scope id).
  */
-export function ReportsView({ reports }: { reports: ReportArtifactRow[] }) {
-  const [selectedId, setSelectedId] = useState<string | null>(reports[0]?.id ?? null);
+export function ReportsView({ reports: initialReports }: { reports: ReportArtifactRow[] }) {
+  const [reports, setReports] = useState(initialReports);
+  const [selectedId, setSelectedId] = useState<string | null>(initialReports[0]?.id ?? null);
+  const [canLoadMore, setCanLoadMore] = useState(initialReports.length === REPORTS_PAGE);
+  const [loadingMore, setLoadingMore] = useState(false);
   const selected = reports.find((r) => r.id === selectedId) ?? null;
+
+  async function loadMore(): Promise<void> {
+    setLoadingMore(true);
+    try {
+      const res = await fetch(`/api/reports?limit=${REPORTS_PAGE}&offset=${reports.length}`);
+      if (!res.ok) {
+        setCanLoadMore(false);
+        return;
+      }
+      const page = (await res.json()) as ReportArtifactRow[];
+      const seen = new Set(reports.map((r) => r.id));
+      setReports([...reports, ...page.filter((r) => !seen.has(r.id))]);
+      setCanLoadMore(page.length === REPORTS_PAGE);
+    } catch {
+      setCanLoadMore(false);
+    } finally {
+      setLoadingMore(false);
+    }
+  }
 
   return (
     <PageShell
@@ -84,6 +111,21 @@ export function ReportsView({ reports }: { reports: ReportArtifactRow[] }) {
                 </TableBody>
               </Table>
             )}
+            {canLoadMore ? (
+              <div className="mt-4 flex justify-center">
+                <button
+                  type="button"
+                  onClick={() => void loadMore()}
+                  disabled={loadingMore}
+                  className={cn(
+                    "rounded-md border px-4 py-2 text-sm font-medium transition-colors",
+                    "border-border hover:bg-muted disabled:opacity-50",
+                  )}
+                >
+                  {loadingMore ? "Loading…" : "Load more"}
+                </button>
+              </div>
+            ) : null}
           </CardContent>
         </Card>
 
@@ -98,9 +140,7 @@ export function ReportsView({ reports }: { reports: ReportArtifactRow[] }) {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <pre className="bg-muted/40 overflow-x-auto rounded-md p-4 text-xs whitespace-pre-wrap">
-                {selected.markdown}
-              </pre>
+              <ReportMarkdown markdown={selected.markdown} />
             </CardContent>
           </Card>
         ) : null}

@@ -9,7 +9,8 @@ export const dynamic = "force-dynamic";
 export default async function ProjectsPage() {
   let projects: ProjectRow[] = [];
   try {
-    const res = await fetch(`${ingestUrl()}/v1/projects`, {
+    // First page only (13.4): the view's "Load more" pager appends further pages.
+    const res = await fetch(`${ingestUrl()}/v1/projects?limit=50`, {
       headers: await adminHeaders(),
       cache: "no-store",
     });

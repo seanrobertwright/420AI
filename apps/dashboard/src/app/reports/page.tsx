@@ -8,7 +8,8 @@ export default async function ReportsPage() {
   let reports: ReportArtifactRow[] = [];
   try {
     // GET /v1/reports → a BARE array (newest-first server-side), each row carrying its markdown.
-    const res = await fetch(`${ingestUrl()}/v1/reports`, {
+    // First page only (13.4): the view's "Load more" pager appends further pages.
+    const res = await fetch(`${ingestUrl()}/v1/reports?limit=50`, {
       headers: await adminHeaders(),
       cache: "no-store",
     });
