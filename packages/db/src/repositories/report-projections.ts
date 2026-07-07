@@ -30,6 +30,7 @@ import { events, workspaceKeys, workspaces } from "../schema.js";
 
 // --- mirrored from projections.ts:31-74 (kept module-private there) --------
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- the runtime `as const` array is the single source for the TokenField union below (used only via `typeof`)
 const TOKEN_FIELDS = ["input", "output", "cache_read", "cache_write"] as const;
 type TokenField = (typeof TOKEN_FIELDS)[number];
 
