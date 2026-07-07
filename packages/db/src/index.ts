@@ -82,6 +82,13 @@ export {
   listReportArtifacts,
 } from "./repositories/reports.js";
 export type { ReportArtifactRow } from "./repositories/reports.js";
+export {
+  toolStatsByModel,
+  failureSeries,
+  failedToolBreakdown,
+  contextPathSample,
+} from "./repositories/report-projections.js";
+export type { ContextWasteSample } from "./repositories/report-projections.js";
 export { sessionTranscript, DEFAULT_TRANSCRIPT_CAPS } from "./repositories/transcript.js";
 export type { TranscriptEntry, TranscriptCaps } from "./repositories/transcript.js";
 export { exportEvents, EXPORT_MAX_ROWS } from "./repositories/exports.js";

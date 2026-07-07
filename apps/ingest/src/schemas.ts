@@ -184,12 +184,27 @@ export const usageOverTimeQuerySchema = {
 
 // --- M7 report generation bodies + history querystring ---
 
-/** POST body for a project cost report — `type` defaults to the only project type; `bucket` defaults day. */
+/**
+ * POST body for a project report — `type` defaults to `project.cost_over_time` (byte-for-byte
+ * preserving pre-13.2 behavior). M13 13.2 widens the enum from one type to six; `bucket` is
+ * honored by the two types that bucket a time series (cost_over_time, trend_anomalies) and
+ * ignored by the rest.
+ */
 export const generateProjectReportBodySchema = {
   type: "object",
   additionalProperties: false,
   properties: {
-    type: { type: "string", enum: ["project.cost_over_time"] },
+    type: {
+      type: "string",
+      enum: [
+        "project.cost_over_time",
+        "project.tool_model_comparison",
+        "project.failed_tool_calls",
+        "project.context_waste",
+        "project.efficiency",
+        "project.trend_anomalies",
+      ],
+    },
     bucket: { type: "string", enum: ["day", "week"] },
   },
 } as const;

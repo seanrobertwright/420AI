@@ -11,14 +11,29 @@ import {
   generateSessionAutopsyReport,
 } from "../reports/generate-report.js";
 import {
+  generateContextWasteReport,
+  generateFailedToolCallsReport,
+  generateProjectEfficiencyReport,
+  generateToolModelComparisonReport,
+  generateTrendAnomaliesReport,
+} from "../reports/generate-report-m13.js";
+import {
   generateProjectReportBodySchema,
   generateSessionReportBodySchema,
   listReportsQuerySchema,
 } from "../schemas.js";
 import { adminAuthorized, isUuid } from "../auth.js";
 
+type ProjectReportType =
+  | "project.cost_over_time"
+  | "project.tool_model_comparison"
+  | "project.failed_tool_calls"
+  | "project.context_waste"
+  | "project.efficiency"
+  | "project.trend_anomalies";
+
 interface GenerateProjectReportBody {
-  type?: "project.cost_over_time";
+  type?: ProjectReportType;
   bucket?: "day" | "week";
 }
 interface GenerateSessionReportBody {
@@ -56,13 +71,46 @@ export default async function reportRoutes(app: FastifyInstance): Promise<void> 
       const userId = await ensureUserByEmail(app.db, app.adminEmail);
       const bucket = request.body.bucket ?? "day";
       const generatedAt = new Date().toISOString();
-      const row = await generateProjectCostReport(
-        app.db,
-        userId,
-        request.params.id,
-        bucket,
-        generatedAt,
-      );
+      const type = request.body.type ?? "project.cost_over_time";
+      const row = await (async () => {
+        switch (type) {
+          case "project.cost_over_time":
+            return generateProjectCostReport(
+              app.db,
+              userId,
+              request.params.id,
+              bucket,
+              generatedAt,
+            );
+          case "project.tool_model_comparison":
+            return generateToolModelComparisonReport(
+              app.db,
+              userId,
+              request.params.id,
+              generatedAt,
+            );
+          case "project.failed_tool_calls":
+            return generateFailedToolCallsReport(
+              app.db,
+              userId,
+              request.params.id,
+              bucket,
+              generatedAt,
+            );
+          case "project.context_waste":
+            return generateContextWasteReport(app.db, userId, request.params.id, generatedAt);
+          case "project.efficiency":
+            return generateProjectEfficiencyReport(app.db, userId, request.params.id, generatedAt);
+          case "project.trend_anomalies":
+            return generateTrendAnomaliesReport(
+              app.db,
+              userId,
+              request.params.id,
+              bucket,
+              generatedAt,
+            );
+        }
+      })();
       return reply.code(201).send(row);
     },
   );
