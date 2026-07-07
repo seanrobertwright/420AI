@@ -1,5 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 
 /**
  * Durable, disk-backed outbound queue + per-file capture cursors, using Node 24's
@@ -57,6 +59,10 @@ export class QueueStore {
     path: string,
     private now: () => Date = () => new Date(),
   ) {
+    // node:sqlite won't create missing parent dirs → "unable to open database file". Ensure the
+    // collector home exists first (mirrors saveCredentials' mkdir), so a fresh `--home` works before
+    // pairing. `:memory:` has no real dirname — skip it.
+    if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
     this.db = new DatabaseSync(path);
     this.db.exec("PRAGMA journal_mode=WAL");
     this.db.exec(`

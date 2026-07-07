@@ -45,7 +45,15 @@ export function LoginForm() {
       }
       if (res.status === 401) setError("Invalid email or password.");
       else if (res.status === 502) setError("Archive unreachable.");
-      else setError(`Login failed (${res.status}).`);
+      else {
+        // Surface a server-provided message when present (e.g. the SESSION_SECRET misconfig — D.3)
+        // so a setup mistake is visible on the form instead of a bare status code.
+        const msg = await res
+          .json()
+          .then((b: { error?: string }) => b?.error)
+          .catch(() => undefined);
+        setError(msg ?? `Login failed (${res.status}).`);
+      }
     } catch {
       setError("Archive unreachable.");
     } finally {

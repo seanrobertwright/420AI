@@ -22,6 +22,23 @@ export const CREDENTIALS_PATH = join(COLLECTOR_HOME, "credentials.json");
 /** The durable queue + cursor store (M3). */
 export const QUEUE_PATH = join(COLLECTOR_HOME, "queue.sqlite");
 
+/**
+ * Resolve the collector-home paths for an EXPLICIT home root (the `--home` override). The constants
+ * above bake in `homedir()` at import time, which is wrong for a Windows SERVICE: under LocalSystem
+ * `homedir()` is `…\config\systemprofile`, not the paired user profile. `--home` repoints connectors,
+ * credentials, AND the queue together so all three agree on one profile. `…For(homedir())` is
+ * byte-identical to the constants, so default (no-flag) callers are unchanged.
+ */
+export function collectorHomeFor(home: string): string {
+  return join(home, ".420ai");
+}
+export function credentialsPathFor(home: string): string {
+  return join(collectorHomeFor(home), "credentials.json");
+}
+export function queuePathFor(home: string): string {
+  return join(collectorHomeFor(home), "queue.sqlite");
+}
+
 export interface Credentials {
   url: string;
   token: string;

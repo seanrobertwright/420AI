@@ -171,6 +171,30 @@ describe("serve control protocol", () => {
     expect(st).toMatchObject({ type: "status", state: "idle" });
   });
 
+  it("M13 13.1: a successful sync surfaces a non-null ISO lastSyncAt on status", async () => {
+    const runEngine = (opts: CaptureEngineOptions): Promise<void> => {
+      opts.onSyncSuccess?.("2026-07-07T00:00:00.000Z");
+      return new Promise<void>((resolve) => {
+        if (opts.signal.aborted) return resolve();
+        opts.signal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    };
+    const h = makeHarness({ runEngine });
+    // Before any sync, lastSyncAt stays null (never rendered as a stale/fake time).
+    const before = await h.send({ cmd: "status" }, (e) => e.type === "status");
+    expect(before).toMatchObject({ type: "status", lastSyncAt: null });
+
+    const running = await h.send({ cmd: "start" }, (e) => e.type === "status");
+    expect(running).toMatchObject({
+      type: "status",
+      state: "running",
+      lastSyncAt: "2026-07-07T00:00:00.000Z",
+    });
+
+    await h.send({ cmd: "stop" }, (e) => e.type === "stopped");
+    await h.done;
+  });
+
   it("configure injects creds so start can run without a saved pairing", async () => {
     const h = makeHarness({ loadCreds: () => undefined });
     await h.send({ cmd: "configure", url: "http://x", token: "t" }, (e) => e.type === "ack");

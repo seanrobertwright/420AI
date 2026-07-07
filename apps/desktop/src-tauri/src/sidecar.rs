@@ -7,9 +7,13 @@ use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
-/// Tauri sidecar name (matches `bundle.externalBin` in tauri.conf.json — Tauri
-/// resolves the `-$TARGET_TRIPLE` suffix). The binary is built by `build-sea.mjs`.
-const SIDECAR_NAME: &str = "binaries/collector";
+/// Tauri sidecar name — the BARE basename, NOT the `binaries/…` build path. The shell plugin's
+/// `relative_command_path` joins this verbatim onto the executable's dir (`<exe_dir>/collector.exe`)
+/// with no prefix/triple stripping at runtime. The bundler reads `binaries/collector-<TARGET_TRIPLE>.exe`
+/// (built by `build-sea.mjs`, matching `bundle.externalBin`) and copies it NEXT TO the main exe as
+/// `collector.exe`. So `"binaries/collector"` here resolved to a nonexistent
+/// `<exe_dir>/binaries/collector.exe` → spawn failed → "sidecar not running" (UAT G.4/G.5).
+const SIDECAR_NAME: &str = "collector";
 const EVENT_NAME: &str = "control-event";
 
 // Restart-with-backoff (mirrors queue-store.ts: 1 s base, 30 s cap). A run that

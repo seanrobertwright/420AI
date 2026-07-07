@@ -24,6 +24,22 @@ export interface SyncDeps {
   batchSize?: number;
   /** Injectable for tests; defaults to the real fetch-based client. */
   post?: typeof postIngest;
+  /**
+   * External abort (SIGINT) — cancels the in-flight ingest POST so shutdown is prompt (C.8). Without
+   * it a stalled archive connection would block `Promise.allSettled` in the engine forever.
+   */
+  signal?: AbortSignal;
+  /** Per-request timeout override (ms); used to bound the shutdown drain to its deadline (C.8). */
+  timeoutMs?: number;
+}
+
+/**
+ * True for a fetch cancelled by SIGINT (`AbortError`) or by our request timeout (`TimeoutError`).
+ * That is a shutdown signal, NOT a delivery failure — the item should be released (claim returned,
+ * no attempt bump), not backed off, so a graceful stop doesn't penalize the next start.
+ */
+function isAbortError(err: unknown): boolean {
+  return err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError");
 }
 
 export async function syncOnce(deps: SyncDeps): Promise<SyncOutcome> {
@@ -39,7 +55,10 @@ export async function syncOnce(deps: SyncDeps): Promise<SyncOutcome> {
   const batch: IngestBatch = { records, events };
 
   try {
-    await (deps.post ?? postIngest)(deps.url, deps.token, batch);
+    await (deps.post ?? postIngest)(deps.url, deps.token, batch, {
+      signal: deps.signal,
+      timeoutMs: deps.timeoutMs,
+    });
     deps.queue.ack(items.map((i) => i.id));
     return "ok";
   } catch (err) {
@@ -47,6 +66,13 @@ export async function syncOnce(deps: SyncDeps): Promise<SyncOutcome> {
       // Token revoked — surface, do not spin. Leave items pending for re-pair.
       deps.queue.releaseInflight(items.map((i) => i.id));
       return "stop";
+    }
+    if (isAbortError(err) || deps.signal?.aborted === true) {
+      // SIGINT or the request timeout cancelled the in-flight POST — not a delivery failure. Release
+      // the claim with NO attempt bump (mirrors the 401 path) so a graceful shutdown doesn't back
+      // these items off on the next start; the caller's loop sees the abort and unwinds.
+      deps.queue.releaseInflight(items.map((i) => i.id));
+      return "retry";
     }
     // Network / 5xx — back each off and retry on the next loop.
     for (const item of items) deps.queue.markFailed(item.id, item.attempts);
@@ -77,6 +103,12 @@ export interface SyncLoopDeps extends SyncDeps {
   retryMs?: number;
   /** Called once when the loop stops on a 401 so the engine/cli can surface it. */
   onStop?: () => void;
+  /**
+   * M13 13.1: called with an ISO timestamp after each successful drain (`syncOnce` outcome
+   * "ok" — including a no-op empty-queue drain) so the engine/cli can surface a live
+   * "last sync" time (mirrors how `consecutiveSyncFailures` already feeds the heartbeat).
+   */
+  onSync?: (at: string) => void;
   /**
    * M9 heartbeat (opt-in): when `collectorVersion` is set, the loop sends a throttled,
    * best-effort liveness ping each iteration (queue backlog + version). Omitting it
@@ -127,7 +159,9 @@ export async function runSyncLoop(
     // by prior iterations. A failure is swallowed inside maybeSendHeartbeat and never affects
     // the sync outcome or the counter (residual risk e).
     await sendHeartbeat(consecutiveSyncFailures);
-    const outcome = await syncOnce(deps);
+    // Thread the loop's abort signal into the POST so SIGINT cancels an in-flight sync immediately
+    // (C.8) — otherwise a stalled archive connection blocks the engine's shutdown await forever.
+    const outcome = await syncOnce({ ...deps, signal });
     if (outcome === "stop") {
       deps.onStop?.();
       return "stop";
@@ -135,6 +169,7 @@ export async function runSyncLoop(
     if (signal.aborted) break;
     if (outcome === "ok") {
       consecutiveSyncFailures = 0; // archive reachable — clear the failure streak
+      deps.onSync?.((deps.now ?? (() => new Date()))().toISOString());
       // Empty/clean drain — idle. (A non-empty 2xx returns "ok" too; we still
       // idle briefly, then the next claim pulls any remaining batch.)
       await delay(idleMs, signal);

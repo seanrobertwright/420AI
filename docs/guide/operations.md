@@ -336,26 +336,17 @@ minisign-style key** (`tauri signer generate`) — **NOT** an OS Authenticode/co
 signing and MSI/WiX are **parked**; the first install is still an unsigned-by-CA NSIS (Windows
 SmartScreen warns once), but auto-update works regardless via the updater key.
 
-**One-time setup — generate the updater signing key:**
-
-```sh
-cd apps/desktop
-npm run tauri signer generate -- -w ~/.tauri/420ai.key   # choose + record a password
-```
-
-This emits `~/.tauri/420ai.key` (PRIVATE — **never commit**; store like the catalog signing keys in
-`.secrets/` and/or a GitHub Actions secret) and `~/.tauri/420ai.key.pub` (PUBLIC). Paste the **`.pub`
-content** into `apps/desktop/src-tauri/tauri.conf.json` → `plugins.updater.pubkey` (it currently holds
-the `REPLACE_WITH_TAURI_UPDATER_PUBKEY` placeholder). Losing the private key means existing installs
-will reject all future updates — back it up.
+**One-time setup — generate the updater signing key:** see "13.1 — Updater signing key (one-time
+ceremony)" below. Losing the private key means existing installs will reject all future updates —
+back it up.
 
 **Cut a release:**
 
 ```sh
 # 1. bump the version in BOTH apps/desktop/src-tauri/tauri.conf.json and Cargo.toml (e.g. 0.1.0 → 0.1.1)
 # 2. export the signing key so the build emits a .sig next to the installer
-export TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/420ai.key)"
-export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="<the password from setup>"
+export TAURI_SIGNING_PRIVATE_KEY="$(cat .secrets/tauri-updater.key)"
+export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="<the password from the key ceremony, or empty if none>"
 # 3. build the NSIS bundle (+ updater artifacts, since bundle.createUpdaterArtifacts is true)
 npm run build:desktop
 # → …/release/bundle/nsis/420AI Collector_0.1.1_x64-setup.exe  AND  …_x64-setup.exe.sig
@@ -392,3 +383,34 @@ signature check and is rejected — the app starts normally on the current versi
 
 > **Parked (not built):** CA/Authenticode code signing, MSI/WiX, and a CI release workflow
 > (`tauri-action`). The manual `gh release create` runbook above is the validated release path.
+
+---
+
+## 13.1 — Updater signing key (one-time ceremony)
+
+The maintainer's manual, one-time action that makes the desktop auto-updater (12.8c) able to verify
+release payloads. Do this once per signing identity, then keep the private key forever (losing it
+means every existing install rejects all future updates — no recovery, only re-issue-and-re-install).
+
+1. **Generate the keypair** (`cargo tauri` must run from `apps/desktop`, but the key is written to
+   the repo-root `.secrets/` — the same home as every other signing key here — so steps 3 and 4
+   below, like the rest of this file, can stay on the "run from the repo root" convention):
+   ```sh
+   cd apps/desktop
+   cargo tauri signer generate -w ../../.secrets/tauri-updater.key --ci
+   ```
+   `.secrets/` is already gitignored — the same home as the connector-catalog signing key
+   (`.secrets/connector-catalog-private-key.pem`). This writes the PRIVATE key to
+   `.secrets/tauri-updater.key` (repo root) and prints the PUBLIC key to stdout.
+2. **Paste the printed PUBLIC key** into `apps/desktop/src-tauri/tauri.conf.json` →
+   `plugins.updater.pubkey`, replacing the `REPLACE_WITH_TAURI_UPDATER_PUBKEY` placeholder. This
+   file is committed — the public key is safe to ship.
+3. **Build releases with the private key in env** (never committed):
+   ```sh
+   export TAURI_SIGNING_PRIVATE_KEY="$(cat .secrets/tauri-updater.key)"
+   export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""   # empty if --ci generated one with no password
+   ```
+   `bundle.createUpdaterArtifacts: true` (already set in `tauri.conf.json`) makes `cargo tauri build`
+   emit the `.sig` files the 12.8c release runbook publishes alongside `latest.json`.
+4. **Verify before committing anything:** `git check-ignore .secrets/tauri-updater.key` must exit 0
+   — the private key must never be trackable, even accidentally.

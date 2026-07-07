@@ -81,6 +81,11 @@ export interface BuildAppOptions {
  */
 export function buildApp(opts: BuildAppOptions): FastifyInstance {
   const app = Fastify({
+    // C.6: Fastify's default body limit is 1 MiB. A `collector git` sweep over a large history (or a
+    // full ingest batch) easily exceeds that, and the server reset the connection mid-body
+    // (ECONNRESET, server up). Raise the ceiling to 16 MiB — comfortably above the collector's 4 MiB
+    // git-chunk size and typical ingest batches, while still bounding a hostile body.
+    bodyLimit: 16 * 1024 * 1024,
     // M12 12.4b: structured logging at an env-tunable level, with the auth/cookie headers
     // REMOVED from every log line (defense-in-depth — pino's default serializers don't log
     // arbitrary headers, but a bearer/cookie must never leak even if a serializer changes).

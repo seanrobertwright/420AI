@@ -94,6 +94,10 @@ collector entry packages and responds, without producing the full SEA `.exe`.
 
 `cargo tauri build` with `bundle.targets: "all"` builds **both** NSIS and MSI on Windows. The MSI leg
 goes through the WiX toolset (`light.exe`), which **fails on this machine**; NSIS (`makensis`) is
-robust. `tauri.conf.json` therefore pins `"targets": ["nsis"]`. MSI + a signed installer + auto-update
+robust. `tauri.conf.json` therefore pins `"targets": ["nsis"]`. MSI and CA/Authenticode code signing
 remain **deferred** (PRD §25 defers signed distribution — a code-signing certificate is required);
-NSIS is the V1-desktop distribution.
+NSIS is the V1-desktop distribution. Auto-update is NOT deferred: it ships via the Tauri updater's
+own free minisign-style signing key (12.8c) — see
+[`docs/guide/operations.md`](../../docs/guide/operations.md#131--updater-signing-key-one-time-ceremony)
+for the one-time key-generation ceremony a maintainer must run before cutting the first signed
+release.

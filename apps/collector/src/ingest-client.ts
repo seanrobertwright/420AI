@@ -17,6 +17,32 @@ import type {
  * never logs. The M3 sync worker buffers + retries on top of this client.
  */
 
+/**
+ * Hard ceiling on any single outbound request (C.8). An UNBOUNDED fetch is the root cause of the
+ * `collector watch` Ctrl-C hang: when SIGINT aborts, the engine waits on the in-flight sync POST,
+ * and a stalled/half-open archive connection never resolves nor cancels → shutdown hangs forever
+ * (the drain's between-calls deadline can't fire while one fetch is stuck). Every request now has a
+ * timeout AND honours an external abort signal so SIGINT cancels the in-flight hop immediately.
+ */
+export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+
+/** Per-request controls: an external abort (e.g. SIGINT) and/or a timeout override. */
+export interface RequestOptions {
+  /** External abort — cancels the request when the daemon stops (SIGINT). */
+  signal?: AbortSignal;
+  /** Timeout override (ms); defaults to DEFAULT_REQUEST_TIMEOUT_MS. */
+  timeoutMs?: number;
+}
+
+/**
+ * Build the AbortSignal for a request: always a timeout, combined with any external signal so the
+ * request cancels on whichever fires first. A bounded fetch can never hang the collector (C.8).
+ */
+function requestSignal(opts?: RequestOptions): AbortSignal {
+  const timeout = AbortSignal.timeout(opts?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
+  return opts?.signal ? AbortSignal.any([opts.signal, timeout]) : timeout;
+}
+
 /** A non-2xx HTTP error carrying the status code so callers can branch on it. */
 export class IngestHttpError extends Error {
   constructor(
@@ -47,11 +73,16 @@ async function expectOk(res: Response, what: string): Promise<void> {
   }
 }
 
-export async function postPair(baseUrl: string, body: PairRequest): Promise<PairResponse> {
+export async function postPair(
+  baseUrl: string,
+  body: PairRequest,
+  opts?: RequestOptions,
+): Promise<PairResponse> {
   const res = await fetch(`${trimUrl(baseUrl)}/v1/pair`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
+    signal: requestSignal(opts),
   });
   await expectOk(res, "pair");
   return (await res.json()) as PairResponse;
@@ -61,6 +92,7 @@ export async function postIngest(
   baseUrl: string,
   token: string,
   batch: IngestBatch,
+  opts?: RequestOptions,
 ): Promise<IngestResponse> {
   const res = await fetch(`${trimUrl(baseUrl)}/v1/ingest`, {
     method: "POST",
@@ -69,6 +101,7 @@ export async function postIngest(
       authorization: `Bearer ${token}`,
     },
     body: JSON.stringify(batch),
+    signal: requestSignal(opts),
   });
   await expectOk(res, "ingest");
   return (await res.json()) as IngestResponse;
@@ -83,6 +116,7 @@ export async function postDiscover(
   baseUrl: string,
   token: string,
   req: DiscoverRequest,
+  opts?: RequestOptions,
 ): Promise<DiscoverResponse> {
   const res = await fetch(`${trimUrl(baseUrl)}/v1/workspaces/discover`, {
     method: "POST",
@@ -91,6 +125,7 @@ export async function postDiscover(
       authorization: `Bearer ${token}`,
     },
     body: JSON.stringify(req),
+    signal: requestSignal(opts),
   });
   await expectOk(res, "discover");
   return (await res.json()) as DiscoverResponse;
@@ -106,6 +141,7 @@ export async function postHeartbeat(
   baseUrl: string,
   token: string,
   body: HeartbeatRequest,
+  opts?: RequestOptions,
 ): Promise<HeartbeatResponse> {
   const res = await fetch(`${trimUrl(baseUrl)}/v1/heartbeat`, {
     method: "POST",
@@ -114,6 +150,7 @@ export async function postHeartbeat(
       authorization: `Bearer ${token}`,
     },
     body: JSON.stringify(body),
+    signal: requestSignal(opts),
   });
   await expectOk(res, "heartbeat");
   return (await res.json()) as HeartbeatResponse;
@@ -129,6 +166,7 @@ export async function postGit(
   baseUrl: string,
   token: string,
   req: GitCaptureRequest,
+  opts?: RequestOptions,
 ): Promise<GitCaptureResponse> {
   const res = await fetch(`${trimUrl(baseUrl)}/v1/git`, {
     method: "POST",
@@ -137,6 +175,7 @@ export async function postGit(
       authorization: `Bearer ${token}`,
     },
     body: JSON.stringify(req),
+    signal: requestSignal(opts),
   });
   await expectOk(res, "git");
   return (await res.json()) as GitCaptureResponse;
@@ -160,6 +199,7 @@ export async function getProjects(
   const res = await fetch(`${trimUrl(baseUrl)}/v1/projects`, {
     method: "GET",
     headers: { authorization: `Bearer ${token}` },
+    signal: requestSignal(),
   });
   await expectOk(res, "projects");
   return (await res.json()) as { projects: ProjectListItem[] };

@@ -11,6 +11,22 @@
 
 export const SESSION_COOKIE = "ai_session";
 
+/**
+ * Returns an actionable error message when the dashboard's session secret is missing, else null.
+ *
+ * The dashboard verifies the ingest-signed cookie's HMAC with SESSION_SECRET. If it is unset (e.g.
+ * absent from `apps/dashboard/.env.local`, which Next loads from the dashboard CWD — NOT the repo
+ * root), the middleware's `secret` is "" and EVERY navigation fails the verify gate, so a fresh login
+ * silently bounces back to /login even though `/api/auth/login` returned 200 (the D.3 bug). The login
+ * route + middleware call this to fail LOUDLY instead of degrading silently — mirroring how the ingest
+ * server refuses to boot without SESSION_SECRET.
+ */
+export function sessionConfigError(): string | null {
+  return (process.env.SESSION_SECRET ?? "") === ""
+    ? "Dashboard is misconfigured: SESSION_SECRET is not set. Add it to apps/dashboard/.env.local with the SAME value as the ingest server's .env, then restart the dashboard."
+    : null;
+}
+
 /** Bytes → base64url (standard base64 with +/ → -_ and `=` padding stripped). */
 function b64url(bytes: Uint8Array): string {
   let binary = "";

@@ -26,7 +26,8 @@ import {
 
 /**
  * M10 export surface (PRD §22): three admin-gated read routes that serialize scoped
- * archive data into the V1 portable formats (MD/JSON/JSONL/CSV; Parquet deferred).
+ * archive data into the V1 portable formats (MD/JSON/JSONL/CSV, plus Parquet for the
+ * events route, shipped in 12.8; report/transcript stay MD/JSON/JSONL).
  *
  * §18 GATE — "redaction applies before external export": EVERY payload passes through
  * `redactJson()`/`redact()` before the bytes leave the archive. The events and report

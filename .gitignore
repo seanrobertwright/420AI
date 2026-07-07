@@ -60,3 +60,13 @@ exports/
 
 # M12 12.4d archive backups — dumps contain ciphertext + plaintext metadata; NEVER commit.
 backups/
+
+# Windows service (WinSW): the third-party wrapper + the copied collector binary are large and not
+# ours to vendor — only the .xml + README under apps/collector/service/ are committed.
+apps/collector/service/*.exe
+
+# Local UAT run artifacts — login*.json hold test credentials; UAT.md is a generated working
+# checklist (uat-events.parquet is already covered by *.parquet above). Never commit these.
+/login.json
+/login-bad.json
+/UAT.md

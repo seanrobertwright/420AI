@@ -22,6 +22,41 @@ export interface GitCaptureResult {
   capped: number;
 }
 
+/**
+ * Target ceiling for a single `/v1/git` POST body (C.6). The collector used to POST ALL commits
+ * across every repo as one body; a large history blew past the ingest server's body limit and the
+ * connection was reset (ECONNRESET, server up). Chunking under this ceiling keeps every request
+ * small AND memory bounded. Kept comfortably below the server's raised bodyLimit.
+ */
+export const GIT_POST_MAX_BYTES = 4 * 1024 * 1024;
+
+/**
+ * Split commits into batches whose serialized size stays under `maxBytes` (C.6). `/v1/git` is
+ * idempotent by SHA, so chunking is safe — a commit re-sent across runs simply dedups server-side.
+ * A single commit larger than the ceiling is emitted as its own (best-effort) batch rather than
+ * dropped. Pure + exported for unit testing.
+ */
+export function chunkCommitsBySize(
+  commits: GitCommitPayload[],
+  maxBytes: number,
+): GitCommitPayload[][] {
+  const batches: GitCommitPayload[][] = [];
+  let current: GitCommitPayload[] = [];
+  let currentBytes = 2; // the enclosing "[]"
+  for (const commit of commits) {
+    const commitBytes = Buffer.byteLength(JSON.stringify(commit)) + 1; // +1 for the joining comma
+    if (current.length > 0 && currentBytes + commitBytes > maxBytes) {
+      batches.push(current);
+      current = [];
+      currentBytes = 2;
+    }
+    current.push(commit);
+    currentBytes += commitBytes;
+  }
+  if (current.length > 0) batches.push(current);
+  return batches;
+}
+
 export async function captureGitCommits(opts: {
   connectors: Connector[];
   home: string;

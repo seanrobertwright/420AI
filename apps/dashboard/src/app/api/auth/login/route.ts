@@ -1,7 +1,7 @@
 import { cookies } from "next/headers";
 import { NextResponse, type NextRequest } from "next/server";
 import { ingestUrl } from "@/lib/ingest";
-import { SESSION_COOKIE } from "@/lib/session";
+import { SESSION_COOKIE, sessionConfigError } from "@/lib/session";
 
 /**
  * M12 12.3 login proxy. Forwards {email,password} to ingest's POST /v1/auth/login; on success it
@@ -12,6 +12,14 @@ import { SESSION_COOKIE } from "@/lib/session";
 export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
+  // D.3: fail LOUDLY if SESSION_SECRET is missing. Without it the cookie we are about to set can
+  // never be verified by the middleware, so login would appear to succeed (200) yet bounce straight
+  // back to /login. Surface a clear 500 (shown on the login form) instead of that silent loop.
+  const cfgErr = sessionConfigError();
+  if (cfgErr) {
+    console.error(`[dashboard] ${cfgErr}`);
+    return NextResponse.json({ error: cfgErr }, { status: 500 });
+  }
   const body = await req.text(); // {email,password} forwarded verbatim
   let res: Response;
   try {
