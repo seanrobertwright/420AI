@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { verifySessionEdge, SESSION_COOKIE } from "@/lib/session";
+import { verifySessionEdge, SESSION_COOKIE, sessionConfigError } from "@/lib/session";
 
 /**
  * M12 12.3 login gate. Runs on the Edge runtime: verifies the `ai_session` cookie's HMAC
@@ -21,6 +21,9 @@ export async function middleware(request: NextRequest) {
   }
   const token = request.cookies.get(SESSION_COOKIE)?.value;
   const secret = process.env.SESSION_SECRET ?? "";
+  // D.3: a present cookie that can't be verified because the secret is missing is a misconfig, not a
+  // logged-out user — log it loudly (server console) so the cause is obvious instead of a silent loop.
+  if (token && !secret) console.error(`[dashboard] ${sessionConfigError()}`);
   if (token && secret && (await verifySessionEdge(token, secret))) return NextResponse.next();
   const url = request.nextUrl.clone();
   url.pathname = "/login";

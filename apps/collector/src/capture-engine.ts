@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { toRawRecordPayload, toEventPayload } from "@420ai/shared";
 import { QUEUE_PATH, type Credentials } from "./identity.js";
-import { QueueStore } from "./queue/queue-store.js";
+import { QueueStore, type SyncOutcome } from "./queue/queue-store.js";
 import { connectors as defaultConnectors } from "./connectors/connector.js";
 import type { Connector } from "./connectors/connector.js";
 import { FileWatcher } from "./watcher/file-watcher.js";
@@ -11,6 +11,39 @@ import { postGit } from "./ingest-client.js";
 
 /** Default git-sweep cadence: a SLOW background sweep (commits change far less often than sessions). */
 const DEFAULT_GIT_INTERVAL_MS = 5 * 60_000;
+
+/**
+ * Hard cap on the best-effort shutdown drain (C.8 fix). On SIGINT the engine flushes what it can,
+ * but must NEVER block exit draining a huge backlog or waiting on a stalled archive — the durable
+ * queue keeps undelivered items for the next start, so leaving them is safe. Without this bound a
+ * Ctrl-C on a large queue (e.g. ~200k pending) drained the WHOLE backlog before `queue.close()`,
+ * hanging exit for minutes and holding the SQLite handle ("locks the database").
+ */
+const SHUTDOWN_DRAIN_MS = 5_000;
+
+/**
+ * Best-effort queue drain bounded by a wall-clock deadline. Drains while the archive keeps
+ * accepting ("ok") and items remain, but STOPS at the deadline so shutdown can never hang on a
+ * large backlog or a stalled archive (C.8). Undelivered items stay queued (durable, recovered on
+ * next start). Pure with an injectable clock so it is unit-testable without infra.
+ */
+export async function drainBeforeExit(
+  sync: (timeoutMs: number) => Promise<SyncOutcome>,
+  pending: () => number,
+  opts: { deadlineMs: number; now?: () => number },
+): Promise<void> {
+  const now = opts.now ?? ((): number => Date.now());
+  const deadline = now() + opts.deadlineMs;
+  // Give EACH call only the budget left until the deadline, so even one stalled call can't run past
+  // it (its request times out at `remaining`). This HARD-bounds the whole drain to deadlineMs — a
+  // between-calls deadline check alone allowed ~2× (a call starting just before the deadline could
+  // still run its own full timeout).
+  let remaining = opts.deadlineMs;
+  let outcome = await sync(remaining);
+  while (outcome === "ok" && pending() > 0 && (remaining = deadline - now()) > 0) {
+    outcome = await sync(remaining);
+  }
+}
 
 /**
  * The capture engine wires the proven primitives into the `collector watch`
@@ -163,12 +196,23 @@ export async function runCaptureEngine(opts: CaptureEngineOptions): Promise<void
     await Promise.allSettled([watcherLoop, syncLoop, gitLoop]);
     opts.signal.removeEventListener("abort", onExternalAbort);
 
-    // Best-effort final drain of anything captured but not yet sent.
+    // Best-effort final drain of anything captured but not yet sent — bounded by SHUTDOWN_DRAIN_MS
+    // so a huge backlog or a stalled archive can never hang exit (C.8). Leftover items stay queued.
     log("draining queue before exit…");
-    let outcome = await syncOnce({ queue, url: opts.creds.url, token: opts.creds.token });
-    while (outcome === "ok" && queue.stats().pending > 0) {
-      outcome = await syncOnce({ queue, url: opts.creds.url, token: opts.creds.token });
-    }
+    await drainBeforeExit(
+      // Each drain POST is bounded by the budget REMAINING until the deadline, so even a single
+      // stalled archive connection can't outlast it (the between-calls check alone can't interrupt a
+      // hung fetch — C.8).
+      (timeoutMs) =>
+        syncOnce({
+          queue,
+          url: opts.creds.url,
+          token: opts.creds.token,
+          timeoutMs,
+        }),
+      () => queue.stats().pending,
+      { deadlineMs: SHUTDOWN_DRAIN_MS },
+    );
     const remaining = queue.stats().pending;
     log(remaining === 0 ? "queue drained." : `stopped with ${remaining} item(s) still queued.`);
   } finally {

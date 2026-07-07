@@ -22,17 +22,23 @@ import {
   isUnauthorized,
   type ProjectListItem,
 } from "./ingest-client.js";
-import { captureGitCommits } from "./discovery/git-capture.js";
+import {
+  captureGitCommits,
+  chunkCommitsBySize,
+  GIT_POST_MAX_BYTES,
+} from "./discovery/git-capture.js";
 import {
   CREDENTIALS_PATH,
   QUEUE_PATH,
+  credentialsPathFor,
+  queuePathFor,
   loadCredentials,
   saveCredentials,
   requireCredentials,
   NotPairedError,
   type Credentials,
 } from "./identity.js";
-import { QueueStore, type QueueStats } from "./queue/queue-store.js";
+import { QueueStore, type QueueStats, type SyncOutcome } from "./queue/queue-store.js";
 import { runCaptureEngine } from "./capture-engine.js";
 import { syncOnce } from "./sync/sync-worker.js";
 import {
@@ -104,13 +110,18 @@ export async function runPair(opts: {
   os?: string;
   hostname?: string;
   persist?: boolean;
+  /** Persist under this home's `.420ai` instead of the OS home (mirrors `watch --home`). */
+  home?: string;
 }): Promise<PairResponse> {
   const res = await postPair(opts.url, {
     code: opts.code,
     machine: { name: opts.name, os: opts.os, hostname: opts.hostname },
   });
   if (opts.persist !== false) {
-    saveCredentials({ url: opts.url, token: res.token, machineId: res.machineId });
+    saveCredentials(
+      { url: opts.url, token: res.token, machineId: res.machineId },
+      credentialsPathFor(opts.home ?? homedir()),
+    );
   }
   return res;
 }
@@ -136,14 +147,19 @@ export async function runPush(opts: {
   return postIngest(opts.url, opts.token, batch);
 }
 
-/** Resolve credentials from explicit overrides or the saved pairing. */
-function resolveCreds(opts: { url?: string; token?: string }): Credentials {
-  const saved = loadCredentials();
+/**
+ * Resolve credentials from explicit overrides or the saved pairing under `home` (default: the OS
+ * home). `home` lets a Windows service read the paired user's `credentials.json` even when its own
+ * account's `homedir()` points elsewhere.
+ */
+function resolveCreds(opts: { url?: string; token?: string; home?: string }): Credentials {
+  const credsPath = credentialsPathFor(opts.home ?? homedir());
+  const saved = loadCredentials(credsPath);
   const url = opts.url ?? saved?.url;
   const token = opts.token ?? saved?.token;
   if (!url || !token) {
     // Surface the canonical not-paired guidance.
-    return requireCredentials();
+    return requireCredentials(credsPath);
   }
   return { url, token, machineId: saved?.machineId ?? "unknown" };
 }
@@ -187,7 +203,9 @@ export async function runWatch(opts: {
     creds,
     signal: opts.signal,
     intervalMs: opts.intervalMs,
-    queuePath: opts.queuePath,
+    // Keep the queue beside the credentials under the SAME home (else a --home run would read creds
+    // from the user profile but queue under the service account — a split-brain backlog).
+    queuePath: opts.queuePath ?? queuePathFor(home),
     home,
     logger: opts.logger,
     collectorVersion: opts.collectorVersion,
@@ -196,27 +214,40 @@ export async function runWatch(opts: {
   });
 }
 
+export interface SyncRunResult {
+  stats: QueueStats;
+  /**
+   * Final drain outcome: "ok" = fully delivered (queue empty); "retry" = archive unreachable / 5xx;
+   * "stop" = token revoked (re-pair needed). Anything other than "ok" with items still pending means
+   * the sync did NOT succeed — the caller must NOT report "complete" (C.11: a network failure used to
+   * print "Sync complete." with exit 0 while the whole backlog sat undelivered).
+   */
+  outcome: SyncOutcome;
+}
+
 /**
- * One-shot drain of the durable queue to the archive (testable / ops). Recovers
- * any inflight items, then drains until empty or a 401 stop. Returns final stats.
+ * One-shot drain of the durable queue to the archive (testable / ops). Recovers any inflight items,
+ * then drains until empty or a non-"ok" outcome. Returns final stats AND the final outcome so the
+ * caller can distinguish a real completion from a network/auth failure (C.11).
  */
 export async function runSync(opts: {
   url?: string;
   token?: string;
   queuePath?: string;
-}): Promise<QueueStats> {
+  /** Collector home override (mirrors `watch --home`) — resolves creds + queue under one profile. */
+  home?: string;
+  /** Injectable ingest client for tests; defaults to the real fetch-based postIngest. */
+  post?: typeof postIngest;
+}): Promise<SyncRunResult> {
   const creds = resolveCreds(opts);
-  const queue = new QueueStore(opts.queuePath ?? QUEUE_PATH);
+  const queue = new QueueStore(opts.queuePath ?? queuePathFor(opts.home ?? homedir()));
   try {
     queue.recoverInflight();
-    let outcome = await syncOnce({ queue, url: creds.url, token: creds.token });
+    let outcome = await syncOnce({ queue, url: creds.url, token: creds.token, post: opts.post });
     while (outcome === "ok" && queue.stats().pending > 0) {
-      outcome = await syncOnce({ queue, url: creds.url, token: creds.token });
+      outcome = await syncOnce({ queue, url: creds.url, token: creds.token, post: opts.post });
     }
-    if (outcome === "retry") {
-      // One retry pass already backed items off; leave them for the next run.
-    }
-    return queue.stats();
+    return { stats: queue.stats(), outcome };
   } finally {
     queue.close();
   }
@@ -320,8 +351,15 @@ export async function runGit(opts: {
     connectors: defaultConnectors,
     home: opts.home ?? homedir(),
   });
-  const response = await postGit(creds.url, creds.token, { commits });
-  return { response, reposScanned, capped };
+  // C.6: POST in size-bounded chunks. One mega-body for a large history exceeded the server's body
+  // limit and the connection was reset (ECONNRESET). `/v1/git` is idempotent by SHA, so summing
+  // commitsInserted across chunks is exact.
+  let commitsInserted = 0;
+  for (const batch of chunkCommitsBySize(commits, GIT_POST_MAX_BYTES)) {
+    const res = await postGit(creds.url, creds.token, { commits: batch });
+    commitsInserted += res.commitsInserted;
+  }
+  return { response: { commitsInserted }, reposScanned, capped };
 }
 
 /**
@@ -342,6 +380,16 @@ export async function runProjects(opts: {
 function getFlag(args: string[], name: string): string | undefined {
   const i = args.indexOf(name);
   return i >= 0 ? args[i + 1] : undefined;
+}
+
+/**
+ * The collector home for this invocation: an explicit `--home` wins, else the OS home. Centralized so
+ * every command agrees. The footgun it removes: a Windows SERVICE under LocalSystem has a `homedir()`
+ * of `…\config\systemprofile` — passing `--home C:\Users\<you>` points credentials, the queue, and the
+ * connector session globs at the real paired profile instead. Exported for unit testing.
+ */
+export function resolveHome(args: string[]): string {
+  return getFlag(args, "--home") ?? homedir();
 }
 
 export function parseHeartbeatIntervalMs(value: string | undefined): number | undefined {
@@ -374,13 +422,17 @@ function usage(dbPath: string): string {
     "  collector report <sessionId> [--db <path>] [--out <file>]",
     "  collector pair <code> --url <baseUrl> [--name <n>] [--os <os>] [--hostname <h>]",
     "  collector push <file> [--url <baseUrl>] [--token <token>]",
-    "  collector watch [--url <baseUrl>] [--token <token>] [--interval <ms>]",
-    "  collector sync [--url <baseUrl>] [--token <token>]",
-    "  collector queue",
-    "  collector discover [--url <baseUrl>] [--token <token>]",
-    "  collector git [--url <baseUrl>] [--token <token>]",
+    "  collector watch [--url <baseUrl>] [--token <token>] [--interval <ms>] [--home <dir>]",
+    "  collector sync [--url <baseUrl>] [--token <token>] [--home <dir>]",
+    "  collector queue [--home <dir>]",
+    "  collector discover [--url <baseUrl>] [--token <token>] [--home <dir>]",
+    "  collector git [--url <baseUrl>] [--token <token>] [--home <dir>]",
     "  collector projects [--url <baseUrl>] [--token <adminToken>]",
     "  collector custom",
+    "",
+    "  --home <dir>  Collector home root (default: your OS home). Repoints credentials, the durable",
+    "                queue, and the session globs at <dir>/.420ai + <dir>/.claude|.codex|.gemini.",
+    "                Use it when running as a Windows service whose account home isn't your profile.",
     "",
     `Default DB: ${dbPath}`,
     `Credentials: ${CREDENTIALS_PATH} (written by 'pair', read by 'push')`,
@@ -444,6 +496,7 @@ async function main(argv: string[]): Promise<void> {
       name: getFlag(args, "--name") ?? osHostname(),
       os: getFlag(args, "--os") ?? process.platform,
       hostname: getFlag(args, "--hostname") ?? osHostname(),
+      home: resolveHome(args),
     });
     process.stdout.write(
       `Paired. machineId=${res.machineId}\n` +
@@ -486,6 +539,7 @@ async function main(argv: string[]): Promise<void> {
       url: getFlag(args, "--url"),
       token: getFlag(args, "--token"),
       intervalMs,
+      home: resolveHome(args),
       signal: controller.signal,
       logger: (msg) => process.stdout.write(msg + "\n"),
       collectorVersion: readCollectorVersion(),
@@ -495,16 +549,28 @@ async function main(argv: string[]): Promise<void> {
   }
 
   if (command === "sync") {
-    const stats = await runSync({
+    const { stats, outcome } = await runSync({
       url: getFlag(args, "--url"),
       token: getFlag(args, "--token"),
+      home: resolveHome(args),
     });
-    process.stdout.write(`Sync complete. pending=${stats.pending}, inflight=${stats.inflight}\n`);
+    if (outcome === "ok") {
+      process.stdout.write(`Sync complete. pending=${stats.pending}, inflight=${stats.inflight}\n`);
+    } else {
+      // C.11: a non-"ok" outcome means nothing (or not everything) was delivered — say so, and exit
+      // non-zero so scripts/users can tell. The durable queue keeps the items for the next run.
+      const reason =
+        outcome === "stop"
+          ? "token revoked — re-pair with `collector pair <code> --url <baseUrl>`"
+          : "archive unreachable";
+      process.stderr.write(`Sync incomplete (${reason}). ${stats.pending} item(s) still queued.\n`);
+      process.exitCode = 1;
+    }
     return;
   }
 
   if (command === "queue") {
-    const stats = runQueueStatus();
+    const stats = runQueueStatus(queuePathFor(resolveHome(args)));
     process.stdout.write(`pending=${stats.pending}, inflight=${stats.inflight}\n`);
     return;
   }
@@ -513,6 +579,7 @@ async function main(argv: string[]): Promise<void> {
     const { response, unresolved } = await runDiscover({
       url: getFlag(args, "--url"),
       token: getFlag(args, "--token"),
+      home: resolveHome(args),
     });
     process.stdout.write(
       `Discovered ${response.workspacesUpserted} workspaces, created ${response.projectsCreated} projects` +
@@ -528,6 +595,7 @@ async function main(argv: string[]): Promise<void> {
     const { response, reposScanned, capped } = await runGit({
       url: getFlag(args, "--url"),
       token: getFlag(args, "--token"),
+      home: resolveHome(args),
     });
     process.stdout.write(
       `Captured ${response.commitsInserted} new commit(s) across ${reposScanned} repo(s)` +
@@ -586,6 +654,23 @@ async function main(argv: string[]): Promise<void> {
   process.stdout.write(usage(dbPath) + "\n");
 }
 
+/**
+ * Map an error to a user-facing CLI message. Node's global `fetch` throws a bare `TypeError: fetch
+ * failed` (with `cause.code` like ECONNREFUSED) when the archive is unreachable — opaque to a user.
+ * Surface it as an actionable "archive unreachable" hint instead (C.6: a stopped ingest server printed
+ * only "Error: fetch failed", giving no clue the server was down). Pure + exported for testing.
+ */
+export function formatCliError(error: unknown): string {
+  if (error instanceof NotPairedError) return error.message;
+  const err = error as { message?: string; cause?: { code?: string } };
+  const code = err?.cause?.code;
+  const NETWORK = new Set(["ECONNREFUSED", "ENOTFOUND", "ECONNRESET", "ETIMEDOUT", "EAI_AGAIN"]);
+  if (err?.message === "fetch failed" || (code !== undefined && NETWORK.has(code))) {
+    return `Could not reach the archive${code ? ` (${code})` : ""}. Is the ingest server running and the --url correct?`;
+  }
+  return `Error: ${err?.message ?? String(error)}`;
+}
+
 function isMain(): boolean {
   const entry = process.argv[1];
   if (!entry) return false;
@@ -598,11 +683,7 @@ function isMain(): boolean {
 
 if (isMain()) {
   main(process.argv).catch((error) => {
-    if (error instanceof NotPairedError) {
-      process.stderr.write(`${error.message}\n`);
-    } else {
-      process.stderr.write(`Error: ${(error as Error).message}\n`);
-    }
+    process.stderr.write(`${formatCliError(error)}\n`);
     process.exit(1);
   });
 }

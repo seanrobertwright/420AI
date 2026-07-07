@@ -99,6 +99,50 @@ describe("syncOnce (injected post)", () => {
       queue.close();
     }
   });
+
+  it("releases the claim (no attempt bump) when the POST is aborted on shutdown (C.8)", async () => {
+    const queue = tmpQueue();
+    // A SIGINT/timeout-cancelled fetch throws AbortError/TimeoutError — not a delivery failure.
+    const post = vi
+      .fn()
+      .mockRejectedValue(Object.assign(new Error("aborted"), { name: "AbortError" }));
+    try {
+      queue.enqueue("raw", "r1", { a: 1 });
+      const outcome = await syncOnce({ queue, url: "http://x", token: "t", post });
+      expect(outcome).toBe("retry");
+      // Pending, immediately claimable (NO backoff), and attempts NOT bumped — a graceful stop must
+      // not penalize the item on the next start (contrast the 503 path, which bumps attempts).
+      expect(queue.stats().pending).toBe(1);
+      const reclaimed = queue.claimBatch(10);
+      expect(reclaimed).toHaveLength(1);
+      expect(reclaimed[0]!.attempts).toBe(0);
+    } finally {
+      queue.close();
+    }
+  });
+
+  it("forwards the abort signal and timeout to the ingest client (C.8)", async () => {
+    const queue = tmpQueue();
+    const controller = new AbortController();
+    const post = vi.fn().mockResolvedValue({ recordsInserted: 0, eventsUpserted: 1 });
+    try {
+      queue.enqueue("event", "fp1", { fingerprint: "fp1" });
+      await syncOnce({
+        queue,
+        url: "http://x",
+        token: "t",
+        post,
+        signal: controller.signal,
+        timeoutMs: 1234,
+      });
+      // 4th arg is the RequestOptions — proves SIGINT/timeout can reach fetch (the C.8 hang fix).
+      const opts = post.mock.calls[0]![3] as { signal?: AbortSignal; timeoutMs?: number };
+      expect(opts.signal).toBe(controller.signal);
+      expect(opts.timeoutMs).toBe(1234);
+    } finally {
+      queue.close();
+    }
+  });
 });
 
 describe("runSyncLoop (M12 12.6 consecutive-sync-failure counter → heartbeat)", () => {
@@ -141,6 +185,35 @@ describe("runSyncLoop (M12 12.6 consecutive-sync-failure counter → heartbeat)"
       expect(reason).toBe("aborted");
       // HB(before any sync)=0, after 1st retry=1, after 2nd retry=2, after the ok-drain reset=0.
       expect(reported.slice(0, 4)).toEqual([0, 1, 2, 0]);
+    } finally {
+      queue.close();
+    }
+  });
+});
+
+describe("runSyncLoop (C.8 — SIGINT cancels an in-flight stalled sync)", () => {
+  it("returns 'aborted' promptly when the archive stalls and the signal aborts", async () => {
+    // A server that ACCEPTS the connection but NEVER responds — the exact half-open stall that, with
+    // an unbounded fetch, hung `collector watch` on Ctrl-C (the engine awaited the in-flight POST
+    // forever). With the abort signal threaded into fetch, aborting unwinds the loop at once.
+    server = createServer(() => {
+      /* intentionally never responds */
+    });
+    await new Promise<void>((r) => server!.listen(0, "127.0.0.1", () => r()));
+    const { port } = server!.address() as AddressInfo;
+
+    const queue = tmpQueue();
+    const controller = new AbortController();
+    try {
+      queue.enqueue("event", "fp1", { fingerprint: "fp1" });
+      // Abort once the (hanging) POST is in flight; without the fix this test would hang to timeout.
+      const timer = setTimeout(() => controller.abort(), 100);
+      const reason = await runSyncLoop(
+        { queue, url: `http://127.0.0.1:${port}`, token: "t", idleMs: 1, retryMs: 1 },
+        controller.signal,
+      );
+      clearTimeout(timer);
+      expect(reason).toBe("aborted");
     } finally {
       queue.close();
     }

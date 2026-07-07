@@ -65,11 +65,43 @@ Library files **never** write to stdout/stderr or call `process.exit`. Only entr
 Libraries throw typed errors (e.g. `NotPairedError`, `IngestHttpError`); the entrypoint catches and
 prints. Daemons take an optional `logger` callback wired by the entrypoint.
 
+## Collector outbound HTTP (UAT C.6/C.8)
+
+Every outbound `fetch` in the collector MUST be **timeout-bounded AND abort-cancellable** — both, not
+either. An unbounded `fetch` is a latent SIGINT-shutdown hang: on Ctrl-C the capture engine awaits its
+in-flight sync POST (`Promise.allSettled` over the watcher/sync/git loops), and a stalled/half-open
+archive connection never resolves nor cancels, so shutdown hangs **before** the bounded drain
+(`SHUTDOWN_DRAIN_MS`) can ever apply — the drain deadline is checked only _between_ `syncOnce` calls,
+never _inside_ a stuck one (C.8). Use `ingest-client.ts` `requestSignal({ signal, timeoutMs })` for
+every request: it `AbortSignal.any`s a default 30 s timeout with the daemon's abort signal, so a
+stall self-cancels AND SIGINT cancels the in-flight hop instantly. Thread the engine's abort signal
+through `syncOnce`/`runSyncLoop` (never let the sync loop hold an un-cancellable request), and bound
+the shutdown drain's own call with `timeoutMs: SHUTDOWN_DRAIN_MS`. This is the same long-lived-resource
+discipline the dashboard proxy rule states — the collector is a daemon, so it applies here too.
+
+**Never POST one mega-body.** Chunk large request bodies (`chunkCommitsBySize` for `collector git`;
+batched `claimBatch` for ingest) so no single body exceeds the ingest server's **16 MiB `bodyLimit`**
+(`apps/ingest/src/app.ts`). One unchunked body over the limit is rejected mid-stream and surfaces to
+the client as an opaque `ECONNRESET` _with the server still up_ (C.6) — not a clean 413. Endpoints that
+dedup server-side (`/v1/git` by SHA, `/v1/ingest` by fingerprint) make chunking exact: sum the
+per-chunk inserted counts.
+
 ## Local state
 
 `~/.420ai/` is the collector home: `credentials.json` (M2 pairing) + `queue.sqlite` (M3 durable queue
 
 - per-file cursors). It lives outside the repo and is never committed (`*.sqlite` is gitignored).
+
+The home is **`homedir()`-derived** (`CREDENTIALS_PATH`/`QUEUE_PATH` in `identity.ts`), and the
+connectors glob sessions under `homedir()` too (`~/.claude`, `~/.codex`, `~/.gemini`). The `--home <dir>`
+flag (on `watch`/`sync`/`discover`/`git`/`queue`/`pair`) repoints **all three together** via
+`credentialsPathFor`/`queuePathFor`/connector-home — it is **comprehensive on purpose**: a flag that
+moved only the connector home but not creds+queue is a footgun (looks paired, captures nothing). The
+load-bearing use is a **Windows service**: under LocalSystem `homedir()` is `…\config\systemprofile`,
+not the user profile, so the service runs `watch --home C:\Users\<you>`. Service install via WinSW lives
+in `apps/collector/service/` (`.xml` + README; the WinSW exe is third-party, not committed). Only **one**
+collector may own a given `queue.sqlite` — a service AND the desktop "Run on login" is a double-writer
+bug. `QueueStore` `mkdir`s its parent (node:sqlite won't), so a fresh `--home` works before pairing.
 
 ## Testing
 

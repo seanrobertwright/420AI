@@ -1,0 +1,58 @@
+<!--
+  WinSW service definition for the 420AI collector (headless `watch` daemon).
+
+  WinSW convention: the wrapper executable must share this file's BASENAME — rename the downloaded
+  WinSW binary to `420ai-collector.exe` and place it in THIS folder, next to this `.xml` and a copy
+  of the collector binary (`collector.exe`). See README.md for the full setup + install commands.
+-->
+<service>
+  <id>420ai-collector</id>
+  <name>420AI Collector</name>
+  <description>Captures local AI coding sessions (Claude Code, Codex, Gemini) and git history, and syncs them to the 420AI archive.</description>
+
+  <!-- The self-contained collector binary (the SEA build, `npm run build:collector-sea`). %BASE% is
+       this folder; copy collector.exe here, or replace with an absolute path. -->
+  <executable>%BASE%\collector.exe</executable>
+
+  <!--
+    `watch` runs the capture daemon. `--home` is REQUIRED when the service account's home is not your
+    user profile (LocalSystem's homedir() is …\config\systemprofile). It repoints credentials, the
+    durable queue, AND the session globs (~/.claude, ~/.codex, ~/.gemini) at your real profile.
+    >>> EDIT THIS: replace C:\Users\YOURNAME with your Windows profile path. <<<
+    The archive URL + token come from the pairing you did as that user (no --url/--token needed).
+  -->
+  <arguments>watch --home "C:\Users\YOURNAME"</arguments>
+
+  <!-- Start at boot, before/without any interactive login. Automatic (Delayed) avoids racing Docker
+       Desktop / network at boot if your archive runs locally in containers. -->
+  <startmode>Automatic</startmode>
+  <delayedAutoStart>true</delayedAutoStart>
+
+  <!-- Restart on unexpected exit: 5s, then 10s, then every 20s. A run that stays healthy for an hour
+       resets the counter. -->
+  <onfailure action="restart" delay="5 sec"/>
+  <onfailure action="restart" delay="10 sec"/>
+  <onfailure action="restart" delay="20 sec"/>
+  <resetfailure>1 hour</resetfailure>
+
+  <!-- Graceful stop: WinSW sends Ctrl-C to the console collector, which Node delivers as SIGINT →
+       the bounded shutdown drain (≤5s, undelivered items stay queued). Give it headroom before the
+       hard kill. -->
+  <stoptimeout>15 sec</stoptimeout>
+  <stopparentprocessfirst>true</stopparentprocessfirst>
+
+  <!-- Roll the captured stdout/stderr by size (8 files × ~10 MB) under this folder. -->
+  <log mode="roll-by-size">
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>8</keepFiles>
+  </log>
+
+  <!--
+    ALTERNATIVE to `--home`: run as LocalSystem but set USERPROFILE so os.homedir() resolves to your
+    profile globally (same effect, no flag). Uncomment and edit if you prefer this lever:
+    <env name="USERPROFILE" value="C:\Users\YOURNAME"/>
+
+    To pin a log level:
+    <env name="LOG_LEVEL" value="info"/>
+  -->
+</service>
