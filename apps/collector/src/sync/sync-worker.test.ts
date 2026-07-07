@@ -219,10 +219,7 @@ describe("runSyncLoop (M13 13.1 — onSync surfaces a live last-sync time)", () 
         controller.signal,
       );
       expect(reason).toBe("aborted");
-      expect(synced).toEqual([
-        "2026-07-07T00:00:00.000Z",
-        "2026-07-07T00:00:01.000Z",
-      ]);
+      expect(synced).toEqual(["2026-07-07T00:00:00.000Z", "2026-07-07T00:00:01.000Z"]);
     } finally {
       queue.close();
     }
