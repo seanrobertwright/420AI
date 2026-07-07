@@ -28,4 +28,10 @@ echo "wrote $OUT"
 
 # Retention: prune BACKUP FILES older than RETENTION_DAYS (not DB rows — raw stays forever).
 # Scoped glob so only this script's own dumps are ever deleted.
-find "$BACKUP_DIR" -name '420ai-*.sql.gz' -type f -mtime "+$RETENTION_DAYS" -print -delete
+# `find` must be GNU find: under a PowerShell/cmd-spawned sh (npm run backup, Task Scheduler)
+# the bare name resolves to C:\Windows\System32\find.exe (a text-search tool), which prints
+# "File not found - 420ai-*.sql.gz", never prunes, and — via `set -e` — fails the script AFTER
+# a successful dump. Prefer the msys/GNU binary explicitly when it exists.
+FIND=find
+[ -x /usr/bin/find ] && FIND=/usr/bin/find
+"$FIND" "$BACKUP_DIR" -name '420ai-*.sql.gz' -type f -mtime "+$RETENTION_DAYS" -print -delete
