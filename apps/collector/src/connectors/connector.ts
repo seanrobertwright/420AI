@@ -1,4 +1,4 @@
-import type { NormalizedEvent, RawSourceRecord, RootHint } from "@420ai/shared";
+import type { ParseResult, RootHint } from "@420ai/shared";
 import { claudeCodeConnector } from "./claude-code.js";
 import { codexCliConnector } from "./codex-cli.js";
 import { geminiCliConnector } from "./gemini-cli.js";
@@ -13,18 +13,11 @@ import { geminiCliConnector } from "./gemini-cli.js";
  */
 
 /**
- * The result of parsing a complete-line file prefix (tail) or a whole file
- * (snapshot): permanent raw records plus the disposable normalized events
- * re-derived from them. Lives in the contract module (not any one connector's
- * file) so every connector imports the type from a neutral place.
+ * `ParseResult` moved to `@420ai/shared` in 13.3 (the pure parsers relocated so
+ * the server-side re-parse engine can run them). Re-exported from the contract
+ * module so every existing importer is unchanged.
  */
-export interface ParseResult {
-  rawRecords: RawSourceRecord[];
-  events: NormalizedEvent[];
-  /** Count of JSONL lines / whole-file blobs that failed to parse (tolerant parsing). */
-  skippedLines: number;
-  sessionId?: string;
-}
+export type { ParseResult } from "@420ai/shared";
 
 /** PRD §10.1.1 liveness vocabulary. */
 export type Liveness = "streaming" | "near-real-time" | "snapshot" | "batch";

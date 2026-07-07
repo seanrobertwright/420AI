@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { parseCodexSession, classifyCodexOutput } from "./codex-cli.js";
 
 const fixture = readFileSync(
-  new URL("../fixtures/sample-codex-rollout.jsonl", import.meta.url),
+  new URL("./fixtures/sample-codex-rollout.jsonl", import.meta.url),
   "utf8",
 );
 

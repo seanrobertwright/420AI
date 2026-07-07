@@ -130,3 +130,5 @@ export { reencryptAll } from "./repositories/key-rotation.js";
 export type { RotationCounts } from "./repositories/key-rotation.js";
 export { repriceAll } from "./repositories/reprice.js";
 export type { RepriceResult } from "./repositories/reprice.js";
+export { reparseAll } from "./repositories/reparse.js";
+export type { ReparseResult } from "./repositories/reparse.js";

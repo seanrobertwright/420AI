@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { parseGeminiSession } from "./gemini-cli.js";
 
 const fixture = readFileSync(
-  new URL("../fixtures/sample-gemini-session.json", import.meta.url),
+  new URL("./fixtures/sample-gemini-session.json", import.meta.url),
   "utf8",
 );
 
