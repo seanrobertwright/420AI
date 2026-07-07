@@ -62,13 +62,29 @@ export async function createProject(
   return { id: row!.id };
 }
 
-/** List a user's non-archived projects, newest first. */
-export async function listProjects(db: DbClient, userId: string): Promise<ProjectRow[]> {
-  return db
+/**
+ * List a user's non-archived projects, newest first. Optionally paged (M13
+ * 13.4): `limit`/`offset` apply ONLY when provided — an omitted limit returns
+ * the FULL list, because several consumers depend on completeness (the project
+ * detail page's existence authority, the workspace-remap picker, the
+ * collector's mapping flows). The paged dashboard list passes an explicit
+ * limit. `createdAt` then `id` orders deterministically so offset pages never
+ * duplicate/drop a row.
+ */
+export async function listProjects(
+  db: DbClient,
+  userId: string,
+  page?: { limit?: number; offset?: number },
+): Promise<ProjectRow[]> {
+  const query = db
     .select()
     .from(projects)
     .where(and(eq(projects.userId, userId), isNull(projects.archivedAt)))
-    .orderBy(desc(projects.createdAt));
+    .orderBy(desc(projects.createdAt), desc(projects.id))
+    .$dynamic();
+  if (page?.limit !== undefined) query.limit(page.limit);
+  if (page?.offset !== undefined) query.offset(page.offset);
+  return query;
 }
 
 /** Rename a project (the editable mapping, D4). Returns the updated row, if any. */

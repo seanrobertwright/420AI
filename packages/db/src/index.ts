@@ -125,7 +125,13 @@ export type { ConnectorCatalogRow } from "./repositories/connector-catalogs.js";
 // M12 search: only the repo functions are surfaced — the `searchDocuments` TABLE
 // shares its name with the query fn, so the table stays internal (repo + migration
 // reference it via `./schema.js`); the barrel exports the FUNCTION `searchDocuments`.
-export { rebuildSearchIndex, searchDocuments } from "./repositories/search.js";
+export {
+  rebuildSearchIndex,
+  searchDocuments,
+  indexSessions,
+  indexProjectDoc,
+  indexReportDoc,
+} from "./repositories/search.js";
 export { reencryptAll } from "./repositories/key-rotation.js";
 export type { RotationCounts } from "./repositories/key-rotation.js";
 export { repriceAll } from "./repositories/reprice.js";

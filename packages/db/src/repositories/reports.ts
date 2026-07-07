@@ -71,20 +71,32 @@ export async function getReportArtifact(
 /**
  * List a user's artifacts, newest first (by version within a scope, then
  * generation time). Optionally filtered by `reportType` and/or `scopeId` — the
- * history view for one (type, scope) series.
+ * history view for one (type, scope) series. Optionally paged (M13 13.4):
+ * `limit`/`offset` apply ONLY when provided — an omitted limit returns the full
+ * list (pre-13.4 behavior; the paged dashboard list passes an explicit limit).
+ * The `id` tiebreaker keeps offset pages deterministic when two artifacts share
+ * a `generatedAt`.
  */
 export async function listReportArtifacts(
   db: DbClient,
   userId: string,
-  filter?: { reportType?: string; scopeId?: string },
+  filter?: { reportType?: string; scopeId?: string; limit?: number; offset?: number },
 ): Promise<ReportArtifactRow[]> {
   const conditions = [eq(reportArtifacts.userId, userId)];
   if (filter?.reportType) conditions.push(eq(reportArtifacts.reportType, filter.reportType));
   if (filter?.scopeId) conditions.push(eq(reportArtifacts.scopeId, filter.scopeId));
-  const rows = await db
+  const query = db
     .select()
     .from(reportArtifacts)
     .where(and(...conditions))
-    .orderBy(desc(reportArtifacts.generatedAt), desc(reportArtifacts.version));
+    .orderBy(
+      desc(reportArtifacts.generatedAt),
+      desc(reportArtifacts.version),
+      desc(reportArtifacts.id),
+    )
+    .$dynamic();
+  if (filter?.limit !== undefined) query.limit(filter.limit);
+  if (filter?.offset !== undefined) query.offset(filter.offset);
+  const rows = await query;
   return rows as ReportArtifactRow[];
 }

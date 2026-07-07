@@ -5,6 +5,7 @@ import {
   getProjectName,
   findUserIdByEmail,
   ensureUserByEmail,
+  indexReportDoc,
 } from "@420ai/db";
 import {
   generateProjectCostReport,
@@ -111,6 +112,13 @@ export default async function reportRoutes(app: FastifyInstance): Promise<void> 
             );
         }
       })();
+      // 13.4: refresh the artifact's search doc best-effort (awaited-with-swallow,
+      // the deliverFirings pattern — never fails the response).
+      try {
+        await indexReportDoc(app.db, row.id);
+      } catch (err) {
+        request.log.warn({ err }, "report search indexing failed");
+      }
       return reply.code(201).send(row);
     },
   );
@@ -131,6 +139,13 @@ export default async function reportRoutes(app: FastifyInstance): Promise<void> 
         request.params.sessionId,
         generatedAt,
       );
+      // 13.4: refresh the artifact's search doc best-effort (awaited-with-swallow,
+      // the deliverFirings pattern — never fails the response).
+      try {
+        await indexReportDoc(app.db, row.id);
+      } catch (err) {
+        request.log.warn({ err }, "report search indexing failed");
+      }
       return reply.code(201).send(row);
     },
   );
@@ -147,7 +162,7 @@ export default async function reportRoutes(app: FastifyInstance): Promise<void> 
     return reply.code(200).send(row);
   });
 
-  app.get<{ Querystring: { type?: string; scopeId?: string } }>(
+  app.get<{ Querystring: { type?: string; scopeId?: string; limit?: number; offset?: number } }>(
     "/v1/reports",
     { schema: { querystring: listReportsQuerySchema } },
     async (request, reply) => {
@@ -159,6 +174,8 @@ export default async function reportRoutes(app: FastifyInstance): Promise<void> 
       const rows = await listReportArtifacts(app.db, userId, {
         reportType: request.query.type,
         scopeId: request.query.scopeId,
+        limit: request.query.limit,
+        offset: request.query.offset,
       });
       return reply.code(200).send(rows);
     },

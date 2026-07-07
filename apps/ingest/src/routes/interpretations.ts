@@ -1,5 +1,11 @@
 import type { FastifyInstance } from "fastify";
-import { ensureUserByEmail, getProjectName, sessionDetail, usageTotals } from "@420ai/db";
+import {
+  ensureUserByEmail,
+  getProjectName,
+  sessionDetail,
+  usageTotals,
+  indexReportDoc,
+} from "@420ai/db";
 import {
   generateSessionInterpretation,
   generateProjectInterpretation,
@@ -55,6 +61,13 @@ export default async function interpretationRoutes(app: FastifyInstance): Promis
         generatedAt,
         app.analysisMaxOutputTokens,
       );
+      // 13.4: refresh the artifact's search doc best-effort (awaited-with-swallow,
+      // the deliverFirings pattern — never fails the response).
+      try {
+        await indexReportDoc(app.db, row.id);
+      } catch (err) {
+        request.log.warn({ err }, "report search indexing failed");
+      }
       return reply.code(201).send(row);
     },
   );
@@ -89,6 +102,13 @@ export default async function interpretationRoutes(app: FastifyInstance): Promis
         generatedAt,
         app.analysisMaxOutputTokens,
       );
+      // 13.4: refresh the artifact's search doc best-effort (awaited-with-swallow,
+      // the deliverFirings pattern — never fails the response).
+      try {
+        await indexReportDoc(app.db, row.id);
+      } catch (err) {
+        request.log.warn({ err }, "report search indexing failed");
+      }
       return reply.code(201).send(row);
     },
   );
