@@ -191,6 +191,74 @@ describe("runSyncLoop (M12 12.6 consecutive-sync-failure counter → heartbeat)"
   });
 });
 
+describe("runSyncLoop (M13 13.1 — onSync surfaces a live last-sync time)", () => {
+  it("calls onSync with the injected clock's ISO time on every successful drain", async () => {
+    let nowMs = Date.parse("2026-07-07T00:00:00.000Z");
+    const queue = tmpQueue(() => new Date(nowMs));
+    const post = vi.fn().mockResolvedValue({ recordsInserted: 0, eventsUpserted: 1 });
+    const synced: string[] = [];
+    const controller = new AbortController();
+    try {
+      queue.enqueue("event", "fp1", { fingerprint: "fp1" });
+      const onSync = (at: string): void => {
+        synced.push(at);
+        nowMs += 1000;
+        if (synced.length >= 2) controller.abort();
+      };
+      const reason = await runSyncLoop(
+        {
+          queue,
+          url: "http://x",
+          token: "t",
+          post,
+          onSync,
+          idleMs: 1,
+          retryMs: 1,
+          now: () => new Date(nowMs),
+        },
+        controller.signal,
+      );
+      expect(reason).toBe("aborted");
+      expect(synced).toEqual([
+        "2026-07-07T00:00:00.000Z",
+        "2026-07-07T00:00:01.000Z",
+      ]);
+    } finally {
+      queue.close();
+    }
+  });
+
+  it("does not call onSync on a retry outcome (archive unreachable)", async () => {
+    const queue = tmpQueue();
+    const post = vi.fn().mockRejectedValue(new IngestHttpError(503, "down"));
+    const synced: string[] = [];
+    const controller = new AbortController();
+    try {
+      queue.enqueue("raw", "r1", { a: 1 });
+      // A long retryMs means the loop is still asleep in its post-failure delay when the
+      // abort fires — so exactly one (failing) syncOnce runs and the item's backoff never
+      // has a chance to expire into a spurious empty-queue "ok".
+      setTimeout(() => controller.abort(), 50);
+      await runSyncLoop(
+        {
+          queue,
+          url: "http://x",
+          token: "t",
+          post,
+          onSync: (at) => synced.push(at),
+          idleMs: 1,
+          retryMs: 10_000,
+        },
+        controller.signal,
+      );
+      expect(post).toHaveBeenCalledTimes(1);
+      expect(synced).toEqual([]);
+    } finally {
+      queue.close();
+    }
+  });
+});
+
 describe("runSyncLoop (C.8 — SIGINT cancels an in-flight stalled sync)", () => {
   it("returns 'aborted' promptly when the archive stalls and the signal aborts", async () => {
     // A server that ACCEPTS the connection but NEVER responds — the exact half-open stall that, with

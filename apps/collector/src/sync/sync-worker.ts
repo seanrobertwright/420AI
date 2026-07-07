@@ -104,6 +104,12 @@ export interface SyncLoopDeps extends SyncDeps {
   /** Called once when the loop stops on a 401 so the engine/cli can surface it. */
   onStop?: () => void;
   /**
+   * M13 13.1: called with an ISO timestamp after each successful drain (`syncOnce` outcome
+   * "ok" — including a no-op empty-queue drain) so the engine/cli can surface a live
+   * "last sync" time (mirrors how `consecutiveSyncFailures` already feeds the heartbeat).
+   */
+  onSync?: (at: string) => void;
+  /**
    * M9 heartbeat (opt-in): when `collectorVersion` is set, the loop sends a throttled,
    * best-effort liveness ping each iteration (queue backlog + version). Omitting it
    * disables heartbeats — existing callers/tests are unaffected.
@@ -163,6 +169,7 @@ export async function runSyncLoop(
     if (signal.aborted) break;
     if (outcome === "ok") {
       consecutiveSyncFailures = 0; // archive reachable — clear the failure streak
+      deps.onSync?.((deps.now ?? (() => new Date()))().toISOString());
       // Empty/clean drain — idle. (A non-empty 2xx returns "ok" too; we still
       // idle briefly, then the next claim pulls any remaining batch.)
       await delay(idleMs, signal);

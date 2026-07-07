@@ -178,9 +178,8 @@ export function runServe(deps: ServeDeps = {}): Promise<void> {
   let controller: AbortController | null = null;
   let enginePromise: Promise<void> | null = null;
   let creds: Credentials | undefined = loadCreds();
-  // TODO(Slice 2): populate from the engine's last successful sync. `runCaptureEngine`
-  // does not surface it yet, so this stays null on the wire (StatusBar renders "—").
-  // eslint-disable-next-line prefer-const -- reassigned once Slice 2 wires the sync time (TODO above)
+  // M13 13.1: updated live by the engine's onSyncSuccess callback (wired in startEngine below)
+  // each time the sync loop completes a successful drain — the StatusBar no longer renders "—".
   let lastSyncAt: string | null = null;
   let closed = false;
   // Per-instance teardown; assigned once the Promise executor has rl + the timer.
@@ -249,6 +248,9 @@ export function runServe(deps: ServeDeps = {}): Promise<void> {
       collectorVersion,
       heartbeatIntervalMs: deps.heartbeatIntervalMs,
       connectors: enabledConnectors,
+      onSyncSuccess: (at) => {
+        lastSyncAt = at;
+      },
     })
       .then(() => {
         controller = null;

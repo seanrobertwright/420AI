@@ -67,6 +67,8 @@ export interface CaptureEngineOptions {
   heartbeatIntervalMs?: number;
   /** M10: git-sweep cadence (default 5 min). Set to 0 to disable the background git sweep. */
   gitIntervalMs?: number;
+  /** M13 13.1: called with an ISO timestamp after each successful sync drain (serve.ts wires this to the StatusBar's `lastSyncAt`). */
+  onSyncSuccess?: (at: string) => void;
 }
 
 /**
@@ -163,6 +165,7 @@ export async function runCaptureEngine(opts: CaptureEngineOptions): Promise<void
         // M9: pass the version through so the sync loop sends heartbeats (best-effort).
         collectorVersion: opts.collectorVersion,
         heartbeatIntervalMs: opts.heartbeatIntervalMs,
+        onSync: opts.onSyncSuccess,
         onStop: () => {
           log(
             "ingest returned 401 — token revoked. Re-pair needed: `collector pair <code>`. Stopping sync.",
