@@ -8,11 +8,13 @@ import {
   deriveCatalogAlerts,
   deriveAuthFailureAlerts,
   deriveArchiveUnreachableAlerts,
+  deriveConnectorFailureRateAlerts,
   sortAlerts,
   ALERT_THRESHOLDS,
   ALERT_VERSION,
   AUTH_FAILURE_ALERT,
   ARCHIVE_UNREACHABLE_MIN_FAILURES,
+  CONNECTOR_RATE_ALERT,
   BACKLOG_TREND_THRESHOLDS,
   type BacklogSample,
   type OperationalAlert,
@@ -325,6 +327,51 @@ describe("deriveArchiveUnreachableAlerts", () => {
   it("an offline machine over the threshold → suppressed (collector.offline covers it)", () => {
     const m = machine({ status: "offline", consecutiveSyncFailures: 10 });
     expect(deriveArchiveUnreachableAlerts([m])).toEqual([]);
+  });
+});
+
+describe("deriveConnectorFailureRateAlerts", () => {
+  it("a connector at/over minCalls with ratio ≥ threshold → one connector.failure_rate warning", () => {
+    const c = connector({
+      sourceConnector: "codex-cli",
+      toolCalls: CONNECTOR_RATE_ALERT.minCalls,
+      toolsFailed: CONNECTOR_RATE_ALERT.minCalls, // 100% failed
+    });
+    const alerts = deriveConnectorFailureRateAlerts([c]);
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]!.code).toBe("connector.failure_rate");
+    expect(alerts[0]!.severity).toBe("warning");
+    expect(alerts[0]!.connector).toBe("codex-cli");
+    expect(alerts[0]!.since).toBe(c.lastEventAt);
+    expect(alerts[0]!.message).toContain(`${CONNECTOR_RATE_ALERT.windowMs / 60_000} min`);
+    // Keyed on connector — distinct from the lifetime connector.failing key, so both can coexist.
+    expect(alertKey(alerts[0]!)).toBe("connector.failure_rate:codex-cli");
+  });
+
+  it("below minCalls → no alert (even at 100% failure)", () => {
+    const c = connector({
+      sourceConnector: "codex-cli",
+      toolCalls: CONNECTOR_RATE_ALERT.minCalls - 1,
+      toolsFailed: CONNECTOR_RATE_ALERT.minCalls - 1,
+    });
+    expect(deriveConnectorFailureRateAlerts([c])).toEqual([]);
+  });
+
+  it("ratio below threshold → no alert", () => {
+    const c = connector({ sourceConnector: "codex-cli", toolCalls: 10, toolsFailed: 4 }); // 0.4 < 0.5
+    expect(deriveConnectorFailureRateAlerts([c])).toEqual([]);
+  });
+
+  it("zero tool calls → no divide-by-zero, no alert", () => {
+    const c = connector({ sourceConnector: "gemini-cli", toolCalls: 0, toolsFailed: 0 });
+    expect(deriveConnectorFailureRateAlerts([c])).toEqual([]);
+  });
+
+  it("one alert per failing connector; healthy connectors excluded", () => {
+    const bad = connector({ sourceConnector: "codex-cli", toolCalls: 8, toolsFailed: 5 });
+    const good = connector({ sourceConnector: "claude-code", toolCalls: 8, toolsFailed: 1 });
+    const alerts = deriveConnectorFailureRateAlerts([bad, good]);
+    expect(alerts.map((a) => a.connector)).toEqual(["codex-cli"]);
   });
 });
 

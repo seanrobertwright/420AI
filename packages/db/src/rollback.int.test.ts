@@ -32,25 +32,26 @@ describe.skipIf(!TEST_URL)("migration rollback (rollbackLast, integration)", () 
     return Number(r.rows[0]!.n);
   }
 
-  async function connectorCatalogsTableExists(): Promise<boolean> {
+  /** Does alert_firings carry the M13 13.5 `resolve_delivered_at` column (added by 0012)? */
+  async function resolveDeliveredColumnExists(): Promise<boolean> {
     const r = await pool.query(
-      "select 1 from information_schema.tables where table_name = 'connector_catalogs'",
+      "select 1 from information_schema.columns where table_name = 'alert_firings' and column_name = 'resolve_delivered_at'",
     );
     return r.rowCount === 1;
   }
 
-  it("rolls back the latest migration (0011) and a re-migrate restores it", async () => {
-    expect(await trackedCount()).toBe(12);
-    expect(await connectorCatalogsTableExists()).toBe(true);
+  it("rolls back the latest migration (0012) and a re-migrate restores it", async () => {
+    expect(await trackedCount()).toBe(13);
+    expect(await resolveDeliveredColumnExists()).toBe(true);
 
     const result = await rollbackLast(TEST_URL!, { downDir, journalPath });
-    expect(result).toEqual({ rolledBack: "0011_big_mysterio" });
-    expect(await trackedCount()).toBe(11);
-    expect(await connectorCatalogsTableExists()).toBe(false); // down SQL dropped the table
-
-    // Re-apply: an idempotent re-migrate brings 0011 back + restores the tracking row.
-    await runMigrations(TEST_URL!);
+    expect(result).toEqual({ rolledBack: "0012_organic_hobgoblin" });
     expect(await trackedCount()).toBe(12);
-    expect(await connectorCatalogsTableExists()).toBe(true);
+    expect(await resolveDeliveredColumnExists()).toBe(false); // down SQL dropped the column
+
+    // Re-apply: an idempotent re-migrate brings 0012 back + restores the tracking row.
+    await runMigrations(TEST_URL!);
+    expect(await trackedCount()).toBe(13);
+    expect(await resolveDeliveredColumnExists()).toBe(true);
   });
 });

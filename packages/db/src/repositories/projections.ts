@@ -1,4 +1,4 @@
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, sql } from "drizzle-orm";
 import {
   lowestConfidence,
   zeroTokens,
@@ -280,6 +280,49 @@ export async function connectorHealth(db: DbClient, userId: string): Promise<Con
     .from(events)
     .innerJoin(machines, eq(events.machineId, machines.id))
     .where(eq(machines.userId, userId))
+    .groupBy(events.sourceConnector)
+    .orderBy(events.sourceConnector);
+  return rows.map((r) => ({
+    sourceConnector: r.sourceConnector,
+    lastEventAt: r.lastEventAt ?? null,
+    eventCount: r.eventCount,
+    toolCalls: r.toolCalls,
+    toolsFailed: r.toolsFailed,
+    parserVersions: r.parserVersions ?? [],
+    models: r.models ?? [],
+  }));
+}
+
+/**
+ * M13 13.5 windowed per-connector health — `connectorHealth` restricted to events within a
+ * recent window (`ts >= sinceIso`). Powers the windowed `connector.failure_rate` alert
+ * (deriveConnectorFailureRateAlerts in @420ai/shared): unlike the LIFETIME `connectorHealth`
+ * ratio (which only clears as healthy calls dilute a permanent denominator), this fires on
+ * RECENT data and self-clears once the window rolls past the failures. `events.ts` is
+ * `mode:"string"`, so the ISO `sinceIso` compares directly (no Date coercion). Same user
+ * scoping + terminal-call denominator as connectorHealth.
+ */
+export async function connectorHealthWindowed(
+  db: DbClient,
+  userId: string,
+  sinceIso: string,
+): Promise<ConnectorHealthRow[]> {
+  const rows = await db
+    .select({
+      sourceConnector: events.sourceConnector,
+      lastEventAt: sql<string | null>`max(${events.ts})`,
+      eventCount: sql<number>`count(${events.fingerprint})::int`,
+      // Terminal calls only (completed+failed) — see connectorHealth for the rationale.
+      toolCalls: sql<number>`count(*) filter (where ${events.eventType} in ('tool.call.completed', 'tool.call.failed'))::int`,
+      toolsFailed: sql<number>`count(*) filter (where ${events.eventType} = 'tool.call.failed')::int`,
+      parserVersions: sql<string[]>`coalesce(array_agg(distinct ${events.parserVersion}), '{}')`,
+      models: sql<
+        string[]
+      >`coalesce(array_agg(distinct ${events.model}) filter (where ${events.model} is not null), '{}')`,
+    })
+    .from(events)
+    .innerJoin(machines, eq(events.machineId, machines.id))
+    .where(and(eq(machines.userId, userId), gte(events.ts, sinceIso)))
     .groupBy(events.sourceConnector)
     .orderBy(events.sourceConnector);
   return rows.map((r) => ({

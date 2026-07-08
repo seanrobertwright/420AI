@@ -6,10 +6,12 @@ import {
   deriveCatalogAlerts,
   deriveAuthFailureAlerts,
   deriveArchiveUnreachableAlerts,
+  deriveConnectorFailureRateAlerts,
   sortAlerts,
   isBacklogHigh,
   BACKLOG_TREND_WINDOW_MS,
   AUTH_FAILURE_ALERT,
+  CONNECTOR_RATE_ALERT,
   MONITOR_VERSION,
   emptyMonitorSnapshot,
   type LiveMonitorSnapshot,
@@ -18,9 +20,11 @@ import {
   machineStatuses,
   activeSessions,
   connectorHealth,
+  connectorHealthWindowed,
   recentBacklogSamples,
   reconcileAlertFirings,
   deliverPendingFirings,
+  deliverResolvedFirings,
   countPendingCatalogs,
   countRecentAuthFailures,
   findUserIdByEmail,
@@ -53,15 +57,24 @@ async function buildSnapshot(
   const nowMs = now.getTime();
   const sinceIso = new Date(nowMs - ACTIVE_WINDOW_MS).toISOString();
   const trendSince = new Date(nowMs - BACKLOG_TREND_WINDOW_MS);
-  const [machines, connectors, sessions, samplesByMachine, pendingCatalogs, authFailureCount] =
-    await Promise.all([
-      machineStatuses(db, userId),
-      connectorHealth(db, userId),
-      activeSessions(db, userId, sinceIso),
-      recentBacklogSamples(db, userId, trendSince),
-      countPendingCatalogs(db),
-      countRecentAuthFailures(db, new Date(nowMs - AUTH_FAILURE_ALERT.windowMs)),
-    ]);
+  const connectorRateSinceIso = new Date(nowMs - CONNECTOR_RATE_ALERT.windowMs).toISOString();
+  const [
+    machines,
+    connectors,
+    windowedConnectors,
+    sessions,
+    samplesByMachine,
+    pendingCatalogs,
+    authFailureCount,
+  ] = await Promise.all([
+    machineStatuses(db, userId),
+    connectorHealth(db, userId),
+    connectorHealthWindowed(db, userId, connectorRateSinceIso),
+    activeSessions(db, userId, sinceIso),
+    recentBacklogSamples(db, userId, trendSince),
+    countPendingCatalogs(db),
+    countRecentAuthFailures(db, new Date(nowMs - AUTH_FAILURE_ALERT.windowMs)),
+  ]);
   // Assemble the derived-state snapshot first, then fold in alerts — deriveAlerts reads the
   // already-derived machine status/backlogHigh + connector rows (no clock, no re-derivation, D3).
   const machineRows = machines.map((m) => ({
@@ -86,6 +99,7 @@ async function buildSnapshot(
     ...deriveCatalogAlerts(pendingCatalogs),
     ...deriveArchiveUnreachableAlerts(machineRows),
     ...deriveAuthFailureAlerts(authFailureCount),
+    ...deriveConnectorFailureRateAlerts(windowedConnectors),
   ]);
   // The new WRITE (D1): reconcile firing state against the derived alerts (route owns `now`).
   const alertFirings = await reconcileAlertFirings(db, userId, alerts, now);
@@ -93,15 +107,17 @@ async function buildSnapshot(
 }
 
 /**
- * M12 12.6 alert delivery — push any newly-opened firing to the injected deliverer, AFTER the
- * snapshot has reconciled firing state. Kept as a route-boundary helper (NOT folded into the
- * load-bearing `buildSnapshot(db,userId,now)`) so the delivery I/O is explicitly best-effort:
- * a webhook problem NEVER 500s GET /v1/monitor or breaks the SSE stream. Early-returns (no
- * query) when no deliverer is wired. Uses the SAME `now` the snapshot reconciled with.
+ * M12 12.6 / M13 13.5 alert delivery — push any newly-opened firing AND any newly-resolved
+ * firing to the injected deliverer, AFTER the snapshot has reconciled firing state. Kept as a
+ * route-boundary helper (NOT folded into the load-bearing `buildSnapshot(db,userId,now)`) so the
+ * delivery I/O is explicitly best-effort: a webhook/SMTP problem NEVER 500s GET /v1/monitor or
+ * breaks the SSE stream. Both deliver calls early-return (no query) when no deliverer is wired.
+ * Uses the SAME `now` the snapshot reconciled with.
  */
 async function deliverFirings(app: FastifyInstance, userId: string, now: Date): Promise<void> {
   try {
     await deliverPendingFirings(app.db, userId, app.alertDeliverer, now, (e) => app.log.error(e));
+    await deliverResolvedFirings(app.db, userId, app.alertDeliverer, now, (e) => app.log.error(e));
   } catch (e) {
     app.log.error(e);
   }

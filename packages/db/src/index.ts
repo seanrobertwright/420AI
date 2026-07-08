@@ -39,6 +39,7 @@ export {
   listAlertFirings,
   ackAlertFiring,
   deliverPendingFirings,
+  deliverResolvedFirings,
 } from "./repositories/alert-firings.js";
 export { recordIngestAuthFailure, countRecentAuthFailures } from "./repositories/auth-failures.js";
 export {
@@ -74,6 +75,7 @@ export {
   sessionProjections,
   sessionDetail,
   connectorHealth,
+  connectorHealthWindowed,
   projectGitMetadata,
 } from "./repositories/projections.js";
 export {

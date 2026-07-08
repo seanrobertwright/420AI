@@ -5,6 +5,7 @@ import { buildApp } from "./app.js";
 import { hashPassword } from "./password.js";
 import { createAnalysisProvider, type AnalysisProviderConfig } from "./analysis/provider.js";
 import { createWebhookDeliverer } from "./delivery/alert-deliverer.js";
+import { createSmtpDeliverer, createFanoutDeliverer } from "./delivery/smtp-deliverer.js";
 
 // Load the repo-root .env (this runs from apps/ingest/ via npm -w).
 config({ path: fileURLToPath(new URL("../../../.env", import.meta.url)) });
@@ -85,10 +86,12 @@ const rateLimit = rateLimitEnabled
     }
   : undefined;
 
-// M12 12.6 alert delivery. Disabled unless ALERT_WEBHOOK_URL is set (mirrors ANALYSIS_PROVIDER):
-// the firing row in the dashboard is the durable record; the webhook is a convenience push.
+// M12 12.6 / M13 13.5 alert delivery. Each channel is independently opt-in (mirrors
+// ANALYSIS_PROVIDER): the firing row in the dashboard is the durable record; webhook + SMTP
+// are convenience pushes. Both are composed into the single `alertDeliverer` slot via the
+// fan-out (a child failing does not skip the other). Unset both → null → delivery disabled.
 const alertWebhookUrl = process.env.ALERT_WEBHOOK_URL;
-const alertDeliverer = createWebhookDeliverer(
+const webhookDeliverer = createWebhookDeliverer(
   alertWebhookUrl
     ? {
         url: alertWebhookUrl,
@@ -100,6 +103,17 @@ const alertDeliverer = createWebhookDeliverer(
       }
     : null,
 );
+// SMTP is enabled only when the URL + from + to are ALL set (an incomplete config would send
+// nowhere or fail per-delivery). ALERT_SMTP_URL is a nodemailer smtps://user:pass@host:port URL.
+const alertSmtpUrl = process.env.ALERT_SMTP_URL;
+const alertEmailFrom = process.env.ALERT_EMAIL_FROM;
+const alertEmailTo = process.env.ALERT_EMAIL_TO;
+const smtpDeliverer = createSmtpDeliverer(
+  alertSmtpUrl && alertEmailFrom && alertEmailTo
+    ? { url: alertSmtpUrl, from: alertEmailFrom, to: alertEmailTo }
+    : null,
+);
+const alertDeliverer = createFanoutDeliverer([webhookDeliverer, smtpDeliverer]);
 
 const { db } = createDb(databaseUrl);
 

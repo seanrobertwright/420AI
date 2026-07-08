@@ -1,0 +1,1 @@
+ALTER TABLE "alert_firings" ADD COLUMN "resolve_delivered_at" timestamp with time zone;
