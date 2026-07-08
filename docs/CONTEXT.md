@@ -234,7 +234,7 @@ An Analysis Provider option that supports hosted or local model runtimes through
 
 ## MVP Success Criteria
 
-The first release is viable when one Windows machine can capture Claude Code, Codex CLI, and Gemini CLI sessions into the Central Archive, map them to Projects, compute cost, context, failure, and Git metrics, and generate Markdown Reports with Mermaid diagrams. (Antigravity capture is deferred past first release — see 12.7d; Cursor capture arrives in 13.7.)
+The first release is viable when one Windows machine can capture Claude Code, Codex CLI, and Gemini CLI sessions into the Central Archive, map them to Projects, compute cost, context, failure, and Git metrics, and generate Markdown Reports with Mermaid diagrams. (Antigravity capture is deferred past first release — see 12.7d. Cursor capture shipped in 13.7 as an `experimental`, poll-mode connector over `%APPDATA%\Cursor\…\state.vscdb`.)
 
 ## V1 Non-Goal
 

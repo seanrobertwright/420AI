@@ -88,6 +88,19 @@ export class QueueStore {
         PRIMARY KEY (connector_id, path)
       );
     `);
+    // M13 13.7: per-key content memory for POLL-mode connectors (Cursor). Distinct from
+    // file_cursors (byte offsets for tailed files) — this stores a content hash per polled
+    // unit so an unchanged unit can skip its expensive detail fetch. Like file_cursors, it
+    // survives `ack` (which DELETEs synced queue_items), so the skip persists across syncs.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS poll_state (
+        connector_id TEXT NOT NULL,
+        key TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (connector_id, key)
+      );
+    `);
   }
 
   /**
@@ -192,6 +205,41 @@ export class QueueStore {
            updated_at = excluded.updated_at`,
       )
       .run(connectorId, path, byteOffset, size, this.now().toISOString());
+  }
+
+  /**
+   * Persistent change memory for POLL-mode connectors (M13 13.7). A poll connector re-observes
+   * its whole store each tick; `poll_state` records the last-seen content hash per unit (e.g. a
+   * Cursor composer) so an UNCHANGED unit can skip the expensive detail fetch + parse. Unlike
+   * `queue_items`, it survives `ack` (which DELETEs synced rows), so the skip holds across syncs —
+   * not just before the unit's first sync.
+   *
+   * `pollChanged`/`pollCommit` are SPLIT (not one `observe`) to preserve the FileWatcher's
+   * commit-point ordering (file-watcher.ts): the caller records the observation via `pollCommit`
+   * ONLY AFTER the enqueue succeeds, so a transient failure between the check and the enqueue
+   * leaves the unit un-committed and it is retried next tick (recording on the read would strand
+   * the unit until its content changed again — a data-completeness bug).
+   */
+  pollChanged(connectorId: string, key: string, content: string): boolean {
+    const hash = createHash("sha256").update(content).digest("hex");
+    const prev = this.db
+      .prepare(`SELECT content_hash FROM poll_state WHERE connector_id = ? AND key = ?`)
+      .get(connectorId, key) as { content_hash: string } | undefined;
+    return prev?.content_hash !== hash;
+  }
+
+  /** Record `content`'s hash as the last-seen observation for `(connectorId, key)` (see `pollChanged`). */
+  pollCommit(connectorId: string, key: string, content: string): void {
+    const hash = createHash("sha256").update(content).digest("hex");
+    this.db
+      .prepare(
+        `INSERT INTO poll_state (connector_id, key, content_hash, updated_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(connector_id, key) DO UPDATE SET
+           content_hash = excluded.content_hash,
+           updated_at = excluded.updated_at`,
+      )
+      .run(connectorId, key, hash, this.now().toISOString());
   }
 
   stats(): QueueStats {

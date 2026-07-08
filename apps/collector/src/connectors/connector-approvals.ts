@@ -53,11 +53,19 @@ function defaultApprovals(): ConnectorApprovals {
  * `watchGlobs(home)` + sorted `requiredPermissions`. Sorting both means a cosmetic
  * reordering never spuriously flips the fingerprint; hashing (not the raw scope) keeps
  * the approvals file tiny and comparison O(1). Pure — `home` is injected.
+ *
+ * M13 13.7: a POLL-mode connector (Cursor) has empty `watchGlobs`; its real capture
+ * surface is `poll.sources(home)` (the vscdb path). Those are folded in ONLY when `poll`
+ * is present, so a path drift gates on `connectors.approve` (§10.4). The extra key is
+ * omitted entirely for poll-less connectors, so their fingerprint is byte-identical to
+ * before (no upgrade re-approval churn for the built-in file connectors).
  */
 export function captureSurfaceFingerprint(c: Connector, home: string): string {
   const globs = [...c.watchGlobs(home)].sort();
   const perms = [...c.fidelity.requiredPermissions].sort();
-  return createHash("sha256").update(JSON.stringify({ globs, perms })).digest("hex");
+  const surface: { globs: string[]; perms: string[]; poll?: string[] } = { globs, perms };
+  if (c.poll) surface.poll = [...c.poll.sources(home)].sort();
+  return createHash("sha256").update(JSON.stringify(surface)).digest("hex");
 }
 
 /**
