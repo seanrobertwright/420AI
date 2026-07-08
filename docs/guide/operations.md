@@ -414,3 +414,35 @@ means every existing install rejects all future updates — no recovery, only re
    emit the `.sig` files the 12.8c release runbook publishes alongside `latest.json`.
 4. **Verify before committing anything:** `git check-ignore .secrets/tauri-updater.key` must exit 0
    — the private key must never be trackable, even accidentally.
+
+---
+
+## 13.6 — Scheduled reports (opt-in)
+
+Report generation is **manual by default** (the dashboard button, or a single POST). To generate
+the full report suite on a schedule, run `scripts/generate-reports.mjs` from the OS scheduler —
+there is **NO in-server scheduler** (the same discipline as backups above: the server owns no
+background dispatch loop).
+
+`npm run reports:generate` walks every project (`GET /v1/projects`) and POSTs one report of each
+project type (`POST /v1/projects/:id/reports`) authenticated with **`ADMIN_TOKEN`** — the retained
+machine/service credential (12.3), which is exactly the machine-to-machine path it exists for. It
+reads `INGEST_URL` + `ADMIN_TOKEN` from the environment, **times every request out at 30 s** so a
+stalled ingest can't hang the job, prints one line per artifact, and **exits non-zero if any call
+fails** (so a cron wrapper can alert).
+
+```sh
+# all six project report types, every project:
+INGEST_URL=http://localhost:8420 ADMIN_TOKEN=<token> npm run reports:generate
+# a subset and/or a single project (note the `--` so npm forwards the flags):
+npm run reports:generate -- --types project.efficiency,project.cost_over_time --project <uuid>
+```
+
+Generation is **non-idempotent by design** — each run appends a new versioned artifact (the inverse
+of the event-fingerprint upsert), so report history accrues. Schedule it via the OS, exactly like
+backups (12.4d):
+
+- **Windows Task Scheduler:** a weekly task running
+  `"C:\Program Files\Git\bin\sh.exe" -lc "cd /c/Users/seanr/OneDrive/Documents/420AI && INGEST_URL=http://localhost:8420 ADMIN_TOKEN=<token> npm run reports:generate"`.
+- **cron (Linux/macOS):**
+  `0 6 * * 1 cd /path/to/420AI && INGEST_URL=http://localhost:8420 ADMIN_TOKEN=<token> npm run reports:generate >> reports.log 2>&1`

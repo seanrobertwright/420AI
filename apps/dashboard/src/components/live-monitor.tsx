@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import type { LiveMonitorSnapshot } from "@420ai/shared";
 import { MonitorView } from "@/components/monitor/monitor-view";
+import { OnboardingCard } from "@/components/monitor/onboarding-card";
 
 /**
  * The live Live Monitor (M9). Seeded with the server-fetched `initial` snapshot (so the
@@ -66,7 +67,12 @@ export function LiveMonitor({ initial }: { initial: LiveMonitorSnapshot }) {
           {connected ? "live" : "reconnecting…"}
         </span>
       </header>
-      <MonitorView snapshot={snapshot} nowMs={nowMs} />
+      {snapshot.machines.length === 0 ? (
+        // First-run: no collector has paired yet — guide the operator instead of empty tables.
+        <OnboardingCard />
+      ) : (
+        <MonitorView snapshot={snapshot} nowMs={nowMs} />
+      )}
     </main>
   );
 }
