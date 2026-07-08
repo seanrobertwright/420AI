@@ -83,8 +83,8 @@ export interface ConnectorCatalogEntry {
   watchGlobs?: string[];
   /** Overlay onto the connector's fidelity — only the provided fields override. */
   fidelity?: ConnectorFidelityOverlay;
-  /** Override how the watcher reads the source (tail vs snapshot). */
-  captureMode?: "tail" | "snapshot";
+  /** Override how the watcher reads the source (tail vs snapshot; poll is engine-driven). */
+  captureMode?: "tail" | "snapshot" | "poll";
   /** false ⇒ drop the connector from the registry (catalog-level disable). Default true. */
   enabled?: boolean;
   /** A data-only custom connector (no built-in parser) compiled via the factory. */
@@ -182,7 +182,7 @@ export const CONNECTOR_CATALOG_BASELINE: ConnectorCatalogPayload = {
  */
 export interface ConnectorLike {
   id: string;
-  captureMode?: "tail" | "snapshot";
+  captureMode?: "tail" | "snapshot" | "poll";
   fidelity: {
     status: "stable" | "experimental" | "planned";
     captureMethod: string;

@@ -64,6 +64,37 @@ describe("connector-approvals", () => {
     expect(captureSurfaceFingerprint(widened, HOME)).not.toBe(captureSurfaceFingerprint(a, HOME));
   });
 
+  it("M13 13.7: a poll connector's sources drift its fingerprint, but poll-less ones are byte-identical", () => {
+    // Poll-less connector: adding the `poll` key must NOT change its fingerprint (no re-approval
+    // churn on upgrade). Prove it against a literal fingerprint of the same connector pre-poll.
+    const fileConn = fakeConnector("file", ["/g"], ["perm"]);
+    const pollA = {
+      ...fakeConnector("pollc", [], ["Read vscdb"]),
+      poll: {
+        intervalMs: 1,
+        sources: () => ["/a/state.vscdb"],
+        run: () => ({ swept: 0, changed: 0, rawRecords: 0, events: 0 }),
+      },
+    } as unknown as Connector;
+    const pollB = {
+      ...fakeConnector("pollc", [], ["Read vscdb"]),
+      poll: {
+        intervalMs: 1,
+        sources: () => ["/b/state.vscdb"],
+        run: () => ({ swept: 0, changed: 0, rawRecords: 0, events: 0 }),
+      },
+    } as unknown as Connector;
+    // Poll sources are folded in → a path change flips the fingerprint (gates on approve).
+    expect(captureSurfaceFingerprint(pollA, HOME)).not.toBe(captureSurfaceFingerprint(pollB, HOME));
+    // Poll-less fingerprint unchanged by the new code path (the `poll` key is simply absent).
+    expect(captureSurfaceFingerprint(fileConn, HOME)).toBe(
+      captureSurfaceFingerprint(fileConn, HOME),
+    );
+    expect(captureSurfaceFingerprint(fileConn, HOME)).not.toBe(
+      captureSurfaceFingerprint(pollA, HOME),
+    );
+  });
+
   it("seedMissingApprovals records every connector's fingerprint; a re-seed is idempotent", () => {
     const first = seedMissingApprovals(REGISTRY, loadConnectorApprovals(tempApprovalsPath()), HOME);
     expect(first.changed).toBe(true);

@@ -180,3 +180,51 @@ describe("QueueStore — file cursors", () => {
     }
   });
 });
+
+describe("QueueStore — pollChanged/pollCommit (M13 13.7 poll change memory)", () => {
+  it("pollChanged is read-only: repeated checks stay true until pollCommit records the hash", () => {
+    const q = new QueueStore(tmpDbPath());
+    try {
+      // Commit-point ordering: a check alone must NOT record — else a failure between
+      // check and enqueue would strand the unit. Two checks with no commit stay true.
+      expect(q.pollChanged("cursor", "composer:c1", "v1")).toBe(true);
+      expect(q.pollChanged("cursor", "composer:c1", "v1")).toBe(true); // still uncommitted
+      q.pollCommit("cursor", "composer:c1", "v1");
+      expect(q.pollChanged("cursor", "composer:c1", "v1")).toBe(false); // now unchanged
+      expect(q.pollChanged("cursor", "composer:c1", "v2")).toBe(true); // content changed
+    } finally {
+      q.close();
+    }
+  });
+
+  it("keys are scoped per connector + key (no cross-talk)", () => {
+    const q = new QueueStore(tmpDbPath());
+    try {
+      q.pollCommit("cursor", "composer:a", "same");
+      // Same content, different key/connector → each is a distinct first-sight (changed).
+      expect(q.pollChanged("cursor", "composer:b", "same")).toBe(true);
+      expect(q.pollChanged("other", "composer:a", "same")).toBe(true);
+      expect(q.pollChanged("cursor", "composer:a", "same")).toBe(false);
+    } finally {
+      q.close();
+    }
+  });
+
+  it("survives ack (unlike queue_items) — the change memory outlives synced rows", () => {
+    const path = tmpDbPath();
+    const q1 = new QueueStore(path);
+    q1.pollCommit("cursor", "composer:c1", "v1");
+    q1.enqueue("raw", "cursor:c1:composer", { x: 1 });
+    const [row] = q1.claimBatch(10);
+    q1.ack([row!.id]); // deletes the queue row
+    q1.close();
+    // Reopen: queue_items is empty, but poll_state remembers c1 → still unchanged.
+    const q2 = new QueueStore(path);
+    try {
+      expect(q2.stats().pending).toBe(0);
+      expect(q2.pollChanged("cursor", "composer:c1", "v1")).toBe(false);
+    } finally {
+      q2.close();
+    }
+  });
+});
