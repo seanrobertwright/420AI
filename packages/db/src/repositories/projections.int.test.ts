@@ -12,6 +12,7 @@ import {
   sessionProjections,
   sessionDetail,
   connectorHealth,
+  connectorHealthWindowed,
   projectGitMetadata,
 } from "./projections.js";
 
@@ -297,5 +298,64 @@ describe.skipIf(!TEST_URL)("projections repository (integration)", () => {
     const git = await projectGitMetadata(dbh.db, projectId);
     expect(git.branches).toEqual(["main"]);
     expect(git.projectPaths).toEqual([PROJECT_KEY]);
+  });
+
+  it("connectorHealthWindowed counts only in-window terminal calls (M13 13.5 windowed alert)", async () => {
+    // OLD terminal calls (long before the window) — 4 failed, must be EXCLUDED by the window.
+    await dbh.db.insert(events).values(
+      Array.from({ length: 4 }, (_, i) => ({
+        fingerprint: `old-f${i}`,
+        sourceConnector: "claude-code",
+        parserVersion: "2.0.0",
+        rawRecordId: `rold${i}`,
+        eventIndex: i,
+        eventType: "tool.call.failed" as const,
+        sessionId: "sess-old",
+        machineId,
+        projectPath: PROJECT_KEY,
+        ts: `2026-01-01T00:0${i}:00.000Z`,
+      })),
+    );
+    // RECENT terminal calls (inside the window) — 3 failed + 2 completed = 5 calls, 60% failed.
+    await dbh.db.insert(events).values([
+      ...Array.from({ length: 3 }, (_, i) => ({
+        fingerprint: `new-f${i}`,
+        sourceConnector: "claude-code",
+        parserVersion: "2.0.0",
+        rawRecordId: `rnf${i}`,
+        eventIndex: 10 + i,
+        eventType: "tool.call.failed" as const,
+        sessionId: "sess-new",
+        machineId,
+        projectPath: PROJECT_KEY,
+        ts: `2026-06-20T12:0${i}:00.000Z`,
+      })),
+      ...Array.from({ length: 2 }, (_, i) => ({
+        fingerprint: `new-c${i}`,
+        sourceConnector: "claude-code",
+        parserVersion: "2.0.0",
+        rawRecordId: `rnc${i}`,
+        eventIndex: 20 + i,
+        eventType: "tool.call.completed" as const,
+        sessionId: "sess-new",
+        machineId,
+        projectPath: PROJECT_KEY,
+        ts: `2026-06-20T12:1${i}:00.000Z`,
+      })),
+    ]);
+
+    // A window boundary between the old and the recent events.
+    const sinceIso = "2026-06-01T00:00:00.000Z";
+    const windowed = await connectorHealthWindowed(dbh.db, userId, sinceIso);
+    const cc = windowed.find((h) => h.sourceConnector === "claude-code")!;
+    expect(cc.toolCalls).toBe(5); // only the recent terminal calls
+    expect(cc.toolsFailed).toBe(3); // 3/5 = 0.6 ≥ CONNECTOR_RATE_ALERT.ratio
+    expect(cc.lastEventAt).toContain("2026-06-20");
+
+    // The LIFETIME projection, by contrast, still counts the old failures too.
+    const lifetime = await connectorHealth(dbh.db, userId);
+    const ccLifetime = lifetime.find((h) => h.sourceConnector === "claude-code")!;
+    expect(ccLifetime.toolCalls).toBe(9); // 4 old + 5 recent
+    expect(ccLifetime.toolsFailed).toBe(7); // 4 old + 3 recent
   });
 });

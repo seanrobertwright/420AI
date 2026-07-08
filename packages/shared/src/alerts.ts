@@ -1,4 +1,5 @@
 import type { LiveMonitorSnapshot, MonitorStatus } from "./monitor.js";
+import type { ConnectorHealthRow } from "./projections.js";
 
 /**
  * M10 Operational Alerts — a pure, stateless derived projection over the M9 Live
@@ -42,7 +43,8 @@ export type AlertCode =
   | "sync.backlog_growing"
   | "catalog.update_requires_approval"
   | "ingest.auth_failure"
-  | "archive.unreachable";
+  | "archive.unreachable"
+  | "connector.failure_rate";
 
 /** Stamps the alert derivation shape (sibling of MONITOR_VERSION; D11, PRD §23). */
 export const ALERT_VERSION = "m10-alerts-v1" as const;
@@ -276,6 +278,50 @@ export function deriveArchiveUnreachableAlerts(
       machineName: m.name,
       since: m.lastHeartbeatAt ?? m.lastSeenAt,
     });
+  }
+  return alerts;
+}
+
+/**
+ * Windowed connector-failure-rate thresholds (M13 13.5). The honest-limit refinement of
+ * `connector.failing` that the module doc flagged as deferred: `ALERT_THRESHOLDS` /
+ * `deriveAlerts` derive over the LIFETIME `connectorHealth` (a permanent denominator that
+ * only clears as healthy calls dilute it), whereas this fires over a recent WINDOW
+ * (`connectorHealthWindowed(db, userId, now - windowMs)`) and self-clears once the window
+ * rolls past the failures. Same min-calls/ratio shape; the window is the new dimension.
+ */
+export const CONNECTOR_RATE_ALERT = {
+  windowMs: 60 * 60_000, // 1 hour
+  minCalls: 5,
+  ratio: 0.5,
+} as const;
+
+/**
+ * Emit a per-connector `connector.failure_rate` (warning) for each connector whose RECENT
+ * (windowed) terminal tool-call failure ratio is ≥ CONNECTOR_RATE_ALERT.ratio over
+ * ≥ minCalls calls (M13 13.5, PRD §20). Pure + clock-free — the route runs the windowed
+ * projection and passes the rows. Keys on the connector (alertKey
+ * "connector.failure_rate:<connector>"), distinct from the lifetime `connector.failing` key,
+ * so the two may coexist. Sibling of deriveAuthFailureAlerts; `deriveAlerts` stays FROZEN —
+ * merged + re-sorted by sortAlerts in the route.
+ */
+export function deriveConnectorFailureRateAlerts(
+  connectors: ConnectorHealthRow[],
+): OperationalAlert[] {
+  const alerts: OperationalAlert[] = [];
+  for (const c of connectors) {
+    if (
+      c.toolCalls >= CONNECTOR_RATE_ALERT.minCalls &&
+      c.toolsFailed / c.toolCalls >= CONNECTOR_RATE_ALERT.ratio
+    ) {
+      alerts.push({
+        code: "connector.failure_rate",
+        severity: "warning",
+        message: `Connector "${c.sourceConnector}" failure rate is high (${c.toolsFailed}/${c.toolCalls} tool calls failed in the last ${CONNECTOR_RATE_ALERT.windowMs / 60_000} min)`,
+        connector: c.sourceConnector,
+        since: c.lastEventAt,
+      });
+    }
   }
   return alerts;
 }

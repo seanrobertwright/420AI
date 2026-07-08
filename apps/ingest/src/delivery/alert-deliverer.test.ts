@@ -51,6 +51,18 @@ describe("createWebhookDeliverer", () => {
     expect(JSON.parse(init.body as string)).toEqual({ kind: "alert.firing", firing: f });
   });
 
+  it("emits kind 'alert.resolved' for a resolved firing (deliver-on-resolve, M13 13.5)", async () => {
+    const fetchSpy = vi.fn().mockResolvedValue({ ok: true, status: 200 } as Response);
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+
+    const deliverer = createWebhookDeliverer({ url: "http://hook.local/x", timeoutMs: 5000 })!;
+    const f = firing({ status: "resolved", resolvedAt: "2026-06-15T13:00:00.000Z" });
+    await deliverer.deliver(f);
+
+    const [, init] = fetchSpy.mock.calls[0]!;
+    expect(JSON.parse(init.body as string)).toEqual({ kind: "alert.resolved", firing: f });
+  });
+
   it("throws on a non-2xx response (so the caller logs it)", async () => {
     globalThis.fetch = vi
       .fn()

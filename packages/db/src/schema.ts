@@ -456,6 +456,9 @@ export const alertFirings = pgTable(
     // M12 12.6 alert delivery: at-most-one delivery ATTEMPT per firing — stamped on
     // success OR failure by deliverPendingFirings (nullable; null = not yet attempted).
     deliveryAttemptedAt: timestamp("delivery_attempted_at", { withTimezone: true }),
+    // M13 13.5 deliver-on-resolve: at-most-one resolve-notice ATTEMPT per firing — stamped on
+    // success OR failure by deliverResolvedFirings (nullable; null = resolve not yet notified).
+    resolveDeliveredAt: timestamp("resolve_delivered_at", { withTimezone: true }),
   },
   (t) => [
     // At most ONE open firing per (user, alert_key) — the reconcile idempotency key (D3).

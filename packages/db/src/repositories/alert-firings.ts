@@ -1,4 +1,4 @@
-import { and, eq, gte, isNull, notInArray, or, sql } from "drizzle-orm";
+import { and, eq, gte, isNotNull, isNull, notInArray, or, sql } from "drizzle-orm";
 import {
   alertKey,
   ALERT_FIRINGS_RESOLVED_WINDOW_MS,
@@ -240,5 +240,47 @@ export async function deliverPendingFirings(
       .update(alertFirings)
       .set({ deliveryAttemptedAt: now })
       .where(eq(alertFirings.id, r.id));
+  }
+}
+
+/**
+ * M13 13.5 deliver-on-resolve (PRD §20). Send a resolve NOTICE for any firing that has
+ * resolved but whose resolution hasn't yet been delivered — and ONLY for firings whose OPEN
+ * state was itself delivered (`delivery_attempted_at IS NOT NULL`): a firing that opened and
+ * closed between two snapshot ticks (never delivered open) must not emit a lone "resolved"
+ * with no preceding "firing". Stamps `resolve_delivered_at` on success OR failure (at-most-once,
+ * mirroring deliverPendingFirings). The firing row carries `status:"resolved"`, so the deliverer
+ * derives an `alert.resolved` envelope. Best-effort: a per-firing throw is caught + logged,
+ * never propagated. Early-returns (no query) when no deliverer is wired. `now` is route-owned.
+ */
+export async function deliverResolvedFirings(
+  db: DbClient,
+  userId: string,
+  deliverer: { deliver(firing: AlertFiring): Promise<void> } | null,
+  now: Date,
+  log?: (err: unknown) => void,
+): Promise<void> {
+  if (!deliverer) return; // delivery disabled — no query
+  const rows = await db
+    .select(firingColumns)
+    .from(alertFirings)
+    .where(
+      and(
+        eq(alertFirings.userId, userId),
+        eq(alertFirings.status, "resolved"),
+        isNotNull(alertFirings.resolvedAt),
+        isNotNull(alertFirings.deliveryAttemptedAt),
+        isNull(alertFirings.resolveDeliveredAt),
+      ),
+    );
+  for (const r of rows) {
+    const firing = toFiring(r);
+    try {
+      await deliverer.deliver(firing);
+    } catch (err) {
+      log?.(err);
+    }
+    // Stamp regardless of outcome — at-most-once resolve notice.
+    await db.update(alertFirings).set({ resolveDeliveredAt: now }).where(eq(alertFirings.id, r.id));
   }
 }
