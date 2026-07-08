@@ -23,7 +23,7 @@ export default defineConfig({
     },
   },
   test: {
-    include: ["packages/**/*.test.ts", "apps/**/*.test.ts"],
+    include: ["packages/**/*.test.ts", "apps/**/*.test.ts", "scripts/**/*.test.ts"],
     environment: "node",
     globalSetup: "./vitest.global-setup.ts",
     // Integration suites share one test DB and TRUNCATE in beforeEach — run files
