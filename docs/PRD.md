@@ -815,20 +815,95 @@ Requirements:
     multi-user product experience / RBAC / tenancy; cloud-hosted SaaS; mobile; browser-extension capture;
     in-tool context-rule _enforcement_ (V1 recommends only); full local-model lifecycle management;
     script/plugin custom-connector runtime; advanced semantic/vector search; subscription cost
-    amortization; scheduled report generation / scheduled analysis (manual-first stays the default).
+    amortization; scheduled report generation / scheduled analysis (manual-first stays the default —
+    _report generation later shipped as an OS-cron script in M13.6; scheduled **analysis** stays deferred_).
+
+13. **Capability Gap Closure (post-GA). DONE (2026-07-08).** A follow-up milestone that closed every
+    promised-vs-actual gap surfaced by the **2026-07-07 code-vs-PRD reconciliation** (run after UAT), which
+    found the intelligence layer was the thinnest part of the product: only 2 of 7 §15 report types
+    existed, §17 context governance had no deterministic implementation, parser improvements never reached
+    history (no 12.5b), the search index went stale between manual reindexes, alert delivery was
+    webhook-only, reports were manual-only, a `lastSyncAt` TODO rendered "—" forever, two doc claims were
+    false, and Cursor sessions were uncaptured. Built in seven dependency-ordered, independently-shippable
+    slices (each through the build loop, gate-green + `--require-db` 0-skipped; suite 622 → 743 tests).
+    Two load-bearing decisions were settled during planning and not re-litigated — **D-M13-1:** the two
+    decrypt-bearing reports follow the M8/search decrypt-then-`redact()` precedent and encrypted fields are
+    NOT promoted to plaintext columns (no migration, no privacy regression, no fingerprint ripple);
+    **D-M13-2:** re-parse covers **Claude Code + Codex only** (Gemini raw records are per-message
+    re-serializations that cannot reconstruct the parser's whole-file input → skipped + reported), and the
+    new Cursor connector stores a composer-envelope raw record so ITS sessions ARE reassemblable.
+
+    - **Slice 13.1 — Truth & small fixes. DONE.** Real `lastSyncAt` (an `onSyncSuccess` callback threaded
+      `sync-worker.ts` → `capture-engine.ts` → `serve.ts`, replacing the hardcoded `null`); two stale doc
+      claims corrected (CONTEXT.md Antigravity-in-first-release, exports.ts "Parquet deferred"); the
+      verified updater signing-key **ceremony runbook** (`docs/guide/operations.md`) — the key itself is
+      the maintainer's manual step, the slice ships the runbook + config wiring.
+    - **Slice 13.2 — Report engine expansion + §17 context governance. DONE.** The 5 missing §15 report
+      types (`project.tool_model_comparison`, `.failed_tool_calls`, `.context_waste`, `.efficiency`,
+      `.trend_anomalies`) as orchestrators mirroring the M7 pattern (`report_type` is free text → **no
+      migration**; new `REPORT_VERSION_M13`). Pure `report-metrics.ts` (`detectAnomalies` rolling z-score;
+      the §17 `classifyContextPath` 8-category classifier + `contextWasteRecommendations` — the
+      deterministic §17 deliverable) and `report-projections.ts` (plaintext aggregates + two
+      **decrypt-bearing** projections per D-M13-1). A dashboard type-select replaced the two hardcoded
+      buttons (zero proxy change).
+    - **Slice 13.3 — Archive re-parse engine (12.5b, §23). DONE.** The keystone deferred from M12.5:
+      `reparseAll` reads back the immutable raw records, decrypts, **reassembles the parser's whole-file
+      input** (Codex by numeric `lineIndex`; Claude by embedded `timestamp`), re-parses under the CURRENT
+      parsers, and upserts **in place by the unchanged fingerprint** (§12) — re-stamping
+      `parser_version`/`catalog_version`. Because a parser bump can change an event's TYPE (and event type
+      is a fingerprint input), it also **GCs orphans**: per re-parsed raw record it DELETEs every
+      fingerprint the fresh parse no longer produces (the 12.7a debt). Admin `POST /v1/replay/reparse` +
+      `db:reparse`. The pure parsers relocated `apps/collector` → `packages/shared/src/parsers/` (shared
+      stays dependency-free); Gemini skipped + reported (D-M13-2). Makes "raw sacred, projections
+      disposable" fully real for parser evolution, not just re-pricing.
+    - **Slice 13.4 — Incremental search + dashboard polish. DONE.** At-ingest index maintenance
+      (`indexSessions`/`indexProjectDoc`/`indexReportDoc` extracted from `rebuildSearchIndex`, wired
+      best-effort at every mutation site) closes the 12.1-deferred "manual reindex only" gap — search
+      stays fresh with no reindex, and the hot path is untouched (post-transaction, awaited-with-swallow).
+      `<b>` snippet highlight (`ts_headline` default markers → a safe `<strong>` splitter, never
+      `dangerouslySetInnerHTML`); rich **Markdown + Mermaid** report rendering (a lazy client island — the
+      12.2b-deferred render); `{limit, offset}` pagination on projects/reports/search.
+    - **Slice 13.5 — Alert delivery completion. DONE.** SMTP delivery (`createSmtpDeliverer` over
+      `nodemailer`) + a **fan-out** composing webhook + SMTP into the single `alertDeliverer` slot;
+      **deliver-on-resolve** (migration `0012` `alert_firings.resolve_delivered_at` + a four-guard
+      at-most-once `deliverResolvedFirings`); and the still-deferred **windowed** connector-failure-rate
+      alert (`connectorHealthWindowed` + a pure `deriveConnectorFailureRateAlerts` sibling; `deriveAlerts`
+      stays FROZEN). Closes the 12.6-deferred delivery + windowed-rate items.
+    - **Slice 13.6 — Scheduled reports + guided onboarding. DONE.** `scripts/generate-reports.mjs`
+      (no-deps, `ADMIN_TOKEN`-authed, timeout-bounded) + the `reports:generate` script + an
+      operations.md section — **OS cron, no in-server scheduler** (the repo's no-background-dispatcher
+      discipline). Plus `scripts/setup-env.mjs` (`setup`, refuses to overwrite, fills the secrets + the
+      dashboard `.env.local` SESSION*SECRET), a PRD §19 `quickstart.md`, and a first-run monitor onboarding
+      empty state. (Scheduled \_analysis* stays deferred.)
+    - **Slice 13.7 — Cursor connector (SQLite poll capture mode). DONE.** Resolves the M12.7d Cursor gate:
+      the first connector to capture from a rewrite-in-place SQLite store
+      (`%APPDATA%\Cursor\…\state.vscdb`, `cursorDiskKV` only — `ItemTable` secrets never read). A new
+      additive **poll** capture mode (`poll?: PollCapability` + `captureMode: "poll"`; existing connectors,
+      the FileWatcher, and discovery unchanged), driven by a best-effort engine `pollLoop` with a
+      persistent `poll_state` change memory (`pollChanged`/`pollCommit`, commit-after-enqueue) so unchanged
+      composers cost zero fetch. Honest fidelity: `experimental`, tokens partial, model usually "default"
+      → uncosted. Antigravity (schema-less binary protobuf, no token/cost) stays dropped/kept-gated per
+      M12.7d.
+
+    **Deferred past M13 (unchanged V2 / non-goals):** scheduled **analysis** (only report _generation_
+    shipped); server-side re-parse of Gemini + Cursor history (D-M13-2 — Cursor stores the envelope for a
+    future engine); everything in the M12 deferral list above.
 
 ### Post-V1 / V2 roadmap (TENTATIVE SKETCH — not committed scope)
 
-> **Status: a planning sketch, not a plan.** M12 is the last _defined_ milestone and the V1-GA finish
-> line. Everything below is the deferred-to-V2 bucket (PRD §1, §4) grouped into a _candidate_ milestone
-> sequence so the direction is visible — numbering, scope, and order are provisional. **Do not execute
-> from this.** When M12 ships, run the same deferral-audit + scope conversation that produced M12, then
-> promote one of these into a real, sliced milestone. Each is sized at "milestone", and several will
-> sub-slice like M12 did.
+> **Status: a planning sketch, not a plan.** **M13 (Capability Gap Closure) is the last _defined_
+> milestone**; M12 (GA) was the V1-GA finish line, and M13 was produced by exactly the deferral-audit +
+> scope conversation this note recommends (run 2026-07-07 after GA). Everything below is the
+> deferred-to-V2 bucket (PRD §1, §4) grouped into a _candidate_ milestone sequence so the direction is
+> visible — **numbering, scope, and order are provisional** (these were sketched as 13–18 before the real
+> M13 existed; they are shown renumbered 14–19 below, but the labels are still a rough sketch, NOT
+> committed scope). **Do not execute from this.** When starting the next milestone, re-run the same
+> deferral-audit + scope conversation and promote one of these into a real, sliced milestone. Each is
+> sized at "milestone", and several will sub-slice like M12/M13 did.
 
 Recommended order is value- and dependency-first:
 
-13. **General AI Chat capture (V2 flagship).** The one net-new _capture_ surface and the PRD's stated V2
+14. **General AI Chat capture (V2 flagship).** The one net-new _capture_ surface and the PRD's stated V2
     headline — ChatGPT / Claude / Gemini **web & desktop** sessions (vs. V1's AI _coding tools_). Starts
     with a capture-surface spike (official data exports vs. local app stores vs. a **browser extension** —
     so this milestone likely delivers the deferred browser-extension capture mechanism), then new
@@ -836,30 +911,31 @@ Recommended order is value- and dependency-first:
     (Work-Session/topic grouping rather than project/git). _Largest new-capability bet; mostly independent
     of the multi-user track, so it can lead._
 
-14. **Multi-user & access control.** Turn the already-multi-user-capable **schema** into a real
+15. **Multi-user & access control.** Turn the already-multi-user-capable **schema** into a real
     multi-user _product_: authentication beyond M12's single-admin login, per-user data isolation,
     roles/RBAC, and team/org concepts. _Builds directly on M12 §12.3 (auth hardening); the foundation for
     SaaS._
 
-15. **Cloud-hosted SaaS.** Multi-tenant hosted deployment: tenancy isolation, a managed/hosted archive,
+16. **Cloud-hosted SaaS.** Multi-tenant hosted deployment: tenancy isolation, a managed/hosted archive,
     scale hardening (quotas + rate limits beyond M12 §12.4), billing/subscriptions, and hosted onboarding.
-    _Depends on M14 (multi-user) and the M12 ops baseline. The biggest architectural shift — local-first
+    _Depends on M15 (multi-user) and the M12 ops baseline. The biggest architectural shift — local-first
     stays a first-class deployment mode alongside hosted._
 
-16. **Cross-platform collectors.** macOS + Linux collectors (V1/M11 are Windows-first), and portable,
+17. **Cross-platform collectors.** macOS + Linux collectors (V1/M11 are Windows-first), and portable,
     signed installers + auto-update across OSes (extends M12 §12.8 distribution). _The architecture was
-    kept portable for exactly this; largely parallelizable with the M13–M15 track._
+    kept portable for exactly this; largely parallelizable with the M14–M16 track._
 
-17. **Advanced intelligence & automation.** Semantic / vector search (V1 ships keyword FTS in §12.1),
-    **scheduled** report generation + analysis (V1 is manual-first), active **in-tool context-rule
-    enforcement** (V1 only recommends), richer trend/anomaly detection, and subscription cost
-    amortization. _Deepens the value of data already captured; benefits from M13's larger corpus._
+18. **Advanced intelligence & automation.** Semantic / vector search (V1 ships keyword FTS in §12.1),
+    **scheduled analysis** (scheduled report _generation_ already shipped in M13.6; V1 analysis stays
+    manual-first), active **in-tool context-rule enforcement** (V1 only recommends), richer trend/anomaly
+    detection, and subscription cost amortization. _Deepens the value of data already captured; benefits
+    from the chat-capture milestone's larger corpus._
 
-18. **Connector ecosystem & local models.** A **script/plugin custom-connector runtime** (V1 is
+19. **Connector ecosystem & local models.** A **script/plugin custom-connector runtime** (V1 is
     config-only), full **local-model lifecycle management** (V1 supports hosted + OpenAI-compatible APIs),
     graduating the experimental connector catalog (opencode, Aider, Copilot, Windsurf, Continue, Cline,
     etc.), and a **mobile** consumption app. _Extensibility + breadth; naturally last._
 
-**Still unsequenced / fold-in candidates:** mobile app (sketched in M18 but could pair with M15 SaaS as a
-consumption surface); browser-extension capture (sketched as M13's mechanism but could be its own slice).
+**Still unsequenced / fold-in candidates:** mobile app (sketched in M19 but could pair with M16 SaaS as a
+consumption surface); browser-extension capture (sketched as M14's mechanism but could be its own slice).
 These are deliberately left loose until the post-GA scope conversation.

@@ -6,7 +6,7 @@
 
 ---
 
-## 0. Status — 2026-06-20
+## 0. Status — 2026-07-08
 
 **V1 is ~95% built.** Milestones **1–9 are implemented and on `main`** (M9 Live Monitor merged via
 PR #12). **M10 (hardening)** is a _bundle_ built in slices: the **operational-alerts slice** (the
@@ -32,11 +32,27 @@ local **NSIS** installer. See the slice plans under
 [`.agents/plans/`](./.agents/plans/) (`m11-tauri-desktop.md` for the bundle + Slices 1–2, then
 `m11-slice{2,3,4,5}-*.md`).
 
-**M12 (Production Readiness / GA)** is the **active milestone** (planned 2026-06-20 from a deferral
-audit). It closes every deferred V1/M11 item — Basic Search + dashboard surfaces (the two V1 functional
-holes), real admin auth, an ops baseline, the archive-replay engine, alert delivery, connector
-hardening, and export/distribution polish — taking the product to **shippable, self-hosted, single-user
-GA**. Multi-user/RBAC/SaaS is V2. Sliced 12.1–12.8 in dependency order; see §3, §6, and PRD §25 M12.
+**M12 (Production Readiness / GA)** is **DONE** (planned 2026-06-20 from a deferral audit; completed
+2026-06-21). It closed every deferred V1/M11 item — Basic Search + dashboard surfaces (the two V1
+functional holes), real admin auth, an ops baseline, the archive-replay engine, alert delivery,
+connector hardening, and export/distribution polish — taking the product to **shippable, self-hosted,
+single-user GA**. Multi-user/RBAC/SaaS is V2. Sliced 12.1–12.8 in dependency order; see §3, §6, and
+PRD §25 M12.
+
+**M13 (Capability Gap Closure)** is **DONE** (post-GA; origin: the 2026-07-07 code-vs-PRD
+reconciliation that, after UAT, found the intelligence layer was the thinnest part of the product).
+It took the product from "capture-and-archive with a thin intelligence layer" to the **full PRD
+promise** by closing every promised-vs-actual gap, in seven dependency-ordered, independently-shippable
+slices: **13.1** truth & small fixes (real `lastSyncAt`, two stale doc claims, the updater signing-key
+runbook) · **13.2** the 5 missing §15 report types + deterministic §17 context governance · **13.3**
+the archive **re-parse** engine (12.5b: server-side decrypt → re-parse → upsert-by-fingerprint +
+orphan-GC; the pure parsers relocated to `@420ai/shared`) · **13.4** at-ingest **incremental search** +
+rich Markdown/Mermaid report rendering, `<b>` snippet highlight, and list pagination · **13.5** alert
+delivery completion (SMTP + a fan-out, deliver-on-resolve, a windowed connector-failure-rate alert;
+migration `0012`) · **13.6** OS-cron **scheduled reports** + guided onboarding (`setup`/quickstart/first-run
+empty state) · **13.7** the **Cursor** connector (a new SQLite **poll** capture mode). All seven merged
+to `main` (PRs #42–#49); the full gate + `--require-db` (0 skipped) stayed green after every slice; the
+suite grew 622 → **743** tests. See §6 and PRD §25 M13.
 
 **CI gate:** a `repo-health` GitHub Actions check (repo-root `tsc -b` + NUL/stray scans + the full
 vitest suite **including the Postgres integration layer**) runs on every PR to `main`
@@ -128,15 +144,26 @@ flowchart TD
 headless collector (`node:sea` sidecar, Rust off the capture path); tray + connector mgmt +
 sync/health + GUI pairing + run-on-login autostart + Windows Credential Manager secrets + Settings
 that supervises the local server-stack (Docker archive + ingest via Rust `std::process::Command`);
-local **NSIS** installer (`npm run build:desktop`). MSI/signed installer + auto-update deferred (§25). 12. ⏳ **Production Readiness / GA** — **PLANNED** (origin: 2026-06-20 deferral audit). One milestone in
-thin slices that takes the product from feature-built to **shippable, self-hosted, single-user GA**.
-Target = self-hosted single-user; **multi-user/RBAC/SaaS → V2**. Slices (dependency order):
-**12.1** Basic Search (§21) · **12.2** Dashboard surfaces (§8.4) · **12.3** Auth hardening (real admin
-login, retire static `ADMIN_TOKEN`/`DEFAULT_EMAIL`) · **12.4** Ops baseline (CI blocking gate, backups + retention, server observability, rate limiting, key rotation, migration rollback) · **12.5**
-Archive-replay engine (§23, retroactive re-derive/re-price) · **12.6** Alert delivery + remaining §20
+local **NSIS** installer (`npm run build:desktop`). MSI/signed installer + auto-update deferred (§25). 12. ✅ **Production Readiness / GA** — **DONE.** One milestone in thin slices (12.1–12.8) that took the
+product from feature-built to **shippable, self-hosted, single-user GA**. Target = self-hosted
+single-user; **multi-user/RBAC/SaaS → V2**. **12.1** Basic Search (§21) · **12.2** Dashboard surfaces
+(§8.4) · **12.3** Auth hardening (real admin login, retired static `ADMIN_TOKEN`/`DEFAULT_EMAIL`) ·
+**12.4** Ops baseline (CI blocking gate, backups + retention, server observability, rate limiting, key
+rotation, migration rollback) · **12.5** Archive-replay engine (§23, retroactive re-derive/re-price —
+12.5a re-price; 12.5b re-parse landed in M13) · **12.6** Alert delivery (webhook) + remaining §20
 conditions · **12.7** Connector hardening (Codex failure classification, per-connector permission
-scopes, connector-catalog-as-data, Cursor/Antigravity) · **12.8** Export/distribution polish (Parquet,
-restore UI, signed installer/auto-update/MSI). See PRD §25 M12.
+scopes, connector-catalog-as-data; Cursor/Antigravity gates resolved → deferred to M13/V2) · **12.8**
+Export/distribution polish (Parquet, restore UI, auto-update; MSI/signed installer parked). See PRD §25 M12. 13. ✅ **Capability Gap Closure** — **DONE** (post-GA, origin: 2026-07-07 code-vs-PRD reconciliation).
+A follow-up milestone that closed every promised-vs-actual gap the reconciliation surfaced — taking the
+product from "capture-and-archive with a thin intelligence layer" to the full PRD promise. Sliced
+13.1–13.7 in dependency order: **13.1** Truth & small fixes (real `lastSyncAt`, stale doc claims,
+updater signing-key runbook) · **13.2** Report engine expansion — the 5 missing §15 report types +
+deterministic §17 context-governance · **13.3** Archive re-parse engine (12.5b: server-side
+decrypt → re-parse → upsert-by-fingerprint + orphan GC; parsers relocated to `@420ai/shared`) ·
+**13.4** Incremental search (at-ingest index) + dashboard polish (`<b>` highlight, react-markdown/Mermaid,
+pagination) · **13.5** Alert delivery completion (SMTP fan-out, deliver-on-resolve, windowed
+connector-failure-rate alert; migration `0012`) · **13.6** Scheduled reports (OS-cron script) + guided
+onboarding · **13.7** Cursor connector (SQLite **poll** capture mode). See PRD §25 M13.
 
 > **Principle:** nothing shows value until the pipe is whole — so make the _thinnest_ end-to-end
 > pipe first (milestone 1), then thicken each stage.
@@ -321,7 +348,7 @@ original M10 "hardening bundle" (exports, catalog signing, replay metadata, pers
       never landed — so V1 close-out completed to **feature-built**, not full written scope. Those two
       holes, plus every other deferred item swept by the audit, now live in **M12** below.
 
-- [ ] **M12 — Production Readiness / GA** (planned 2026-06-20; see PRD §25 M12) — the **active milestone**.
+- [x] **M12 — Production Readiness / GA** (planned 2026-06-20; **DONE 2026-06-21**; see PRD §25 M12).
       Self-hosted single-user GA; multi-user/SaaS → V2. Built in thin slices via the build loop (§2), in
       dependency order: 1. **12.1 Basic Search** (§21) — **DONE** (2026-06-20). Redacted plaintext projection
       (`search_documents`: redact-then-store via M8 `redact()`, DB-`GENERATED` `tsvector` + GIN) + Postgres
@@ -421,6 +448,81 @@ original M10 "hardening bundle" (exports, catalog signing, replay metadata, pers
       cert); the manual `gh release create` runbook is the validated release path. _Manual Level-4
       acceptance (restore + live update E2E) and the one-time signing-key ceremony remain for the
       maintainer._
+- [x] **M13 — Capability Gap Closure** (post-GA; origin: the 2026-07-07 code-vs-PRD reconciliation; see
+      PRD §25 M13) — **DONE 2026-07-08**. Closed every promised-vs-actual gap the reconciliation
+      surfaced, taking the intelligence layer from thin to the full PRD promise. Seven
+      independently-shippable slices (PRs #42–#49), each gate-green + `--require-db` (0 skipped); the
+      suite grew 622 → 743 tests. Two load-bearing design decisions were settled during planning and not
+      re-litigated: **D-M13-1** (the two decrypt-bearing reports follow the M8/search decrypt-then-redact
+      precedent; encrypted fields are NOT promoted to plaintext columns) and **D-M13-2** (re-parse covers
+      Claude + Codex only — Gemini raw records can't reconstruct the parser's whole-file input, so they
+      are skipped + reported; the new Cursor connector stores a composer-envelope raw record so ITS
+      sessions ARE reassemblable). 1. **13.1 Truth & small fixes** — **DONE.** Real `lastSyncAt`: an `onSyncSuccess` callback threaded
+      `sync-worker.ts` → `capture-engine.ts` → `serve.ts` (replacing the hardcoded `null` TODO), stamping
+      ISO on every `"ok"` drain — the desktop StatusBar no longer renders "—". Corrected two stale doc
+      claims (CONTEXT.md's Antigravity-in-first-release line, exports.ts's "Parquet deferred" comment) and
+      shipped the verified updater signing-key **ceremony runbook** (`docs/guide/operations.md`, +
+      `apps/desktop/README.md` pointer), consolidating the older unverified 12.8c blurb it superseded. The
+      key itself is the maintainer's manual action; the slice ships the runbook + verifies the config
+      wiring (`git check-ignore .secrets/tauri-updater.key`). _Review: one medium (CWD-relative key path
+      in the runbook) fixed._ 2. **13.2 Report engine expansion + §17 context governance** — **DONE.** The 5 missing PRD §15 report
+      types: `project.tool_model_comparison`, `project.failed_tool_calls`, `project.context_waste`,
+      `project.efficiency`, `project.trend_anomalies` (widened `ReportType` + the schema enum 1→6, a
+      dispatch switch, `REPORT_VERSION_M13 = "m13-report-v1"`; `report_type` is free text → **no
+      migration**). New pure `packages/shared/src/report-metrics.ts` (`detectAnomalies` rolling z-score,
+      the §17 `classifyContextPath` 8-category classifier + `contextWasteRecommendations` — the
+      deterministic §17 deliverable), `packages/db/src/repositories/report-projections.ts` (plaintext
+      aggregates + the two **decrypt-bearing** projections per D-M13-1), and the 5 orchestrators in
+      `apps/ingest/src/reports/generate-report-m13.ts`; a dashboard type-select replaced the two hardcoded
+      buttons (zero proxy change). _Review: one high (trend-anomalies silently dropped calendar gaps →
+      new pure `alignFailureRateSeries` reindex + tests) fixed._ 3. **13.3 Archive re-parse engine (12.5b)** — **DONE.** Relocated the pure parsers to
+      `packages/shared/src/parsers/` (claude-code, codex-cli, gemini-cli + `ParseResult`), leaving
+      discovery/watch in the collector (`packages/shared` stays dependency-free). `reparse.ts` `reparseAll`:
+      per session, decrypt raw → reassemble the parser's whole-file input (Codex by numeric `lineIndex`;
+      Claude by embedded `timestamp`) → `ingestBatch` re-stamp → **orphan-GC** by fingerprint (the 12.7a
+      debt: a parser bump can change an event's TYPE, so the fresh parse INSERTs the new fingerprint and
+      GC DELETEs every fingerprint the fresh parse no longer produces). Admin `POST /v1/replay/reparse` +
+      `db:reparse` script; Gemini skipped + reported (`skipped.gemini`, D-M13-2). _Review passed; two lows
+      accepted with no change. Headline int test proved `completed → failed` reclassification + orphan-GC +
+      stable count + raw immutability + idempotent re-run._ 4. **13.4 Incremental search + dashboard polish** — **DONE.** Extracted `indexSessions`/`indexProjectDoc`/
+      `indexReportDoc` from `rebuildSearchIndex` and wired a best-effort doc refresh at every mutation site
+      (ingest, projects, reports, interpretations) — search stays fresh with **no manual reindex**;
+      index maintenance is **awaited-with-swallow** (detached promises deadlocked Postgres against the int
+      suite's `TRUNCATE`), mirroring the `deliverFirings` precedent. `<b>` snippet highlight via a safe
+      `splitSnippet` (`<strong>`, never `dangerouslySetInnerHTML`); a `report-markdown.tsx` client island
+      (react-markdown + remark-gfm + lazy Mermaid) replaced `<pre>`; `{limit, offset}` pagination on
+      projects/reports/search with "Load more" pagers (omitted `limit` returns the FULL list — three
+      existing consumers need completeness). Deps `react-markdown@^10`/`remark-gfm@^4`/`mermaid@^11` added
+      to the dashboard. _Review: one high (default-limit truncation of full-list consumers) + one medium
+      (unbounded `inArray`) fixed. Live: 1 mermaid SVG, token-in-HTML == 0, fresh hit with no reindex._ 5. **13.5 Alert delivery completion** — **DONE.** `smtp-deliverer.ts` (`createSmtpDeliverer` via
+      `nodemailer.createTransport`; `createFanoutDeliverer` with `Promise.allSettled` per-child isolation)
+      composed with the webhook deliverer into the single `app.alertDeliverer` slot (SMTP opt-in via
+      `ALERT_SMTP_URL`/`ALERT_EMAIL_FROM`/`ALERT_EMAIL_TO`). Migration `0012` adds
+      `alert_firings.resolve_delivered_at`; `deliverResolvedFirings` (four-guard at-most-once) notifies on
+      resolve; `connectorHealthWindowed` + a pure `deriveConnectorFailureRateAlerts` (`CONNECTOR_RATE_ALERT`,
+      new `"connector.failure_rate"` `AlertCode`) fire on recent data only (`deriveAlerts` left FROZEN —
+      sibling only). `nodemailer` + `@types/nodemailer` added to `apps/ingest`. _Review passed; three lows
+      intentional. `db:rollback` → `db:migrate` cycle proven; real-email send skipped (external write)._ 6. **13.6 Scheduled reports + guided onboarding** — **DONE.** `scripts/generate-reports.mjs` (no-deps;
+      `INGEST_URL` + `ADMIN_TOKEN`; `--types <csv|all> [--project …]`; every fetch
+      `AbortSignal.timeout(30_000)`; non-zero on failure) + the `reports:generate` script + an operations.md
+      "Scheduled reports (opt-in)" section (**OS cron, no in-server scheduler** — the operations.md
+      precedent). `scripts/setup-env.mjs` (refuses to overwrite `.env`; fills
+      `ARCHIVE_ENCRYPTION_KEY`/`ADMIN_TOKEN`/`SESSION_SECRET` via `node:crypto`; also writes the dashboard
+      `.env.local` with the matching `SESSION_SECRET`, mode `0o600`) + the `setup` script; `quickstart.md`
+      (PRD §19, 13 steps); a first-run monitor `onboarding-card.tsx` (zero machines → onboarding, no API
+      change). _Review passed. Live: setup-env produced a boot-valid `.env` and refused re-run._ 7. **13.7 Cursor connector (SQLite poll capture mode)** — **DONE.** The first connector to capture from a
+      rewrite-in-place SQLite store (`%APPDATA%\Cursor\…\state.vscdb`). `cursor-store.ts` (read-only
+      `node:sqlite`; `cursorDiskKV` ONLY — `ItemTable` secrets never read); pure `parseCursorComposer`
+      (mirrors the Gemini snapshot parser; a composer-envelope raw record makes Cursor re-parseable — the
+      D-M13-2 lesson). Additive `poll?: PollCapability` + `captureMode: "poll"` (existing connectors, the
+      FileWatcher, discovery, both entrypoints unchanged — Cursor's `watchGlobs` is `[]`); a best-effort
+      `pollLoop` beside the git sweep; a persistent `poll_state` table + `pollChanged`/`pollCommit` in
+      `QueueStore` (the change memory survives `ack`, unlike `queue_items`); poll sources fold into the
+      capture-surface approval fingerprint. Honest fidelity: `experimental`, tokens partial, model usually
+      `"default"` → uncosted. _Review: one medium (change gate recorded before enqueue → commit-point
+      ordering split into read-only `pollChanged` + post-enqueue `pollCommit`) fixed. Live (read-only):
+      92 composers → 6950 raw records / 18934 events across 30, 0 costed, no ItemTable leak; the full
+      `collector watch → archive → Monitor` round-trip remains a manual pre-sign-off step._
 - [x] **M11 (Tauri desktop)** — built across Slices 1–5; both open design points resolved (see the M11
       subsection in §4): JSON-lines control protocol (`m11-control-v2`) and Rust `std::process::Command`
       server-stack supervision. Signed off 2026-06-16.
