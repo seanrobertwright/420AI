@@ -158,9 +158,14 @@ _For the full setup and day-to-day guide, see [`docs/guide/install.md`](./docs/g
 - [x] M1–M9 — capture → archive → projections → reporting → AI interpretation → Live Monitor
 - [x] M10 — hardening: exports, catalog signing, operational alerts, replay metadata
 - [x] M11 — Tauri desktop/tray collector
-- [ ] **M12 — Production Readiness / GA** (in progress, 8 slices): basic search, dashboard surfaces,
-      auth hardening, ops baseline, archive-replay engine, alert delivery, connector hardening,
-      export/distribution polish
+- [x] M12 — Production Readiness / GA (8 slices): basic search, dashboard surfaces, auth hardening,
+      ops baseline, archive-replay engine, alert delivery, connector hardening, export/distribution
+      polish
+- [x] M13 — Capability Gap Closure (7 slices): truth fixes, the 5 remaining report types + context
+      governance, archive re-parse, incremental search, alert delivery completion, scheduled reports,
+      the Cursor connector
+- [ ] **M14 — General AI Chat Capture** (planned): ChatGPT / Claude / Gemini web+desktop session
+      capture (spike-first), plus catalog admin UIs, desktop polish, and per-event search granularity
 
 See [`SUMMARY.md`](./SUMMARY.md) and the [open issues](https://github.com/seanrobertwright/420AI/issues)
 for the full list.

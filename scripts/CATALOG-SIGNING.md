@@ -91,8 +91,8 @@ curl -X POST "$INGEST_URL/v1/catalog/<id>/reject"  -H "authorization: Bearer $AD
 ```
 
 From approval onward, the server **re-prices new ingests** under the active catalog and stamps their
-`catalog_version`. **Going forward only** — historical rows keep their original prices until the (deferred)
-archive-replay engine ships.
+`catalog_version`. Historical rows keep their original prices until you run the archive-replay engine
+(`npm run db:reprice` or `POST /v1/replay/reprice`, shipped M12 12.5a) to re-price them retroactively.
 
 ---
 

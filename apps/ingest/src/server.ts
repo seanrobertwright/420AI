@@ -69,8 +69,8 @@ const monitorStreamIntervalMs = parsePositiveInt(
 const logLevel = process.env.LOG_LEVEL ?? "info";
 
 // M12 12.4c rate limiting. ON by default (RATE_LIMIT_ENABLED=false is the escape hatch).
-// The login limit is the brute-force guard 12.3 deferred; the global limit is generous so
-// the ingest hot path isn't throttled in normal single-user use.
+// The login limit is the brute-force guard deferred from 12.3 and shipped here; the global
+// limit is generous so the ingest hot path isn't throttled in normal single-user use.
 const rateLimitEnabled = process.env.RATE_LIMIT_ENABLED !== "false";
 const rateLimit = rateLimitEnabled
   ? {

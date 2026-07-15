@@ -110,7 +110,7 @@ A Connector Catalog whose updates are cryptographically verified before the app 
 
 ## Signed Catalog Update
 
-A pricing-catalog update delivered as a detached ed25519-signed bundle (`{version, payload, signature}`). The server verifies the signature against a bundled public key, stores the update as `pending`, and applies it only after explicit admin approval (PRD §10.4/§18/§20). An active update re-prices subsequent ingests going forward (historical rows are re-priced only by the deferred replay engine).
+A pricing-catalog update delivered as a detached ed25519-signed bundle (`{version, payload, signature}`). The server verifies the signature against a bundled public key, stores the update as `pending`, and applies it only after explicit admin approval (PRD §10.4/§18/§20). An active update re-prices subsequent ingests going forward; historical rows are re-priced on demand by the archive-replay engine (`db:reprice` / `POST /v1/replay/reprice`, M12 12.5a).
 
 ## Capture Surface Change
 
