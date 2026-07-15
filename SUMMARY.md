@@ -6,7 +6,7 @@
 
 ---
 
-## 0. Status — 2026-07-08
+## 0. Status — 2026-07-14
 
 **V1 is ~95% built.** Milestones **1–9 are implemented and on `main`** (M9 Live Monitor merged via
 PR #12). **M10 (hardening)** is a _bundle_ built in slices: the **operational-alerts slice** (the
@@ -53,6 +53,21 @@ migration `0012`) · **13.6** OS-cron **scheduled reports** + guided onboarding 
 empty state) · **13.7** the **Cursor** connector (a new SQLite **poll** capture mode). All seven merged
 to `main` (PRs #42–#49); the full gate + `--require-db` (0 skipped) stayed green after every slice; the
 suite grew 622 → **743** tests. See §6 and PRD §25 M13.
+
+**M14 (General AI Chat Capture + deferral sweep)** is **IN PROGRESS** (planned 2026-07-14 via the
+same deferral-audit + scope-conversation process that produced M12/M13; definition + audit in
+[`.agents/plans/m14-general-ai-chat-capture.md`](./.agents/plans/m14-general-ai-chat-capture.md)).
+It promotes the PRD §25 sketch item 14 — the V2 flagship — into a real milestone: **14.0** ✅ the
+capture-surface spike (**DONE 2026-07-14** —
+[`docs/research/chat-capture-spike.md`](./docs/research/chat-capture-spike.md): **no chat surface
+stores conversations locally**, so capture = official exports (Batch) + a browser extension
+(live); gates the connector slices) · **14.1** ✅ truth & hygiene (**DONE 2026-07-14** — README
+roadmap, stale deferred-wording sweep, the M10–M13 system-review) · **14.2** catalog admin UIs ·
+**14.3** desktop polish trio · **14.4** per-event search granularity · **14.5+** the chat
+connectors + non-repo attribution, sliced from the spike's verdicts. Four scope decisions
+(D-M14-1…4) are settled — including a **pre-sign-off checklist** of the outstanding maintainer
+manual actions (signing-key ceremony, restore drill, Cursor round-trip, live SMTP, auth QA) so
+they stop slipping.
 
 **CI gate:** a `repo-health` GitHub Actions check (repo-root `tsc -b` + NUL/stray scans + the full
 vitest suite **including the Postgres integration layer**) runs on every PR to `main`
@@ -163,7 +178,11 @@ decrypt → re-parse → upsert-by-fingerprint + orphan GC; parsers relocated to
 **13.4** Incremental search (at-ingest index) + dashboard polish (`<b>` highlight, react-markdown/Mermaid,
 pagination) · **13.5** Alert delivery completion (SMTP fan-out, deliver-on-resolve, windowed
 connector-failure-rate alert; migration `0012`) · **13.6** Scheduled reports (OS-cron script) + guided
-onboarding · **13.7** Cursor connector (SQLite **poll** capture mode). See PRD §25 M13.
+onboarding · **13.7** Cursor connector (SQLite **poll** capture mode). See PRD §25 M13. 14. 🔜 **General AI Chat capture (+ deferral sweep)** — **PLANNED 2026-07-14**, the V2 flagship promoted
+from the §25 sketch via the deferral-audit + scope-conversation process. Spike-first (**14.0 gates the
+connector slices**), plus three category-B pull-ins (catalog admin UIs, desktop polish, per-event search
+granularity) and a truth slice + maintainer pre-sign-off checklist. See
+[`.agents/plans/m14-general-ai-chat-capture.md`](./.agents/plans/m14-general-ai-chat-capture.md).
 
 > **Principle:** nothing shows value until the pipe is whole — so make the _thinnest_ end-to-end
 > pipe first (milestone 1), then thicken each stage.
@@ -523,6 +542,29 @@ original M10 "hardening bundle" (exports, catalog signing, replay metadata, pers
       ordering split into read-only `pollChanged` + post-enqueue `pollCommit`) fixed. Live (read-only):
       92 composers → 6950 raw records / 18934 events across 30, 0 costed, no ItemTable leak; the full
       `collector watch → archive → Monitor` round-trip remains a manual pre-sign-off step._
+- [ ] **M14 — General AI Chat Capture (+ deferral sweep)** — **IN PROGRESS** (planned 2026-07-14;
+      deferral audit + scope conversation run 2026-07-14; four decisions D-M14-1…4 settled — see
+      [`.agents/plans/m14-general-ai-chat-capture.md`](./.agents/plans/m14-general-ai-chat-capture.md)
+      for the full audit, slice breakdown, and the maintainer pre-sign-off checklist). Dependency order:
+      ✅ **14.0** chat capture-surface spike — **DONE 2026-07-14**
+      ([`docs/research/chat-capture-spike.md`](./docs/research/chat-capture-spike.md)): read-only recon
+      found **no local conversation store on any surface** (claude.ai IndexedDB ~0 in the desktop app
+      AND Chrome; chatgpt.com IndexedDB empty; gemini.google.com none) → capture = official exports
+      (honest **Batch** liveness, feasible on the existing snapshot-parse framework) + a browser
+      extension for live capture (recommended 14.5 export connectors → 14.7 research-gated extension);
+      side-finds: desktop-launched Claude Code sessions land OUTSIDE the current connector glob
+      (`%APPDATA%\Claude\claude-code-sessions\`), and Anthropic's own ChromeNativeHost validates
+      extension→local delivery ·
+      ✅ **14.1** truth & hygiene — **DONE 2026-07-14**: README roadmap unfrozen (was "M12 in
+      progress"), stale "deferred" wording swept (auth.ts/server.ts 12.4c rate limiting; CONTEXT.md +
+      CATALOG-SIGNING.md replay engine), all four connector-capture-spike follow-ups closed with
+      evidence, and the missing **M10–M13 system-review** written
+      ([`.agents/system-reviews/m10-m13-review.md`](./.agents/system-reviews/m10-m13-review.md)) ·
+      **14.2** catalog admin UIs · **14.3** desktop polish trio (connectorHealth, GUI unpair, auth/me
+      nav) · **14.4** per-event search granularity · **14.5+** chat connectors + non-repo
+      (Work-Session/topic) attribution, sliced from the 14.0 verdicts. Non-goals unchanged
+      (multi-user/SaaS, MSI/signing, Antigravity, semantic search). Next action: `/lril:plan-feature`
+      for 14.2 (or jump to 14.5 — its gate is lifted).
 - [x] **M11 (Tauri desktop)** — built across Slices 1–5; both open design points resolved (see the M11
       subsection in §4): JSON-lines control protocol (`m11-control-v2`) and Rust `std::process::Command`
       server-stack supervision. Signed off 2026-06-16.

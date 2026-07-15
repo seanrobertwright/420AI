@@ -16,8 +16,8 @@ interface LoginBody {
  * carries as a bearer (the hybrid adminAuthorized gate accepts it). GET /v1/auth/me is
  * a session-gated identity probe for the dashboard's logged-in state.
  *
- * Brute-force rate-limiting is explicitly DEFERRED to 12.4 (ops baseline): scrypt's cost
- * + a localhost single-user deployment make it acceptable for now.
+ * Brute-force rate-limiting was deferred from 12.3 and SHIPPED in 12.4c: the route config
+ * below applies app.rateLimitLogin (strict per-route limit, on by default via server.ts).
  */
 export default async function authRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Body: LoginBody }>(

@@ -889,11 +889,27 @@ Requirements:
     shipped); server-side re-parse of Gemini + Cursor history (D-M13-2 — Cursor stores the envelope for a
     future engine); everything in the M12 deferral list above.
 
+14. **General AI Chat Capture (+ deferral sweep). PLANNED (2026-07-14).** The V2 flagship (§1, §4)
+    promoted from the sketch below via the standard deferral-audit + scope-conversation process (audit,
+    slice breakdown, and settled decisions D-M14-1…4 in `.agents/plans/m14-general-ai-chat-capture.md`).
+    **Spike-first:** Slice 14.0 is the (previously unrun) chat capture-surface spike — Claude web+desktop,
+    ChatGPT web+desktop, Gemini web, and the **browser-extension mechanism as a first-class question** —
+    whose per-surface feasibility verdicts gate the connector slices (ship what's feasible; a gated
+    surface never blocks the milestone, per the 12.7d precedent). The connectors normalize onto the
+    **existing event taxonomy** (fingerprint unchanged) and add **non-repo attribution**
+    (Work-Session/topic grouping). Riding along: three tracked deferrals as thin slices (catalog admin
+    UIs — 12.7c; desktop polish trio — 12.3/12.7c; per-event search granularity — 12.1), a 13.1-style
+    truth slice (stale README/comments; the missing M12/M13 system-review), and a **maintainer
+    pre-sign-off checklist** (updater signing-key ceremony, restore drill, live auto-update E2E, live
+    SMTP send, auth QA screenshots, Cursor live round-trip) so the outstanding manual actions stop
+    slipping. **Non-goals unchanged:** multi-user/RBAC/SaaS, MSI/code signing/CI release, Antigravity,
+    semantic/vector search, mobile, in-tool enforcement, scheduled analysis.
+
 ### Post-V1 / V2 roadmap (TENTATIVE SKETCH — not committed scope)
 
-> **Status: a planning sketch, not a plan.** **M13 (Capability Gap Closure) is the last _defined_
-> milestone**; M12 (GA) was the V1-GA finish line, and M13 was produced by exactly the deferral-audit +
-> scope conversation this note recommends (run 2026-07-07 after GA). Everything below is the
+> **Status: a planning sketch, not a plan.** **M14 (General AI Chat Capture, above) is now the last
+> _defined_ milestone** — promoted from item 14 of this sketch by the 2026-07-14 deferral audit + scope
+> conversation, exactly the process this note recommends (as M13 was on 2026-07-07 after GA). Everything below is the
 > deferred-to-V2 bucket (PRD §1, §4) grouped into a _candidate_ milestone sequence so the direction is
 > visible — **numbering, scope, and order are provisional** (these were sketched as 13–18 before the real
 > M13 existed; they are shown renumbered 14–19 below, but the labels are still a rough sketch, NOT
@@ -903,13 +919,7 @@ Requirements:
 
 Recommended order is value- and dependency-first:
 
-14. **General AI Chat capture (V2 flagship).** The one net-new _capture_ surface and the PRD's stated V2
-    headline — ChatGPT / Claude / Gemini **web & desktop** sessions (vs. V1's AI _coding tools_). Starts
-    with a capture-surface spike (official data exports vs. local app stores vs. a **browser extension** —
-    so this milestone likely delivers the deferred browser-extension capture mechanism), then new
-    connectors normalizing onto the **existing event taxonomy**, plus attribution for non-repo chats
-    (Work-Session/topic grouping rather than project/git). _Largest new-capability bet; mostly independent
-    of the multi-user track, so it can lead._
+14. ~~**General AI Chat capture (V2 flagship).**~~ **PROMOTED → the real M14 above (2026-07-14).**
 
 15. **Multi-user & access control.** Turn the already-multi-user-capable **schema** into a real
     multi-user _product_: authentication beyond M12's single-admin login, per-user data isolation,

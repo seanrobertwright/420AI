@@ -167,7 +167,21 @@ Each tool uses its **own token schema**. The normalizer must map all to one shap
 
 ## Open follow-ups
 
-- [ ] Inspect `%APPDATA%\Cursor\User\...\state.vscdb` to assess a real Cursor connector.
-- [ ] Confirm Codex `session_meta` payload contains `cwd`/git info for attribution.
-- [ ] Verify Gemini `projectHash` is a stable hash of the project path (for project mapping).
-- [ ] Confirm live append/rewrite behavior by watching a file during an active session.
+All closed (statuses recorded 2026-07-14, M14 slice 14.1 truth sweep):
+
+- [x] Inspect `%APPDATA%\Cursor\User\...\state.vscdb` to assess a real Cursor connector —
+      **done**: inspected in the 12.7d spike (`.agents/execution-reports/m12-slice7d-*.md`),
+      connector shipped in M13.7 (SQLite poll capture mode).
+- [x] Confirm Codex `session_meta` payload contains `cwd`/git info for attribution —
+      **confirmed**: the shipped parser extracts `payload.cwd` + `payload.git.branch` from
+      `session_meta` (`packages/shared/src/parsers/codex-cli.ts`).
+- [x] Verify Gemini `projectHash` is a stable hash of the project path (for project mapping) —
+      **resolved differently**: the hash is opaque but the real path is recovered via the
+      sessions' own metadata (`apps/collector/src/discovery/gemini-roots.ts` documents the
+      `dirName == projectHash == project_path` contract).
+- [x] Confirm live append/rewrite behavior by watching a file during an active session —
+      **proven in production**: the M4+ connectors have captured live sessions through M13
+      (13.7's live run: 92 composers → 18,934 events).
+
+**Successor spike:** General AI Chat surfaces (ChatGPT/Claude/Gemini web+desktop) →
+[`chat-capture-spike.md`](./chat-capture-spike.md) (M14 slice 14.0).
