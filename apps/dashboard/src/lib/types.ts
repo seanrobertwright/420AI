@@ -8,6 +8,8 @@
  * `@420ai/shared` (SessionProjection/UsageTotals/…) and are imported directly there.
  */
 
+import type { ConnectorCatalogPayload } from "@420ai/shared";
+
 /** Mirror of `@420ai/db` ProjectRow (`createdAt`/`archivedAt` are `Date` server-side). */
 export interface ProjectRow {
   id: string;
@@ -69,6 +71,23 @@ export interface PricingCatalogRow {
   id: string;
   version: string;
   payload: Record<string, unknown>;
+  signature: string;
+  status: "pending" | "active" | "superseded" | "rejected";
+  uploadedAt: string;
+  approvedAt: string | null;
+  approvedBy: string | null;
+}
+
+/**
+ * Mirror of `@420ai/db` ConnectorCatalogRow (connector-catalogs.ts) — the M12 12.7c signed
+ * connector catalog's lifecycle row (M14 14.2 surfaces its approval gate). Timestamps are
+ * already ISO `string` on the wire (the repo's `toRow` normalizes on read — do not re-coerce).
+ * `payload` IS typed (unlike pricing): the view renders the per-catalog entry count.
+ */
+export interface ConnectorCatalogRow {
+  id: string;
+  version: string;
+  payload: ConnectorCatalogPayload;
   signature: string;
   status: "pending" | "active" | "superseded" | "rejected";
   uploadedAt: string;

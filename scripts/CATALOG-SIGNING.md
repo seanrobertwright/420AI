@@ -77,6 +77,10 @@ curl -X POST "$INGEST_URL/v1/catalog" \
 
 (`$INGEST_URL` defaults to `http://localhost:8420`; `$ADMIN_TOKEN` is the server's admin token.)
 
+> **Or use the dashboard (M14 14.2):** the **Catalog** page has an upload form — paste or pick
+> `signed.json` and it submits through the same-origin proxy (no raw admin token needed). Signing
+> itself stays offline either way; ingest re-verifies the signature on every upload path.
+
 While anything is pending, `GET /v1/catalog` lists it and `GET /v1/monitor` shows a
 `catalog.update_requires_approval` operational alert.
 
@@ -180,6 +184,10 @@ curl -X POST "$INGEST_URL/v1/connector-catalog" -H "authorization: Bearer $ADMIN
 curl -X POST "$INGEST_URL/v1/connector-catalog/<id>/approve" -H "authorization: Bearer $ADMIN_TOKEN"
 # → 200 active   (prior active atomically superseded)
 ```
+
+> **Or approve/reject from the dashboard (M14 14.2):** pending connector catalogs appear on the
+> **Catalog** page with Approve/Reject buttons. The **upload** step stays CLI-only for connector
+> catalogs (only pricing has a dashboard upload form).
 
 The collector pulls the **active** catalog at startup via the **machine-authed** `GET
 /v1/connector-catalog/active` (its ingest token, not the admin token), caches it at
