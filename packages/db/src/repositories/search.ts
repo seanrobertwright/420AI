@@ -24,12 +24,12 @@ import {
  *
  *   - `rebuildSearchIndex(db)` — the admin-triggered FULL rebuild. Deletes every
  *     `search_documents` row, then re-materializes from reports + projects +
- *     sessions. SESSION content is the ONLY decrypt path here (mirrors
- *     `transcript.ts` / `exports.ts`@304): each raw record is `decryptField`-ed,
- *     the concatenation `redact()`-ed, and only the MASKED text is stored. Every
- *     string written (titles included) passes `redact()` first — search snippets
- *     leave the archive, so this is the §18 gate for this surface. Each row stamps
- *     `REDACTION_VERSION` (§23).
+ *     sessions + (M14 14.4) per-event docs. SESSION and EVENT content are the ONLY
+ *     decrypt paths here (mirrors `transcript.ts` / `exports.ts`@304): each raw
+ *     record is `decryptField`-ed, the text `redact()`-ed, and only the MASKED text
+ *     is stored. Every string written (titles included) passes `redact()` first —
+ *     search snippets leave the archive, so this is the §18 gate for this surface.
+ *     Each row stamps `REDACTION_VERSION` (§23).
  *
  *   - `indexSessions(db, sessionIds)` / `indexProjectDoc` / `indexReportDoc` —
  *     M13 13.4 INCREMENTAL maintenance: the same doc builds scoped to the entities
@@ -60,6 +60,8 @@ interface DocInput {
   entityType: SearchEntityType;
   entityId: string;
   projectId: string | null;
+  /** Grouping key for UI session-grouping (M14 14.4) — set on session/event rows, else null. */
+  sessionId: string | null;
   title: string | null;
   body: string;
 }
@@ -78,6 +80,7 @@ async function upsertDoc(db: DbClient, doc: DocInput): Promise<void> {
       entityType: doc.entityType,
       entityId: doc.entityId,
       projectId: doc.projectId,
+      sessionId: doc.sessionId,
       title: doc.title,
       body: doc.body,
       redactionVersion: REDACTION_VERSION,
@@ -87,6 +90,7 @@ async function upsertDoc(db: DbClient, doc: DocInput): Promise<void> {
       set: {
         userId: doc.userId,
         projectId: doc.projectId,
+        sessionId: doc.sessionId,
         title: doc.title,
         body: doc.body,
         redactionVersion: REDACTION_VERSION,
@@ -112,6 +116,7 @@ function reportDoc(r: {
     entityType: "report",
     entityId: r.id,
     projectId: r.projectId,
+    sessionId: null,
     title: redact(r.reportType).redacted,
     body: redact(r.markdown).redacted,
   };
@@ -131,6 +136,7 @@ function projectDoc(
     entityType: "project",
     entityId: p.id,
     projectId: p.id,
+    sessionId: null,
     title: redact(p.name).redacted,
     body: redact(parts.join(" ")).redacted,
   };
@@ -144,11 +150,93 @@ interface SessionMetaRow {
 }
 
 /**
- * Build + upsert ONE session doc. Content comes from the session's raw records
- * (decrypt → cap → redact); projectId via the M5 attribution join (null when
- * unattributed — never blocks indexing).
+ * Total decrypted chars per EVENT document. Mirrors the spirit of
+ * `DEFAULT_TRANSCRIPT_CAPS.maxCharsPerRecord` (`transcript.ts`) — an event's backing
+ * raw record can run long, but the searchable signal is the first few KB.
  */
-async function indexOneSession(db: DbClient, s: SessionMetaRow): Promise<void> {
+const EVENT_BODY_MAX_CHARS = 4000;
+
+/**
+ * Cap on indexed event docs per session. Mirrors the spirit of
+ * `DEFAULT_TRANSCRIPT_CAPS.maxRecords` — bounds both index size and the per-session
+ * decrypt loop for a chatty session during a full rebuild.
+ */
+const MAX_EVENT_DOCS_PER_SESSION = 500;
+
+/**
+ * The four event types that carry searchable human text (M14 14.4 scope decision).
+ * Low-signal types (file/context/usage/cost/session/tool.call.started) get no row.
+ */
+const INDEXED_EVENT_TYPES = [
+  "message.user",
+  "message.assistant",
+  "tool.call.completed",
+  "tool.call.failed",
+] as const;
+
+/**
+ * Build + upsert per-event docs for one session's `INDEXED_EVENT_TYPES` events (M14
+ * 14.4). Text comes from the SAME `events ⋈ raw_source_records` join as
+ * `transcript.ts` (`events.payload` is NULL for `message.*`), decrypted then
+ * `redact()`-ed PER EVENT — the §18 gate applies here exactly as it does for the
+ * session doc. `entityId` = the event's fingerprint (globally unique — the
+ * `(entity_type, entity_id)` upsert target needs no change). Returns the number of
+ * event docs upserted.
+ */
+async function indexSessionEvents(
+  db: DbClient,
+  s: SessionMetaRow,
+  projectId: string | null,
+): Promise<number> {
+  const rows = await db
+    .select({
+      fingerprint: events.fingerprint,
+      ciphertext: rawSourceRecords.payloadCiphertext,
+      iv: rawSourceRecords.payloadIv,
+      tag: rawSourceRecords.payloadTag,
+    })
+    .from(events)
+    .innerJoin(
+      rawSourceRecords,
+      and(
+        eq(rawSourceRecords.sourceRecordId, events.rawRecordId),
+        eq(rawSourceRecords.sessionId, events.sessionId),
+      ),
+    )
+    .where(
+      and(eq(events.sessionId, s.sessionId), inArray(events.eventType, [...INDEXED_EVENT_TYPES])),
+    )
+    .orderBy(asc(events.ts))
+    .limit(MAX_EVENT_DOCS_PER_SESSION);
+
+  let indexed = 0;
+  for (const row of rows) {
+    // decryptField throws on a key/tag error — let it propagate (silent library).
+    const plaintext = decryptField({ ciphertext: row.ciphertext, iv: row.iv, tag: row.tag });
+    const body = plaintext.slice(0, EVENT_BODY_MAX_CHARS);
+    // §18 gate: redact the decrypted event body BEFORE storing it.
+    await upsertDoc(db, {
+      userId: s.userId,
+      entityType: "event",
+      entityId: row.fingerprint,
+      projectId,
+      sessionId: s.sessionId,
+      title: null,
+      body: redact(body).redacted,
+    });
+    indexed++;
+  }
+  return indexed;
+}
+
+/**
+ * Build + upsert ONE session doc, THEN its per-event docs (M14 14.4 hybrid — the
+ * session row stays for the broad "this session is about X" match + group header;
+ * events add drill-down precision). Content comes from the session's raw records
+ * (decrypt → cap → redact); projectId via the M5 attribution join (null when
+ * unattributed — never blocks indexing). Returns the number of event docs upserted.
+ */
+async function indexOneSession(db: DbClient, s: SessionMetaRow): Promise<number> {
   // Resolve the session's project via the M5 attribution join (best-effort).
   const [attr] = await db
     .select({ projectId: workspaces.projectId })
@@ -187,9 +275,12 @@ async function indexOneSession(db: DbClient, s: SessionMetaRow): Promise<void> {
     entityType: "session",
     entityId: s.sessionId,
     projectId,
+    sessionId: s.sessionId,
     title: redact(`${s.sourceConnector} · ${s.sessionId}`).redacted,
     body: redact(combined).redacted,
   });
+
+  return indexSessionEvents(db, s, projectId);
 }
 
 /**
@@ -200,15 +291,20 @@ async function indexOneSession(db: DbClient, s: SessionMetaRow): Promise<void> {
 const INDEX_SESSIONS_CHUNK = 500;
 
 /**
- * Incrementally (re-)index the given sessions (M13 13.4). One doc per distinct
- * sessionId — `min()` aggregates pick a representative connector/user so the
- * result is EXACTLY one row per session (the (entity_type, entity_id) unique
- * index forbids two). Unknown session ids (no raw records yet) are skipped.
- * Returns the number of session docs upserted.
+ * Incrementally (re-)index the given sessions (M13 13.4; M14 14.4 adds per-event
+ * docs). One session doc per distinct sessionId — `min()` aggregates pick a
+ * representative connector/user so the result is EXACTLY one row per session (the
+ * (entity_type, entity_id) unique index forbids two). Unknown session ids (no raw
+ * records yet) are skipped. Returns the number of session docs and event docs
+ * upserted.
  */
-export async function indexSessions(db: DbClient, sessionIds: string[]): Promise<number> {
+export async function indexSessions(
+  db: DbClient,
+  sessionIds: string[],
+): Promise<{ sessions: number; events: number }> {
   const ids = [...new Set(sessionIds)];
-  let indexed = 0;
+  let sessions = 0;
+  let eventsIndexed = 0;
 
   for (let i = 0; i < ids.length; i += INDEX_SESSIONS_CHUNK) {
     const sessionMeta = await db
@@ -223,11 +319,11 @@ export async function indexSessions(db: DbClient, sessionIds: string[]): Promise
       .groupBy(rawSourceRecords.sessionId);
 
     for (const s of sessionMeta) {
-      await indexOneSession(db, s);
+      eventsIndexed += await indexOneSession(db, s);
     }
-    indexed += sessionMeta.length;
+    sessions += sessionMeta.length;
   }
-  return indexed;
+  return { sessions, events: eventsIndexed };
 }
 
 /**
@@ -335,16 +431,24 @@ export async function rebuildSearchIndex(db: DbClient): Promise<ReindexCounts> {
       projectCount++;
     }
 
-    // 3. Sessions — every distinct sessionId through the shared incremental build.
+    // 3. Sessions — every distinct sessionId through the shared incremental build
+    // (events come free: indexSessions fans each session into its session doc +
+    // per-event docs).
     const idRows = await tx
       .selectDistinct({ sessionId: rawSourceRecords.sessionId })
       .from(rawSourceRecords);
-    const sessions = await indexSessions(
+    const { sessions, events: eventCount } = await indexSessions(
       tx,
       idRows.map((r) => r.sessionId),
     );
 
-    return { reports, projects: projectCount, sessions, total: reports + projectCount + sessions };
+    return {
+      reports,
+      projects: projectCount,
+      sessions,
+      events: eventCount,
+      total: reports + projectCount + sessions + eventCount,
+    };
   });
 }
 
@@ -378,6 +482,7 @@ export async function searchDocuments(
       entityType: searchDocumentsTbl.entityType,
       entityId: searchDocumentsTbl.entityId,
       projectId: searchDocumentsTbl.projectId,
+      sessionId: searchDocumentsTbl.sessionId,
       title: searchDocumentsTbl.title,
       // Snippet over the ALREADY-redacted body — safe to render.
       snippet: sql<string>`ts_headline('english', ${searchDocumentsTbl.body}, ${tsq}, 'MaxFragments=2, MinWords=3, MaxWords=12')`,
@@ -397,6 +502,7 @@ export async function searchDocuments(
       entityType: r.entityType as SearchEntityType,
       entityId: r.entityId,
       projectId: r.projectId,
+      sessionId: r.sessionId,
       title: r.title,
       snippet: r.snippet,
       rank: Number(r.rank),

@@ -16,17 +16,60 @@ const ENTITY_BADGE: Record<SearchEntityType, string> = {
   session: "border-transparent bg-sky-500/15 text-sky-400",
   report: "border-transparent bg-violet-500/15 text-violet-400",
   project: "border-transparent bg-emerald-500/15 text-emerald-400",
+  event: "border-transparent bg-amber-500/15 text-amber-400",
 };
 
 /**
- * Where a hit links within the 12.2a surfaces: project → its detail; session → the owning
+ * Where a hit links within the 12.2a surfaces: project → its detail; session/event → the owning
  * project's detail (its row appears in that project's sessions table); report → the reports
  * list (no per-report deep route this slice). Returns null when there is no resolvable target.
  */
 function hitHref(hit: SearchHit): string | null {
   if (hit.entityType === "project") return `/projects/${hit.entityId}`;
-  if (hit.entityType === "session") return hit.projectId ? `/projects/${hit.projectId}` : null;
+  if (hit.entityType === "session" || hit.entityType === "event") {
+    return hit.projectId ? `/projects/${hit.projectId}` : null;
+  }
   return "/reports";
+}
+
+/** One rank-ordered render item: a standalone report/project hit, or a session group. */
+type RenderItem =
+  | { kind: "single"; hit: SearchHit }
+  | { kind: "group"; sessionId: string; sessionHit: SearchHit | null; eventHits: SearchHit[] };
+
+/**
+ * Group `session`/`event` hits under their `sessionId` (14.4); `report`/`project` hits
+ * stay standalone. A pure client-side reshape of the already-ranked `hits` — a group's
+ * position is set by its FIRST member's index, so the overall rank order (best hit per
+ * group first) is preserved. Does not re-sort, so offset-paginated appends stay correct.
+ */
+function groupHitsBySession(hits: SearchHit[]): RenderItem[] {
+  const items: RenderItem[] = [];
+  const groupIndex = new Map<string, number>();
+
+  for (const hit of hits) {
+    if (hit.entityType !== "session" && hit.entityType !== "event") {
+      items.push({ kind: "single", hit });
+      continue;
+    }
+    const key = hit.entityType === "session" ? hit.entityId : (hit.sessionId ?? hit.entityId);
+    const existingIdx = groupIndex.get(key);
+    if (existingIdx === undefined) {
+      groupIndex.set(key, items.length);
+      items.push({
+        kind: "group",
+        sessionId: key,
+        sessionHit: hit.entityType === "session" ? hit : null,
+        eventHits: hit.entityType === "event" ? [hit] : [],
+      });
+      continue;
+    }
+    const group = items[existingIdx];
+    if (group?.kind !== "group") continue;
+    if (hit.entityType === "session") group.sessionHit = hit;
+    else group.eventHits.push(hit);
+  }
+  return items;
 }
 
 /**
@@ -48,6 +91,28 @@ function HighlightedSnippet({ snippet }: { snippet: string }) {
         ),
       )}
     </p>
+  );
+}
+
+/** One hit's badge + title/link + rank + snippet. `indent` nests an event under its session header. */
+function HitRow({ hit, indent = false }: { hit: SearchHit; indent?: boolean }) {
+  const href = hitHref(hit);
+  const title = hit.title ?? hit.entityId;
+  return (
+    <div className={cn("space-y-1", indent && "border-border/60 ml-4 border-l pl-3")}>
+      <div className="flex items-center gap-2">
+        <Badge className={cn(ENTITY_BADGE[hit.entityType])}>{hit.entityType}</Badge>
+        {href ? (
+          <Link href={href} className="text-primary text-sm font-medium hover:underline">
+            {title}
+          </Link>
+        ) : (
+          <span className="text-sm font-medium">{title}</span>
+        )}
+        <span className="text-muted-foreground ml-auto text-xs">rank {hit.rank.toFixed(3)}</span>
+      </div>
+      <HighlightedSnippet snippet={hit.snippet} />
+    </div>
   );
 }
 
@@ -175,6 +240,7 @@ export function SearchView() {
           >
             <option value="">All types</option>
             <option value="session">Sessions</option>
+            <option value="event">Events</option>
             <option value="report">Reports</option>
             <option value="project">Projects</option>
           </select>
@@ -222,30 +288,35 @@ export function SearchView() {
             ) : (
               <>
                 <ul className="space-y-4">
-                  {results.hits.map((hit) => {
-                    const href = hitHref(hit);
-                    const title = hit.title ?? hit.entityId;
+                  {groupHitsBySession(results.hits).map((item) => {
+                    if (item.kind === "single") {
+                      return (
+                        <li key={`${item.hit.entityType}:${item.hit.entityId}`}>
+                          <HitRow hit={item.hit} />
+                        </li>
+                      );
+                    }
                     return (
-                      <li key={`${hit.entityType}:${hit.entityId}`} className="space-y-1">
-                        <div className="flex items-center gap-2">
-                          <Badge className={cn(ENTITY_BADGE[hit.entityType])}>
-                            {hit.entityType}
-                          </Badge>
-                          {href ? (
-                            <Link
-                              href={href}
-                              className="text-primary text-sm font-medium hover:underline"
-                            >
-                              {title}
-                            </Link>
-                          ) : (
-                            <span className="text-sm font-medium">{title}</span>
-                          )}
-                          <span className="text-muted-foreground ml-auto text-xs">
-                            rank {hit.rank.toFixed(3)}
-                          </span>
-                        </div>
-                        <HighlightedSnippet snippet={hit.snippet} />
+                      <li key={`session-group:${item.sessionId}`} className="space-y-2">
+                        {item.sessionHit ? (
+                          <HitRow hit={item.sessionHit} />
+                        ) : (
+                          <div className="flex items-center gap-2">
+                            <Badge className={cn(ENTITY_BADGE.session)}>session</Badge>
+                            <span className="text-sm font-medium">{item.sessionId}</span>
+                          </div>
+                        )}
+                        {item.eventHits.length > 0 ? (
+                          <div className="space-y-3">
+                            {item.eventHits.map((eventHit) => (
+                              <HitRow
+                                key={`${eventHit.entityType}:${eventHit.entityId}`}
+                                hit={eventHit}
+                                indent
+                              />
+                            ))}
+                          </div>
+                        ) : null}
                       </li>
                     );
                   })}

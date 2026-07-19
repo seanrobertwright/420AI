@@ -547,9 +547,10 @@ export const searchDocuments = pgTable(
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id),
-    entityType: text("entity_type").notNull(), // 'session' | 'report' | 'project'
-    entityId: text("entity_id").notNull(), // sessionId (text) | report uuid | project uuid
+    entityType: text("entity_type").notNull(), // 'session' | 'report' | 'project' | 'event'
+    entityId: text("entity_id").notNull(), // sessionId (text) | report uuid | project uuid | event fingerprint
     projectId: uuid("project_id"), // nullable filter key (unattributed sessions → null)
+    sessionId: text("session_id"), // nullable grouping key (event/session rows only; M14 14.4)
     title: text("title"),
     body: text("body").notNull(),
     redactionVersion: text("redaction_version").notNull(), // REDACTION_VERSION stamp (§23)
@@ -564,5 +565,6 @@ export const searchDocuments = pgTable(
     uniqueIndex("search_documents_entity").on(t.entityType, t.entityId),
     index("search_documents_gin").using("gin", t.searchVector),
     index("search_documents_by_project").on(t.projectId),
+    index("search_documents_by_session").on(t.sessionId),
   ],
 );

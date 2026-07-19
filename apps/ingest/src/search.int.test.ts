@@ -136,6 +136,24 @@ describe.skipIf(!TEST_URL)("incremental search + list pagination (M13 13.4, HTTP
     expect(JSON.stringify(results.hits)).not.toContain(SECRET);
   });
 
+  it("filters GET /v1/search by type=event and rejects an unknown type (M14 14.4)", async () => {
+    const token = await pairMachine();
+    await ingest(token, makeBatch("s-inc-event", `${PHRASE} please use ${SECRET}`));
+
+    const eventResults = await search("q=xylophone&type=event");
+    const hit = eventResults.hits.find((h) => h.sessionId === "s-inc-event");
+    expect(hit).toBeDefined();
+    expect(hit!.entityType).toBe("event");
+    expect(JSON.stringify(eventResults.hits)).not.toContain(SECRET);
+
+    const bad = await app.inject({
+      method: "GET",
+      url: "/v1/search?q=xylophone&type=bogus",
+      headers: { authorization: `Bearer ${ADMIN}` },
+    });
+    expect(bad.statusCode).toBe(400);
+  });
+
   it("re-ingesting a session refreshes its existing doc (upsert, not duplicate)", async () => {
     const token = await pairMachine();
     await ingest(token, makeBatch("s-inc-2", `${PHRASE} original`));
@@ -296,8 +314,11 @@ describe.skipIf(!TEST_URL)("incremental search + list pagination (M13 13.4, HTTP
       await ingest(token, makeBatch(s, "papayawhirl shared marker"));
     }
 
-    const first = await search("q=papayawhirl&limit=1");
-    const second = await search("q=papayawhirl&limit=1&offset=1");
+    // type=session scopes out the M14 14.4 hybrid event docs (same phrase also
+    // indexes as a message.user event row) so this exercises session pagination
+    // specifically; event-type filtering has its own dedicated test above.
+    const first = await search("q=papayawhirl&type=session&limit=1");
+    const second = await search("q=papayawhirl&type=session&limit=1&offset=1");
     expect(first.hits).toHaveLength(1);
     expect(second.hits).toHaveLength(1);
     expect(first.hits[0]!.entityId).not.toBe(second.hits[0]!.entityId);

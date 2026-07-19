@@ -11,15 +11,17 @@
  */
 
 /** What kind of archive entity a search hit points at. */
-export type SearchEntityType = "session" | "report" | "project";
+export type SearchEntityType = "session" | "report" | "project" | "event";
 
 /** One ranked search hit. `snippet` is a redacted `ts_headline` fragment — safe to render. */
 export interface SearchHit {
   entityType: SearchEntityType;
-  /** sessionId (connector text) | report uuid | project uuid. */
+  /** sessionId (connector text) | report uuid | project uuid | event fingerprint. */
   entityId: string;
   /** Owning project uuid when resolvable, else null. */
   projectId: string | null;
+  /** Grouping key — the event's/session's sessionId; null for report/project. */
+  sessionId: string | null;
   title: string | null;
   /** Redacted highlighted fragment from the matched body. */
   snippet: string;
@@ -38,5 +40,6 @@ export interface ReindexCounts {
   reports: number;
   projects: number;
   sessions: number;
+  events: number;
   total: number;
 }

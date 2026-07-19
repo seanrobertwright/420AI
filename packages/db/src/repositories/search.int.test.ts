@@ -25,13 +25,28 @@ const SESSION_PHRASE = "the anthropic spend rose dramatically";
 const REPORT_PHRASE = "quarterly burndown summary";
 const PROJECT_NAME = "zephyrwidget";
 const REMOTE = "https://github.com/seanrobertwright/420AI.git";
+// A tool-call phrase (M14 14.4) — distinct from the message phrase so the `event`
+// grain can be asserted independently of the session's concatenated body.
+const TOOL_PHRASE = "grep the search index configuration";
 
 const USER_TEXT = JSON.stringify({ role: "user", text: `${SESSION_PHRASE} please use ${SECRET}` });
+const ASSISTANT_TEXT = JSON.stringify({
+  role: "assistant",
+  text: "acknowledged, running the requested search now",
+});
+const TOOL_TEXT = JSON.stringify({ tool: "grep", output: TOOL_PHRASE });
 
 function makeBatch(): IngestBatch {
   return {
     records: [
       { sourceConnector: "claude-code", sessionId: "s1", sourceRecordId: "r1", payload: USER_TEXT },
+      {
+        sourceConnector: "claude-code",
+        sessionId: "s1",
+        sourceRecordId: "r2",
+        payload: ASSISTANT_TEXT,
+      },
+      { sourceConnector: "claude-code", sessionId: "s1", sourceRecordId: "r3", payload: TOOL_TEXT },
     ],
     events: [
       {
@@ -43,6 +58,26 @@ function makeBatch(): IngestBatch {
         eventType: "message.user",
         sessionId: "s1",
         ts: "2026-06-14T00:00:00.000Z",
+      },
+      {
+        fingerprint: "se-assistant",
+        sourceConnector: "claude-code",
+        parserVersion: "1.0.0",
+        rawRecordId: "r2",
+        eventIndex: 1,
+        eventType: "message.assistant",
+        sessionId: "s1",
+        ts: "2026-06-14T00:01:00.000Z",
+      },
+      {
+        fingerprint: "se-tool",
+        sourceConnector: "claude-code",
+        parserVersion: "1.0.0",
+        rawRecordId: "r3",
+        eventIndex: 2,
+        eventType: "tool.call.completed",
+        sessionId: "s1",
+        ts: "2026-06-14T00:02:00.000Z",
       },
     ],
   };
@@ -94,12 +129,15 @@ describe.skipIf(!TEST_URL)("search repository (integration)", () => {
     });
   });
 
-  it("rebuilds with per-entity counts across sessions, reports, and projects", async () => {
+  it("rebuilds with per-entity counts across sessions, reports, projects, and events", async () => {
     const counts = await rebuildSearchIndex(dbh.db);
     expect(counts.sessions).toBeGreaterThanOrEqual(1);
     expect(counts.reports).toBeGreaterThanOrEqual(1);
     expect(counts.projects).toBeGreaterThanOrEqual(1);
-    expect(counts.total).toBe(counts.sessions + counts.reports + counts.projects);
+    // The three indexed events in makeBatch() (message.user, message.assistant,
+    // tool.call.completed) each get their own event doc.
+    expect(counts.events).toBeGreaterThanOrEqual(3);
+    expect(counts.total).toBe(counts.sessions + counts.reports + counts.projects + counts.events);
   });
 
   it("returns a ranked session hit for a phrase that was encrypted at rest", async () => {
@@ -126,6 +164,16 @@ describe.skipIf(!TEST_URL)("search repository (integration)", () => {
     expect(row!.body).not.toContain(SECRET);
     expect(row!.body).toContain("[REDACTED:");
     expect(row!.rv).toBe("m8-redact-v1");
+
+    // Per-event gate (M14 14.4): the message.user event's body is the SAME raw
+    // line as the session's, and must be redacted the same way, independently.
+    const [eventRow] = await dbh.db
+      .select({ body: searchDocumentsTbl.body, rv: searchDocumentsTbl.redactionVersion })
+      .from(searchDocumentsTbl)
+      .where(eq(searchDocumentsTbl.entityId, "se-user"));
+    expect(eventRow!.body).not.toContain(SECRET);
+    expect(eventRow!.body).toContain("[REDACTED:");
+    expect(eventRow!.rv).toBe("m8-redact-v1");
   });
 
   it("filters by entity type and returns no hits for an unmatched query", async () => {
@@ -136,6 +184,29 @@ describe.skipIf(!TEST_URL)("search repository (integration)", () => {
 
     const none = await searchDocuments(dbh.db, { q: "zzznonexistentqqq" });
     expect(none.hits).toEqual([]);
+  });
+
+  it("returns a per-event hit scoped to its session for a tool-call phrase (14.4 grain)", async () => {
+    await rebuildSearchIndex(dbh.db);
+    const { hits } = await searchDocuments(dbh.db, {
+      q: "search index configuration",
+      type: "event",
+    });
+    const hit = hits.find((h) => h.entityId === "se-tool");
+    expect(hit).toBeDefined();
+    expect(hit!.entityType).toBe("event");
+    expect(hit!.sessionId).toBe("s1");
+    expect(hit!.rank).toBeGreaterThan(0);
+  });
+
+  it("hybrid: a phrase in a message returns BOTH a session hit and an event hit for the session", async () => {
+    await rebuildSearchIndex(dbh.db);
+    const { hits } = await searchDocuments(dbh.db, { q: "anthropic spend" });
+    const session = hits.find((h) => h.entityType === "session" && h.entityId === "s1");
+    const event = hits.find((h) => h.entityType === "event" && h.entityId === "se-user");
+    expect(session).toBeDefined();
+    expect(event).toBeDefined();
+    expect(event!.sessionId).toBe("s1");
   });
 
   it("is idempotent — re-running yields stable counts and no duplicate-key error", async () => {
