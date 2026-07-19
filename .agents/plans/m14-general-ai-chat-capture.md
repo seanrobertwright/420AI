@@ -76,9 +76,15 @@ code-reviews, execution-reports, system-reviews), and source comments. Findings,
   upload (upload stays offline-**signed** — the UI submits the signed document; the private
   key never touches the browser). Existing endpoints; dashboard-only; proxy discipline per
   `CLAUDE.md`.
-- **14.3 — Desktop polish trio.** `connectorHealth` surfaced in the desktop panel
-  (`ConnectorInfo`/`mapConnectorInfo` widening), GUI unpair, admin-email in dashboard nav via
-  `/api/auth/me` proxy. Additive; control-protocol version bump only if the wire shape changes.
+- **14.3 — Desktop polish trio.** `connectorHealth` surfaced in the desktop panel — rendered
+  from the **monitor HTTP snapshot** (`LiveMonitorSnapshot.connectors` in `SyncHealth.tsx`), **not**
+  by widening `ConnectorInfo`/`mapConnectorInfo`: that shape travels the control protocol via the
+  sidecar, which has **no DB** to derive a `ConnectorHealthRow`, so widening it would need sidecar
+  plumbing + a `CONTROL_PROTOCOL_VERSION` bump + a Rust serde mirror for data already on the desktop.
+  Path B renders it with **zero wire change / no version bump / no Rust diff**. GUI unpair is
+  **NOT** part of 14.3 — it already shipped in **M11 Slice 4** (`server::unpair` → `keychain::clear()`
+  → Unpair button in `Settings.tsx`); the earlier "deferral" row was stale. Remaining item:
+  admin-email in the dashboard nav via a same-origin `/api/auth/me` proxy. Additive; frontend-only.
 - **14.4 — Per-event search granularity.** Finer-grained `search_documents` rows (per-event or
   per-tool-call) behind the same redact-then-store pipeline; incremental index sites (13.4)
   extended; UI results grouped by session. Needs care on index size + reindex cost.

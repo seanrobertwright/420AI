@@ -5,6 +5,7 @@ import type {
   LiveMonitorSnapshot,
   AlertSeverity,
   MonitorStatus,
+  ConnectorHealthRow,
 } from "@420ai/shared";
 import { getMonitorSnapshot, onControlEvent } from "@/lib/bridge";
 import { Badge } from "@/components/ui/badge";
@@ -186,6 +187,12 @@ export function SyncHealth() {
                 </Table>
               )}
             </div>
+            <div>
+              <p className="text-muted-foreground mb-2 text-xs font-medium uppercase tracking-wide">
+                Connectors
+              </p>
+              <ConnectorsTable connectors={snapshot.connectors} nowMs={nowMs} />
+            </div>
           </>
         ) : (
           <p className="text-muted-foreground text-sm">Loading server view…</p>
@@ -219,6 +226,60 @@ function SummaryRow({ snapshot }: { snapshot: LiveMonitorSnapshot }) {
       <Stat label="connectors" value={snapshot.connectors.length} />
       <Stat label="active sessions" value={snapshot.activeSessions.length} />
     </div>
+  );
+}
+
+/**
+ * Per-connector health (M14 14.3) — surfaced from the monitor snapshot the panel already
+ * fetches (Path B: no control-protocol change; the sidecar has no DB to derive this). Mirrors
+ * the Alerts <Table> above. The tool-failure ratio guards divide-by-zero on `toolCalls` (no
+ * terminal tool calls → "—", never `n / 0`); any failure gets the critical badge treatment.
+ */
+function ConnectorsTable({
+  connectors,
+  nowMs,
+}: {
+  connectors: ConnectorHealthRow[];
+  nowMs: number;
+}) {
+  if (connectors.length === 0) {
+    return <p className="text-muted-foreground text-sm">No connector activity.</p>;
+  }
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>Connector</TableHead>
+          <TableHead>Last event</TableHead>
+          <TableHead>Events</TableHead>
+          <TableHead>Tool failures</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {connectors.map((c) => (
+          <TableRow key={c.sourceConnector}>
+            <TableCell className="font-medium">{c.sourceConnector}</TableCell>
+            <TableCell className="text-muted-foreground">
+              {formatAgo(c.lastEventAt, nowMs)}
+            </TableCell>
+            <TableCell className="tabular-nums">{c.eventCount}</TableCell>
+            <TableCell>
+              {c.toolCalls === 0 ? (
+                <span className="text-muted-foreground">—</span>
+              ) : c.toolsFailed > 0 ? (
+                <Badge className={cn(SEVERITY_BADGE.critical)}>
+                  {c.toolsFailed} / {c.toolCalls}
+                </Badge>
+              ) : (
+                <span className="text-muted-foreground tabular-nums">
+                  {c.toolsFailed} / {c.toolCalls}
+                </span>
+              )}
+            </TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
   );
 }
 

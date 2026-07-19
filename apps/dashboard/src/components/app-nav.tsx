@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
@@ -27,6 +28,26 @@ const LINKS: { href: string; label: string }[] = [
 
 export function AppNav() {
   const pathname = usePathname();
+  // M14 14.3: probe the admin identity through the same-origin proxy (the browser never holds the
+  // token — /api/auth/me adds the bearer server-side). Hooks stay ABOVE the /login early-return
+  // below (Rules of Hooks); the fetch guards on `pathname` instead.
+  const [email, setEmail] = useState<string | null>(null);
+  useEffect(() => {
+    // One-shot: skip the login surface, and once the (session-invariant) email is known do NOT
+    // re-probe on every client navigation — the re-run when `email` flips null→value is a no-op.
+    if (pathname === "/login" || email) return;
+    let alive = true;
+    fetch("/api/auth/me")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { email?: string } | null) => {
+        if (alive && d?.email) setEmail(d.email);
+      })
+      .catch(() => {}); // swallow — a missing email just isn't shown
+    return () => {
+      alive = false;
+    };
+  }, [pathname, email]);
+
   // The login page is its own standalone surface — no nav (and no logout to show while logged out).
   if (pathname === "/login") return null;
 
@@ -59,10 +80,20 @@ export function AppNav() {
             </Link>
           );
         })}
+        {email ? (
+          <span className="text-muted-foreground ml-auto mr-3 font-mono text-xs" title={email}>
+            {email}
+          </span>
+        ) : null}
         <button
           type="button"
           onClick={logout}
-          className="text-muted-foreground hover:text-foreground hover:bg-muted ml-auto rounded-md px-3 py-1.5 text-sm font-medium transition-colors"
+          className={cn(
+            "text-muted-foreground hover:text-foreground hover:bg-muted rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+            // The email span owns the left auto-margin when present; without it, Logout keeps the
+            // right-anchor so layout is unchanged when no email is shown (logged out / 401).
+            !email && "ml-auto",
+          )}
         >
           Logout
         </button>
