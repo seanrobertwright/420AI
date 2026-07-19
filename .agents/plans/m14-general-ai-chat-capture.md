@@ -85,9 +85,16 @@ code-reviews, execution-reports, system-reviews), and source comments. Findings,
   **NOT** part of 14.3 — it already shipped in **M11 Slice 4** (`server::unpair` → `keychain::clear()`
   → Unpair button in `Settings.tsx`); the earlier "deferral" row was stale. Remaining item:
   admin-email in the dashboard nav via a same-origin `/api/auth/me` proxy. Additive; frontend-only.
-- **14.4 — Per-event search granularity.** Finer-grained `search_documents` rows (per-event or
-  per-tool-call) behind the same redact-then-store pipeline; incremental index sites (13.4)
-  extended; UI results grouped by session. Needs care on index size + reindex cost.
+- **14.4 — Per-event search granularity.** Settled (implementation plan:
+  `.agents/plans/m14-slice4-per-event-search.md`): grain = per-message + per-tool-call ONLY
+  (`message.user`/`message.assistant`/`tool.call.completed`/`tool.call.failed` — the four event
+  types carrying searchable human text; low-signal types get no row). **Hybrid, not replace**: the
+  existing per-session `search_documents` rows stay (broad match + group header); event rows ADD
+  drill-down precision, keyed on `events.fingerprint`, grouped under their session in the UI. Text
+  source = the `events.rawRecordId → raw_source_records` join (the `transcript.ts` pattern), NOT
+  `events.payload_*` (NULL for `message.*`). Bounded by `EVENT_BODY_MAX_CHARS`/
+  `MAX_EVENT_DOCS_PER_SESSION` caps; incremental (13.4) and full-rebuild paths both emit event
+  docs through the same `indexSessions` → `indexOneSession` → `indexSessionEvents` chain.
 - **14.5+ — Chat connectors (shaped by 14.0; sliced after it lands).** Per-surface connectors
   normalizing onto the **existing event taxonomy** (no fingerprint change — invariant), plus
   **non-repo attribution** (Work-Session/topic grouping instead of project/git). If the spike
