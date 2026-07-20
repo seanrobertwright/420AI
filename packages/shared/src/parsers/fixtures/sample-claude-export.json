@@ -1,0 +1,2417 @@
+[
+  {
+    "uuid": "52caf7a2-3a14-4a2d-8883-a8741b3c92d0",
+    "name": "redacted",
+    "summary": "redacted",
+    "created_at": "2025-08-07T15:32:40.100663Z",
+    "updated_at": "2025-08-07T15:32:47.274858Z",
+    "account": {
+      "uuid": "00000000-0000-4000-8000-000000000000"
+    },
+    "chat_messages": [
+      {
+        "uuid": "256de3c4-39a9-40b5-b447-c5005eddfbb3",
+        "text": "redacted",
+        "content": [
+          {
+            "start_timestamp": "2025-08-07T15:32:41.606724Z",
+            "stop_timestamp": "2025-08-07T15:32:41.606724Z",
+            "flags": null,
+            "type": "text",
+            "text": "redacted",
+            "citations": []
+          }
+        ],
+        "sender": "human",
+        "created_at": "2025-08-07T15:32:41.623137Z",
+        "updated_at": "2025-08-07T15:32:41.623137Z",
+        "attachments": [],
+        "files": [],
+        "parent_message_uuid": "00000000-0000-4000-8000-000000000000"
+      },
+      {
+        "uuid": "8afa8c6d-4788-4072-8816-affbf2e1c7c8",
+        "text": "redacted",
+        "content": [
+          {
+            "start_timestamp": "2025-08-07T15:32:43.152151Z",
+            "stop_timestamp": "2025-08-07T15:32:46.032081Z",
+            "flags": null,
+            "type": "text",
+            "text": "redacted",
+            "citations": []
+          }
+        ],
+        "sender": "assistant",
+        "created_at": "2025-08-07T15:32:46.102719Z",
+        "updated_at": "2025-08-07T15:32:46.102719Z",
+        "attachments": [],
+        "files": [],
+        "parent_message_uuid": "256de3c4-39a9-40b5-b447-c5005eddfbb3"
+      }
+    ]
+  },
+  {
+    "uuid": "4cad368d-c568-453b-ac52-cf93d389b5b2",
+    "name": "redacted",
+    "summary": "redacted",
+    "created_at": "2025-10-22T09:41:30.759440Z",
+    "updated_at": "2025-10-22T09:53:23.237418Z",
+    "account": {
+      "uuid": "00000000-0000-4000-8000-000000000000"
+    },
+    "chat_messages": [
+      {
+        "uuid": "9aec5da3-3418-4d61-8a88-26f3d220b2c9",
+        "text": "redacted",
+        "content": [
+          {
+            "start_timestamp": "2025-10-22T09:41:33.393109Z",
+            "stop_timestamp": "2025-10-22T09:41:33.393109Z",
+            "flags": null,
+            "type": "text",
+            "text": "redacted",
+            "citations": []
+          }
+        ],
+        "sender": "human",
+        "created_at": "2025-10-22T09:41:33.405649Z",
+        "updated_at": "2025-10-22T09:41:33.405649Z",
+        "attachments": [],
+        "files": [],
+        "parent_message_uuid": "00000000-0000-4000-8000-000000000000"
+      },
+      {
+        "uuid": "35d2a4d3-5ca4-48fc-8efc-36b49f21ee02",
+        "text": "redacted",
+        "content": [
+          {
+            "start_timestamp": "2025-10-22T09:41:35.992014Z",
+            "stop_timestamp": "2025-10-22T09:41:40.022937Z",
+            "flags": null,
+            "type": "thinking",
+            "thinking": "redacted",
+            "summaries": [
+              {
+                "summary": "redacted"
+              },
+              {
+                "summary": "redacted"
+              },
+              {
+                "summary": "redacted"
+              }
+            ],
+            "cut_off": false,
+            "truncated": false,
+            "hidden": false,
+            "thinking_hidden": false,
+            "alternative_display_type": null,
+            "signature": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:41:40.186959Z",
+            "stop_timestamp": "2025-10-22T09:41:40.512114Z",
+            "flags": null,
+            "type": "text",
+            "text": "redacted",
+            "citations": []
+          },
+          {
+            "start_timestamp": "2025-10-22T09:41:40.917139Z",
+            "stop_timestamp": "2025-10-22T09:41:41.975395Z",
+            "flags": null,
+            "type": "tool_use",
+            "id": null,
+            "name": "redacted",
+            "input": {
+              "path": "redacted",
+              "description": "redacted"
+            },
+            "message": "redacted",
+            "integration_name": null,
+            "integration_icon_url": null,
+            "tool_identifier": null,
+            "icon_name": null,
+            "context": null,
+            "display_content": {
+              "type": "text",
+              "text": "redacted"
+            },
+            "approval_options": null,
+            "approval_key": null,
+            "approval_key_legacy": null,
+            "is_mcp_app": null,
+            "hidden_in_chat": null,
+            "mcp_server_url": null
+          },
+          {
+            "start_timestamp": null,
+            "stop_timestamp": null,
+            "flags": null,
+            "type": "tool_result",
+            "tool_use_id": null,
+            "name": "redacted",
+            "content": [
+              {
+                "type": "text",
+                "text": "redacted",
+                "uuid": "91a9722c-1a9d-4437-a962-e79f9e899cc5"
+              }
+            ],
+            "is_error": false,
+            "structured_content": null,
+            "meta": null,
+            "message": null,
+            "integration_name": null,
+            "mcp_server_url": null,
+            "integration_icon_url": null,
+            "icon_name": null,
+            "display_content": null,
+            "hidden_in_chat": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:41:47.799573Z",
+            "stop_timestamp": "2025-10-22T09:41:48.710412Z",
+            "flags": null,
+            "type": "thinking",
+            "thinking": "redacted",
+            "summaries": [
+              {
+                "summary": "redacted"
+              }
+            ],
+            "cut_off": false,
+            "truncated": false,
+            "hidden": false,
+            "thinking_hidden": false,
+            "alternative_display_type": null,
+            "signature": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:41:49.245665Z",
+            "stop_timestamp": "2025-10-22T09:41:49.437151Z",
+            "flags": null,
+            "type": "text",
+            "text": "redacted",
+            "citations": []
+          },
+          {
+            "start_timestamp": "2025-10-22T09:41:49.564489Z",
+            "stop_timestamp": "2025-10-22T09:41:51.034453Z",
+            "flags": null,
+            "type": "tool_use",
+            "id": null,
+            "name": "redacted",
+            "input": {
+              "path": "redacted",
+              "description": "redacted"
+            },
+            "message": "redacted",
+            "integration_name": null,
+            "integration_icon_url": null,
+            "tool_identifier": null,
+            "icon_name": null,
+            "context": null,
+            "display_content": {
+              "type": "text",
+              "text": "redacted"
+            },
+            "approval_options": null,
+            "approval_key": null,
+            "approval_key_legacy": null,
+            "is_mcp_app": null,
+            "hidden_in_chat": null,
+            "mcp_server_url": null
+          },
+          {
+            "start_timestamp": null,
+            "stop_timestamp": null,
+            "flags": null,
+            "type": "tool_result",
+            "tool_use_id": null,
+            "name": "redacted",
+            "content": [
+              {
+                "type": "text",
+                "text": "redacted",
+                "uuid": "bd44f005-1442-4f40-923e-2936c3a72b5d"
+              }
+            ],
+            "is_error": false,
+            "structured_content": null,
+            "meta": null,
+            "message": null,
+            "integration_name": null,
+            "mcp_server_url": null,
+            "integration_icon_url": null,
+            "icon_name": null,
+            "display_content": null,
+            "hidden_in_chat": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:41:54.306922Z",
+            "stop_timestamp": "2025-10-22T09:41:55.457616Z",
+            "flags": null,
+            "type": "thinking",
+            "thinking": "redacted",
+            "summaries": [
+              {
+                "summary": "redacted"
+              }
+            ],
+            "cut_off": false,
+            "truncated": false,
+            "hidden": false,
+            "thinking_hidden": false,
+            "alternative_display_type": null,
+            "signature": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:41:56.109960Z",
+            "stop_timestamp": "2025-10-22T09:41:57.677239Z",
+            "flags": null,
+            "type": "tool_use",
+            "id": null,
+            "name": "redacted",
+            "input": {
+              "path": "redacted",
+              "description": "redacted"
+            },
+            "message": "redacted",
+            "integration_name": null,
+            "integration_icon_url": null,
+            "tool_identifier": null,
+            "icon_name": null,
+            "context": null,
+            "display_content": {
+              "type": "text",
+              "text": "redacted"
+            },
+            "approval_options": null,
+            "approval_key": null,
+            "approval_key_legacy": null,
+            "is_mcp_app": null,
+            "hidden_in_chat": null,
+            "mcp_server_url": null
+          },
+          {
+            "start_timestamp": null,
+            "stop_timestamp": null,
+            "flags": null,
+            "type": "tool_result",
+            "tool_use_id": null,
+            "name": "redacted",
+            "content": [
+              {
+                "type": "text",
+                "text": "redacted",
+                "uuid": "0d62d51b-f994-4d19-a9a6-bf01ce69de63"
+              }
+            ],
+            "is_error": false,
+            "structured_content": null,
+            "meta": null,
+            "message": null,
+            "integration_name": null,
+            "mcp_server_url": null,
+            "integration_icon_url": null,
+            "icon_name": null,
+            "display_content": null,
+            "hidden_in_chat": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:42:01.438846Z",
+            "stop_timestamp": "2025-10-22T09:42:11.535470Z",
+            "flags": null,
+            "type": "thinking",
+            "thinking": "redacted",
+            "summaries": [
+              {
+                "summary": "redacted"
+              },
+              {
+                "summary": "redacted"
+              }
+            ],
+            "cut_off": false,
+            "truncated": false,
+            "hidden": false,
+            "thinking_hidden": false,
+            "alternative_display_type": null,
+            "signature": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:42:11.985615Z",
+            "stop_timestamp": "2025-10-22T09:42:12.751630Z",
+            "flags": null,
+            "type": "text",
+            "text": "redacted",
+            "citations": []
+          },
+          {
+            "start_timestamp": "2025-10-22T09:42:13.252001Z",
+            "stop_timestamp": "2025-10-22T09:42:15.435773Z",
+            "flags": null,
+            "type": "tool_use",
+            "id": null,
+            "name": "redacted",
+            "input": {
+              "command": "redacted",
+              "description": "redacted"
+            },
+            "message": "redacted",
+            "integration_name": null,
+            "integration_icon_url": null,
+            "tool_identifier": null,
+            "icon_name": null,
+            "context": null,
+            "display_content": {
+              "type": "json_block",
+              "json_block": "redacted"
+            },
+            "approval_options": null,
+            "approval_key": null,
+            "approval_key_legacy": null,
+            "is_mcp_app": null,
+            "hidden_in_chat": null,
+            "mcp_server_url": null
+          },
+          {
+            "start_timestamp": null,
+            "stop_timestamp": null,
+            "flags": null,
+            "type": "tool_result",
+            "tool_use_id": null,
+            "name": "redacted",
+            "content": [
+              {
+                "type": "text",
+                "text": "redacted",
+                "uuid": "21760485-dfac-46c3-8457-778890f03691"
+              }
+            ],
+            "is_error": false,
+            "structured_content": null,
+            "meta": null,
+            "message": null,
+            "integration_name": null,
+            "mcp_server_url": null,
+            "integration_icon_url": null,
+            "icon_name": null,
+            "display_content": {
+              "type": "json_block",
+              "json_block": "redacted"
+            },
+            "hidden_in_chat": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:42:24.476866Z",
+            "stop_timestamp": "2025-10-22T09:42:25.881992Z",
+            "flags": null,
+            "type": "thinking",
+            "thinking": "redacted",
+            "summaries": [
+              {
+                "summary": "redacted"
+              }
+            ],
+            "cut_off": false,
+            "truncated": false,
+            "hidden": false,
+            "thinking_hidden": false,
+            "alternative_display_type": null,
+            "signature": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:42:26.571734Z",
+            "stop_timestamp": "2025-10-22T09:42:35.883424Z",
+            "flags": null,
+            "type": "tool_use",
+            "id": null,
+            "name": "redacted",
+            "input": {
+              "path": "redacted",
+              "file_text": "redacted",
+              "description": "redacted"
+            },
+            "message": "redacted",
+            "integration_name": null,
+            "integration_icon_url": null,
+            "tool_identifier": null,
+            "icon_name": null,
+            "context": null,
+            "display_content": {
+              "type": "json_block",
+              "json_block": "redacted"
+            },
+            "approval_options": null,
+            "approval_key": null,
+            "approval_key_legacy": null,
+            "is_mcp_app": null,
+            "hidden_in_chat": null,
+            "mcp_server_url": null
+          },
+          {
+            "start_timestamp": null,
+            "stop_timestamp": null,
+            "flags": null,
+            "type": "tool_result",
+            "tool_use_id": null,
+            "name": "redacted",
+            "content": [
+              {
+                "type": "text",
+                "text": "redacted",
+                "uuid": "02463618-04db-4d23-862e-71e351581de6"
+              }
+            ],
+            "is_error": false,
+            "structured_content": null,
+            "meta": null,
+            "message": null,
+            "integration_name": null,
+            "mcp_server_url": null,
+            "integration_icon_url": null,
+            "icon_name": null,
+            "display_content": {
+              "type": "text",
+              "text": "redacted"
+            },
+            "hidden_in_chat": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:42:41.001306Z",
+            "stop_timestamp": "2025-10-22T09:42:41.782181Z",
+            "flags": null,
+            "type": "thinking",
+            "thinking": "redacted",
+            "summaries": [
+              {
+                "summary": "redacted"
+              }
+            ],
+            "cut_off": false,
+            "truncated": false,
+            "hidden": false,
+            "thinking_hidden": false,
+            "alternative_display_type": null,
+            "signature": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:42:42.030194Z",
+            "stop_timestamp": "2025-10-22T09:42:52.820458Z",
+            "flags": null,
+            "type": "tool_use",
+            "id": null,
+            "name": "redacted",
+            "input": {
+              "path": "redacted",
+              "file_text": "redacted",
+              "description": "redacted"
+            },
+            "message": "redacted",
+            "integration_name": null,
+            "integration_icon_url": null,
+            "tool_identifier": null,
+            "icon_name": null,
+            "context": null,
+            "display_content": {
+              "type": "json_block",
+              "json_block": "redacted"
+            },
+            "approval_options": null,
+            "approval_key": null,
+            "approval_key_legacy": null,
+            "is_mcp_app": null,
+            "hidden_in_chat": null,
+            "mcp_server_url": null
+          },
+          {
+            "start_timestamp": null,
+            "stop_timestamp": null,
+            "flags": null,
+            "type": "tool_result",
+            "tool_use_id": null,
+            "name": "redacted",
+            "content": [
+              {
+                "type": "text",
+                "text": "redacted",
+                "uuid": "6272434e-9385-4b2a-90f3-0208f8ee62a1"
+              }
+            ],
+            "is_error": false,
+            "structured_content": null,
+            "meta": null,
+            "message": null,
+            "integration_name": null,
+            "mcp_server_url": null,
+            "integration_icon_url": null,
+            "icon_name": null,
+            "display_content": {
+              "type": "text",
+              "text": "redacted"
+            },
+            "hidden_in_chat": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:42:55.775239Z",
+            "stop_timestamp": "2025-10-22T09:42:56.280963Z",
+            "flags": null,
+            "type": "thinking",
+            "thinking": "redacted",
+            "summaries": [
+              {
+                "summary": "redacted"
+              }
+            ],
+            "cut_off": false,
+            "truncated": false,
+            "hidden": false,
+            "thinking_hidden": false,
+            "alternative_display_type": null,
+            "signature": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:42:56.604983Z",
+            "stop_timestamp": "2025-10-22T09:43:11.590454Z",
+            "flags": null,
+            "type": "tool_use",
+            "id": null,
+            "name": "redacted",
+            "input": {
+              "path": "redacted",
+              "file_text": "redacted",
+              "description": "redacted"
+            },
+            "message": "redacted",
+            "integration_name": null,
+            "integration_icon_url": null,
+            "tool_identifier": null,
+            "icon_name": null,
+            "context": null,
+            "display_content": {
+              "type": "json_block",
+              "json_block": "redacted"
+            },
+            "approval_options": null,
+            "approval_key": null,
+            "approval_key_legacy": null,
+            "is_mcp_app": null,
+            "hidden_in_chat": null,
+            "mcp_server_url": null
+          },
+          {
+            "start_timestamp": null,
+            "stop_timestamp": null,
+            "flags": null,
+            "type": "tool_result",
+            "tool_use_id": null,
+            "name": "redacted",
+            "content": [
+              {
+                "type": "text",
+                "text": "redacted",
+                "uuid": "a6a5c497-06fb-408b-b859-3ef3bf024611"
+              }
+            ],
+            "is_error": false,
+            "structured_content": null,
+            "meta": null,
+            "message": null,
+            "integration_name": null,
+            "mcp_server_url": null,
+            "integration_icon_url": null,
+            "icon_name": null,
+            "display_content": {
+              "type": "text",
+              "text": "redacted"
+            },
+            "hidden_in_chat": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:43:14.520480Z",
+            "stop_timestamp": "2025-10-22T09:43:15.474123Z",
+            "flags": null,
+            "type": "thinking",
+            "thinking": "redacted",
+            "summaries": [
+              {
+                "summary": "redacted"
+              }
+            ],
+            "cut_off": false,
+            "truncated": false,
+            "hidden": false,
+            "thinking_hidden": false,
+            "alternative_display_type": null,
+            "signature": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:43:16.072371Z",
+            "stop_timestamp": "2025-10-22T09:43:31.985402Z",
+            "flags": null,
+            "type": "tool_use",
+            "id": null,
+            "name": "redacted",
+            "input": {
+              "path": "redacted",
+              "file_text": "redacted",
+              "description": "redacted"
+            },
+            "message": "redacted",
+            "integration_name": null,
+            "integration_icon_url": null,
+            "tool_identifier": null,
+            "icon_name": null,
+            "context": null,
+            "display_content": {
+              "type": "json_block",
+              "json_block": "redacted"
+            },
+            "approval_options": null,
+            "approval_key": null,
+            "approval_key_legacy": null,
+            "is_mcp_app": null,
+            "hidden_in_chat": null,
+            "mcp_server_url": null
+          },
+          {
+            "start_timestamp": null,
+            "stop_timestamp": null,
+            "flags": null,
+            "type": "tool_result",
+            "tool_use_id": null,
+            "name": "redacted",
+            "content": [
+              {
+                "type": "text",
+                "text": "redacted",
+                "uuid": "df9b4af1-4551-454a-a189-e8ed7ebfce25"
+              }
+            ],
+            "is_error": false,
+            "structured_content": null,
+            "meta": null,
+            "message": null,
+            "integration_name": null,
+            "mcp_server_url": null,
+            "integration_icon_url": null,
+            "icon_name": null,
+            "display_content": {
+              "type": "text",
+              "text": "redacted"
+            },
+            "hidden_in_chat": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:43:34.989716Z",
+            "stop_timestamp": "2025-10-22T09:43:35.811125Z",
+            "flags": null,
+            "type": "thinking",
+            "thinking": "redacted",
+            "summaries": [
+              {
+                "summary": "redacted"
+              }
+            ],
+            "cut_off": false,
+            "truncated": false,
+            "hidden": false,
+            "thinking_hidden": false,
+            "alternative_display_type": null,
+            "signature": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:43:36.542723Z",
+            "stop_timestamp": "2025-10-22T09:43:54.627713Z",
+            "flags": null,
+            "type": "tool_use",
+            "id": null,
+            "name": "redacted",
+            "input": {
+              "path": "redacted",
+              "file_text": "redacted",
+              "description": "redacted"
+            },
+            "message": "redacted",
+            "integration_name": null,
+            "integration_icon_url": null,
+            "tool_identifier": null,
+            "icon_name": null,
+            "context": null,
+            "display_content": {
+              "type": "json_block",
+              "json_block": "redacted"
+            },
+            "approval_options": null,
+            "approval_key": null,
+            "approval_key_legacy": null,
+            "is_mcp_app": null,
+            "hidden_in_chat": null,
+            "mcp_server_url": null
+          },
+          {
+            "start_timestamp": null,
+            "stop_timestamp": null,
+            "flags": null,
+            "type": "tool_result",
+            "tool_use_id": null,
+            "name": "redacted",
+            "content": [
+              {
+                "type": "text",
+                "text": "redacted",
+                "uuid": "822b7923-2d46-4185-a5f4-e47792659a21"
+              }
+            ],
+            "is_error": false,
+            "structured_content": null,
+            "meta": null,
+            "message": null,
+            "integration_name": null,
+            "mcp_server_url": null,
+            "integration_icon_url": null,
+            "icon_name": null,
+            "display_content": {
+              "type": "text",
+              "text": "redacted"
+            },
+            "hidden_in_chat": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:43:57.866843Z",
+            "stop_timestamp": "2025-10-22T09:43:58.453091Z",
+            "flags": null,
+            "type": "thinking",
+            "thinking": "redacted",
+            "summaries": [
+              {
+                "summary": "redacted"
+              }
+            ],
+            "cut_off": false,
+            "truncated": false,
+            "hidden": false,
+            "thinking_hidden": false,
+            "alternative_display_type": null,
+            "signature": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:43:59.331709Z",
+            "stop_timestamp": "2025-10-22T09:44:19.613716Z",
+            "flags": null,
+            "type": "tool_use",
+            "id": null,
+            "name": "redacted",
+            "input": {
+              "path": "redacted",
+              "file_text": "redacted",
+              "description": "redacted"
+            },
+            "message": "redacted",
+            "integration_name": null,
+            "integration_icon_url": null,
+            "tool_identifier": null,
+            "icon_name": null,
+            "context": null,
+            "display_content": {
+              "type": "json_block",
+              "json_block": "redacted"
+            },
+            "approval_options": null,
+            "approval_key": null,
+            "approval_key_legacy": null,
+            "is_mcp_app": null,
+            "hidden_in_chat": null,
+            "mcp_server_url": null
+          },
+          {
+            "start_timestamp": null,
+            "stop_timestamp": null,
+            "flags": null,
+            "type": "tool_result",
+            "tool_use_id": null,
+            "name": "redacted",
+            "content": [
+              {
+                "type": "text",
+                "text": "redacted",
+                "uuid": "13d250ba-809b-4221-8438-6d4cc340fa76"
+              }
+            ],
+            "is_error": false,
+            "structured_content": null,
+            "meta": null,
+            "message": null,
+            "integration_name": null,
+            "mcp_server_url": null,
+            "integration_icon_url": null,
+            "icon_name": null,
+            "display_content": {
+              "type": "text",
+              "text": "redacted"
+            },
+            "hidden_in_chat": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:44:22.695954Z",
+            "stop_timestamp": "2025-10-22T09:44:23.478621Z",
+            "flags": null,
+            "type": "thinking",
+            "thinking": "redacted",
+            "summaries": [
+              {
+                "summary": "redacted"
+              }
+            ],
+            "cut_off": false,
+            "truncated": false,
+            "hidden": false,
+            "thinking_hidden": false,
+            "alternative_display_type": null,
+            "signature": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:44:24.242579Z",
+            "stop_timestamp": "2025-10-22T09:44:41.268109Z",
+            "flags": null,
+            "type": "tool_use",
+            "id": null,
+            "name": "redacted",
+            "input": {
+              "path": "redacted",
+              "file_text": "redacted",
+              "description": "redacted"
+            },
+            "message": "redacted",
+            "integration_name": null,
+            "integration_icon_url": null,
+            "tool_identifier": null,
+            "icon_name": null,
+            "context": null,
+            "display_content": {
+              "type": "json_block",
+              "json_block": "redacted"
+            },
+            "approval_options": null,
+            "approval_key": null,
+            "approval_key_legacy": null,
+            "is_mcp_app": null,
+            "hidden_in_chat": null,
+            "mcp_server_url": null
+          },
+          {
+            "start_timestamp": null,
+            "stop_timestamp": null,
+            "flags": null,
+            "type": "tool_result",
+            "tool_use_id": null,
+            "name": "redacted",
+            "content": [
+              {
+                "type": "text",
+                "text": "redacted",
+                "uuid": "4f6290f9-67a5-4d18-818b-5e65888181f1"
+              }
+            ],
+            "is_error": false,
+            "structured_content": null,
+            "meta": null,
+            "message": null,
+            "integration_name": null,
+            "mcp_server_url": null,
+            "integration_icon_url": null,
+            "icon_name": null,
+            "display_content": {
+              "type": "text",
+              "text": "redacted"
+            },
+            "hidden_in_chat": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:44:44.460425Z",
+            "stop_timestamp": "2025-10-22T09:44:45.279304Z",
+            "flags": null,
+            "type": "thinking",
+            "thinking": "redacted",
+            "summaries": [
+              {
+                "summary": "redacted"
+              }
+            ],
+            "cut_off": false,
+            "truncated": false,
+            "hidden": false,
+            "thinking_hidden": false,
+            "alternative_display_type": null,
+            "signature": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:44:46.087417Z",
+            "stop_timestamp": "2025-10-22T09:45:05.648158Z",
+            "flags": null,
+            "type": "tool_use",
+            "id": null,
+            "name": "redacted",
+            "input": {
+              "path": "redacted",
+              "file_text": "redacted",
+              "description": "redacted"
+            },
+            "message": "redacted",
+            "integration_name": null,
+            "integration_icon_url": null,
+            "tool_identifier": null,
+            "icon_name": null,
+            "context": null,
+            "display_content": {
+              "type": "json_block",
+              "json_block": "redacted"
+            },
+            "approval_options": null,
+            "approval_key": null,
+            "approval_key_legacy": null,
+            "is_mcp_app": null,
+            "hidden_in_chat": null,
+            "mcp_server_url": null
+          },
+          {
+            "start_timestamp": null,
+            "stop_timestamp": null,
+            "flags": null,
+            "type": "tool_result",
+            "tool_use_id": null,
+            "name": "redacted",
+            "content": [
+              {
+                "type": "text",
+                "text": "redacted",
+                "uuid": "bba8a70b-8167-454c-a3de-28c5ee809fcf"
+              }
+            ],
+            "is_error": false,
+            "structured_content": null,
+            "meta": null,
+            "message": null,
+            "integration_name": null,
+            "mcp_server_url": null,
+            "integration_icon_url": null,
+            "icon_name": null,
+            "display_content": {
+              "type": "text",
+              "text": "redacted"
+            },
+            "hidden_in_chat": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:45:08.947502Z",
+            "stop_timestamp": "2025-10-22T09:45:09.971783Z",
+            "flags": null,
+            "type": "thinking",
+            "thinking": "redacted",
+            "summaries": [
+              {
+                "summary": "redacted"
+              }
+            ],
+            "cut_off": false,
+            "truncated": false,
+            "hidden": false,
+            "thinking_hidden": false,
+            "alternative_display_type": null,
+            "signature": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:45:10.659219Z",
+            "stop_timestamp": "2025-10-22T09:45:33.055694Z",
+            "flags": null,
+            "type": "tool_use",
+            "id": null,
+            "name": "redacted",
+            "input": {
+              "path": "redacted",
+              "file_text": "redacted",
+              "description": "redacted"
+            },
+            "message": "redacted",
+            "integration_name": null,
+            "integration_icon_url": null,
+            "tool_identifier": null,
+            "icon_name": null,
+            "context": null,
+            "display_content": {
+              "type": "json_block",
+              "json_block": "redacted"
+            },
+            "approval_options": null,
+            "approval_key": null,
+            "approval_key_legacy": null,
+            "is_mcp_app": null,
+            "hidden_in_chat": null,
+            "mcp_server_url": null
+          },
+          {
+            "start_timestamp": null,
+            "stop_timestamp": null,
+            "flags": null,
+            "type": "tool_result",
+            "tool_use_id": null,
+            "name": "redacted",
+            "content": [
+              {
+                "type": "text",
+                "text": "redacted",
+                "uuid": "06c413bd-1553-4ba0-9c72-25e7cb5f7af6"
+              }
+            ],
+            "is_error": false,
+            "structured_content": null,
+            "meta": null,
+            "message": null,
+            "integration_name": null,
+            "mcp_server_url": null,
+            "integration_icon_url": null,
+            "icon_name": null,
+            "display_content": {
+              "type": "text",
+              "text": "redacted"
+            },
+            "hidden_in_chat": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:45:36.062191Z",
+            "stop_timestamp": "2025-10-22T09:45:37.017736Z",
+            "flags": null,
+            "type": "thinking",
+            "thinking": "redacted",
+            "summaries": [
+              {
+                "summary": "redacted"
+              }
+            ],
+            "cut_off": false,
+            "truncated": false,
+            "hidden": false,
+            "thinking_hidden": false,
+            "alternative_display_type": null,
+            "signature": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:45:37.692184Z",
+            "stop_timestamp": "2025-10-22T09:45:58.626722Z",
+            "flags": null,
+            "type": "tool_use",
+            "id": null,
+            "name": "redacted",
+            "input": {
+              "path": "redacted",
+              "file_text": "redacted",
+              "description": "redacted"
+            },
+            "message": "redacted",
+            "integration_name": null,
+            "integration_icon_url": null,
+            "tool_identifier": null,
+            "icon_name": null,
+            "context": null,
+            "display_content": {
+              "type": "json_block",
+              "json_block": "redacted"
+            },
+            "approval_options": null,
+            "approval_key": null,
+            "approval_key_legacy": null,
+            "is_mcp_app": null,
+            "hidden_in_chat": null,
+            "mcp_server_url": null
+          },
+          {
+            "start_timestamp": null,
+            "stop_timestamp": null,
+            "flags": null,
+            "type": "tool_result",
+            "tool_use_id": null,
+            "name": "redacted",
+            "content": [
+              {
+                "type": "text",
+                "text": "redacted",
+                "uuid": "18a45416-8589-42aa-a43d-cee41fcb39bf"
+              }
+            ],
+            "is_error": false,
+            "structured_content": null,
+            "meta": null,
+            "message": null,
+            "integration_name": null,
+            "mcp_server_url": null,
+            "integration_icon_url": null,
+            "icon_name": null,
+            "display_content": {
+              "type": "text",
+              "text": "redacted"
+            },
+            "hidden_in_chat": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:46:01.496729Z",
+            "stop_timestamp": "2025-10-22T09:46:02.537277Z",
+            "flags": null,
+            "type": "thinking",
+            "thinking": "redacted",
+            "summaries": [
+              {
+                "summary": "redacted"
+              }
+            ],
+            "cut_off": false,
+            "truncated": false,
+            "hidden": false,
+            "thinking_hidden": false,
+            "alternative_display_type": null,
+            "signature": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:46:03.118558Z",
+            "stop_timestamp": "2025-10-22T09:46:24.966360Z",
+            "flags": null,
+            "type": "tool_use",
+            "id": null,
+            "name": "redacted",
+            "input": {
+              "path": "redacted",
+              "file_text": "redacted",
+              "description": "redacted"
+            },
+            "message": "redacted",
+            "integration_name": null,
+            "integration_icon_url": null,
+            "tool_identifier": null,
+            "icon_name": null,
+            "context": null,
+            "display_content": {
+              "type": "json_block",
+              "json_block": "redacted"
+            },
+            "approval_options": null,
+            "approval_key": null,
+            "approval_key_legacy": null,
+            "is_mcp_app": null,
+            "hidden_in_chat": null,
+            "mcp_server_url": null
+          },
+          {
+            "start_timestamp": null,
+            "stop_timestamp": null,
+            "flags": null,
+            "type": "tool_result",
+            "tool_use_id": null,
+            "name": "redacted",
+            "content": [
+              {
+                "type": "text",
+                "text": "redacted",
+                "uuid": "9c12297c-df68-4459-88a7-de534f83d416"
+              }
+            ],
+            "is_error": false,
+            "structured_content": null,
+            "meta": null,
+            "message": null,
+            "integration_name": null,
+            "mcp_server_url": null,
+            "integration_icon_url": null,
+            "icon_name": null,
+            "display_content": {
+              "type": "text",
+              "text": "redacted"
+            },
+            "hidden_in_chat": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:46:28.146505Z",
+            "stop_timestamp": "2025-10-22T09:46:29.059960Z",
+            "flags": null,
+            "type": "thinking",
+            "thinking": "redacted",
+            "summaries": [
+              {
+                "summary": "redacted"
+              }
+            ],
+            "cut_off": false,
+            "truncated": false,
+            "hidden": false,
+            "thinking_hidden": false,
+            "alternative_display_type": null,
+            "signature": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:46:29.574610Z",
+            "stop_timestamp": "2025-10-22T09:46:51.356190Z",
+            "flags": null,
+            "type": "tool_use",
+            "id": null,
+            "name": "redacted",
+            "input": {
+              "path": "redacted",
+              "file_text": "redacted",
+              "description": "redacted"
+            },
+            "message": "redacted",
+            "integration_name": null,
+            "integration_icon_url": null,
+            "tool_identifier": null,
+            "icon_name": null,
+            "context": null,
+            "display_content": {
+              "type": "json_block",
+              "json_block": "redacted"
+            },
+            "approval_options": null,
+            "approval_key": null,
+            "approval_key_legacy": null,
+            "is_mcp_app": null,
+            "hidden_in_chat": null,
+            "mcp_server_url": null
+          },
+          {
+            "start_timestamp": null,
+            "stop_timestamp": null,
+            "flags": null,
+            "type": "tool_result",
+            "tool_use_id": null,
+            "name": "redacted",
+            "content": [
+              {
+                "type": "text",
+                "text": "redacted",
+                "uuid": "7fe6e80b-9e46-4d12-a8d9-5dd2fd599a3e"
+              }
+            ],
+            "is_error": false,
+            "structured_content": null,
+            "meta": null,
+            "message": null,
+            "integration_name": null,
+            "mcp_server_url": null,
+            "integration_icon_url": null,
+            "icon_name": null,
+            "display_content": {
+              "type": "text",
+              "text": "redacted"
+            },
+            "hidden_in_chat": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:46:54.829494Z",
+            "stop_timestamp": "2025-10-22T09:46:55.421408Z",
+            "flags": null,
+            "type": "thinking",
+            "thinking": "redacted",
+            "summaries": [
+              {
+                "summary": "redacted"
+              }
+            ],
+            "cut_off": false,
+            "truncated": false,
+            "hidden": false,
+            "thinking_hidden": false,
+            "alternative_display_type": null,
+            "signature": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:46:56.285450Z",
+            "stop_timestamp": "2025-10-22T09:47:16.291845Z",
+            "flags": null,
+            "type": "tool_use",
+            "id": null,
+            "name": "redacted",
+            "input": {
+              "path": "redacted",
+              "file_text": "redacted",
+              "description": "redacted"
+            },
+            "message": "redacted",
+            "integration_name": null,
+            "integration_icon_url": null,
+            "tool_identifier": null,
+            "icon_name": null,
+            "context": null,
+            "display_content": {
+              "type": "json_block",
+              "json_block": "redacted"
+            },
+            "approval_options": null,
+            "approval_key": null,
+            "approval_key_legacy": null,
+            "is_mcp_app": null,
+            "hidden_in_chat": null,
+            "mcp_server_url": null
+          },
+          {
+            "start_timestamp": null,
+            "stop_timestamp": null,
+            "flags": null,
+            "type": "tool_result",
+            "tool_use_id": null,
+            "name": "redacted",
+            "content": [
+              {
+                "type": "text",
+                "text": "redacted",
+                "uuid": "27110fb1-b58e-4ebd-91e4-9978986f95fc"
+              }
+            ],
+            "is_error": false,
+            "structured_content": null,
+            "meta": null,
+            "message": null,
+            "integration_name": null,
+            "mcp_server_url": null,
+            "integration_icon_url": null,
+            "icon_name": null,
+            "display_content": {
+              "type": "text",
+              "text": "redacted"
+            },
+            "hidden_in_chat": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:47:20.004386Z",
+            "stop_timestamp": "2025-10-22T09:47:20.684965Z",
+            "flags": null,
+            "type": "thinking",
+            "thinking": "redacted",
+            "summaries": [
+              {
+                "summary": "redacted"
+              }
+            ],
+            "cut_off": false,
+            "truncated": false,
+            "hidden": false,
+            "thinking_hidden": false,
+            "alternative_display_type": null,
+            "signature": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:47:21.465263Z",
+            "stop_timestamp": "2025-10-22T09:47:44.116376Z",
+            "flags": null,
+            "type": "tool_use",
+            "id": null,
+            "name": "redacted",
+            "input": {
+              "path": "redacted",
+              "file_text": "redacted",
+              "description": "redacted"
+            },
+            "message": "redacted",
+            "integration_name": null,
+            "integration_icon_url": null,
+            "tool_identifier": null,
+            "icon_name": null,
+            "context": null,
+            "display_content": {
+              "type": "json_block",
+              "json_block": "redacted"
+            },
+            "approval_options": null,
+            "approval_key": null,
+            "approval_key_legacy": null,
+            "is_mcp_app": null,
+            "hidden_in_chat": null,
+            "mcp_server_url": null
+          },
+          {
+            "start_timestamp": null,
+            "stop_timestamp": null,
+            "flags": null,
+            "type": "tool_result",
+            "tool_use_id": null,
+            "name": "redacted",
+            "content": [
+              {
+                "type": "text",
+                "text": "redacted",
+                "uuid": "691ab170-ba36-4769-8b33-9805a4e36c2b"
+              }
+            ],
+            "is_error": false,
+            "structured_content": null,
+            "meta": null,
+            "message": null,
+            "integration_name": null,
+            "mcp_server_url": null,
+            "integration_icon_url": null,
+            "icon_name": null,
+            "display_content": {
+              "type": "text",
+              "text": "redacted"
+            },
+            "hidden_in_chat": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:47:47.297285Z",
+            "stop_timestamp": "2025-10-22T09:47:48.067420Z",
+            "flags": null,
+            "type": "thinking",
+            "thinking": "redacted",
+            "summaries": [
+              {
+                "summary": "redacted"
+              }
+            ],
+            "cut_off": false,
+            "truncated": false,
+            "hidden": false,
+            "thinking_hidden": false,
+            "alternative_display_type": null,
+            "signature": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:47:48.828125Z",
+            "stop_timestamp": "2025-10-22T09:48:10.245328Z",
+            "flags": null,
+            "type": "tool_use",
+            "id": null,
+            "name": "redacted",
+            "input": {
+              "path": "redacted",
+              "file_text": "redacted",
+              "description": "redacted"
+            },
+            "message": "redacted",
+            "integration_name": null,
+            "integration_icon_url": null,
+            "tool_identifier": null,
+            "icon_name": null,
+            "context": null,
+            "display_content": {
+              "type": "json_block",
+              "json_block": "redacted"
+            },
+            "approval_options": null,
+            "approval_key": null,
+            "approval_key_legacy": null,
+            "is_mcp_app": null,
+            "hidden_in_chat": null,
+            "mcp_server_url": null
+          },
+          {
+            "start_timestamp": null,
+            "stop_timestamp": null,
+            "flags": null,
+            "type": "tool_result",
+            "tool_use_id": null,
+            "name": "redacted",
+            "content": [
+              {
+                "type": "text",
+                "text": "redacted",
+                "uuid": "c2dabfac-7f06-435b-9e26-d113ef4ac949"
+              }
+            ],
+            "is_error": false,
+            "structured_content": null,
+            "meta": null,
+            "message": null,
+            "integration_name": null,
+            "mcp_server_url": null,
+            "integration_icon_url": null,
+            "icon_name": null,
+            "display_content": {
+              "type": "text",
+              "text": "redacted"
+            },
+            "hidden_in_chat": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:48:17.396456Z",
+            "stop_timestamp": "2025-10-22T09:48:18.247154Z",
+            "flags": null,
+            "type": "thinking",
+            "thinking": "redacted",
+            "summaries": [
+              {
+                "summary": "redacted"
+              }
+            ],
+            "cut_off": false,
+            "truncated": false,
+            "hidden": false,
+            "thinking_hidden": false,
+            "alternative_display_type": null,
+            "signature": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:48:19.159627Z",
+            "stop_timestamp": "2025-10-22T09:48:35.500097Z",
+            "flags": null,
+            "type": "tool_use",
+            "id": null,
+            "name": "redacted",
+            "input": {
+              "path": "redacted",
+              "file_text": "redacted",
+              "description": "redacted"
+            },
+            "message": "redacted",
+            "integration_name": null,
+            "integration_icon_url": null,
+            "tool_identifier": null,
+            "icon_name": null,
+            "context": null,
+            "display_content": {
+              "type": "json_block",
+              "json_block": "redacted"
+            },
+            "approval_options": null,
+            "approval_key": null,
+            "approval_key_legacy": null,
+            "is_mcp_app": null,
+            "hidden_in_chat": null,
+            "mcp_server_url": null
+          },
+          {
+            "start_timestamp": null,
+            "stop_timestamp": null,
+            "flags": null,
+            "type": "tool_result",
+            "tool_use_id": null,
+            "name": "redacted",
+            "content": [
+              {
+                "type": "text",
+                "text": "redacted",
+                "uuid": "009e61b6-bea6-4b15-8b96-73eb2ffe67f1"
+              }
+            ],
+            "is_error": false,
+            "structured_content": null,
+            "meta": null,
+            "message": null,
+            "integration_name": null,
+            "mcp_server_url": null,
+            "integration_icon_url": null,
+            "icon_name": null,
+            "display_content": {
+              "type": "text",
+              "text": "redacted"
+            },
+            "hidden_in_chat": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:48:38.701375Z",
+            "stop_timestamp": "2025-10-22T09:48:39.301959Z",
+            "flags": null,
+            "type": "thinking",
+            "thinking": "redacted",
+            "summaries": [
+              {
+                "summary": "redacted"
+              }
+            ],
+            "cut_off": false,
+            "truncated": false,
+            "hidden": false,
+            "thinking_hidden": false,
+            "alternative_display_type": null,
+            "signature": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:48:40.162484Z",
+            "stop_timestamp": "2025-10-22T09:48:58.250610Z",
+            "flags": null,
+            "type": "tool_use",
+            "id": null,
+            "name": "redacted",
+            "input": {
+              "path": "redacted",
+              "file_text": "redacted",
+              "description": "redacted"
+            },
+            "message": "redacted",
+            "integration_name": null,
+            "integration_icon_url": null,
+            "tool_identifier": null,
+            "icon_name": null,
+            "context": null,
+            "display_content": {
+              "type": "json_block",
+              "json_block": "redacted"
+            },
+            "approval_options": null,
+            "approval_key": null,
+            "approval_key_legacy": null,
+            "is_mcp_app": null,
+            "hidden_in_chat": null,
+            "mcp_server_url": null
+          },
+          {
+            "start_timestamp": null,
+            "stop_timestamp": null,
+            "flags": null,
+            "type": "tool_result",
+            "tool_use_id": null,
+            "name": "redacted",
+            "content": [
+              {
+                "type": "text",
+                "text": "redacted",
+                "uuid": "2958ae7f-b330-4515-b86c-079a5d4bba18"
+              }
+            ],
+            "is_error": false,
+            "structured_content": null,
+            "meta": null,
+            "message": null,
+            "integration_name": null,
+            "mcp_server_url": null,
+            "integration_icon_url": null,
+            "icon_name": null,
+            "display_content": {
+              "type": "text",
+              "text": "redacted"
+            },
+            "hidden_in_chat": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:49:01.253643Z",
+            "stop_timestamp": "2025-10-22T09:49:01.852624Z",
+            "flags": null,
+            "type": "thinking",
+            "thinking": "redacted",
+            "summaries": [
+              {
+                "summary": "redacted"
+              }
+            ],
+            "cut_off": false,
+            "truncated": false,
+            "hidden": false,
+            "thinking_hidden": false,
+            "alternative_display_type": null,
+            "signature": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:49:02.723607Z",
+            "stop_timestamp": "2025-10-22T09:49:20.998070Z",
+            "flags": null,
+            "type": "tool_use",
+            "id": null,
+            "name": "redacted",
+            "input": {
+              "path": "redacted",
+              "file_text": "redacted",
+              "description": "redacted"
+            },
+            "message": "redacted",
+            "integration_name": null,
+            "integration_icon_url": null,
+            "tool_identifier": null,
+            "icon_name": null,
+            "context": null,
+            "display_content": {
+              "type": "json_block",
+              "json_block": "redacted"
+            },
+            "approval_options": null,
+            "approval_key": null,
+            "approval_key_legacy": null,
+            "is_mcp_app": null,
+            "hidden_in_chat": null,
+            "mcp_server_url": null
+          },
+          {
+            "start_timestamp": null,
+            "stop_timestamp": null,
+            "flags": null,
+            "type": "tool_result",
+            "tool_use_id": null,
+            "name": "redacted",
+            "content": [
+              {
+                "type": "text",
+                "text": "redacted",
+                "uuid": "7799b9bd-771e-4584-8842-cfa375298586"
+              }
+            ],
+            "is_error": false,
+            "structured_content": null,
+            "meta": null,
+            "message": null,
+            "integration_name": null,
+            "mcp_server_url": null,
+            "integration_icon_url": null,
+            "icon_name": null,
+            "display_content": {
+              "type": "text",
+              "text": "redacted"
+            },
+            "hidden_in_chat": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:49:24.479423Z",
+            "stop_timestamp": "2025-10-22T09:49:25.169085Z",
+            "flags": null,
+            "type": "thinking",
+            "thinking": "redacted",
+            "summaries": [
+              {
+                "summary": "redacted"
+              }
+            ],
+            "cut_off": false,
+            "truncated": false,
+            "hidden": false,
+            "thinking_hidden": false,
+            "alternative_display_type": null,
+            "signature": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:49:25.934190Z",
+            "stop_timestamp": "2025-10-22T09:49:44.402854Z",
+            "flags": null,
+            "type": "tool_use",
+            "id": null,
+            "name": "redacted",
+            "input": {
+              "path": "redacted",
+              "file_text": "redacted",
+              "description": "redacted"
+            },
+            "message": "redacted",
+            "integration_name": null,
+            "integration_icon_url": null,
+            "tool_identifier": null,
+            "icon_name": null,
+            "context": null,
+            "display_content": {
+              "type": "json_block",
+              "json_block": "redacted"
+            },
+            "approval_options": null,
+            "approval_key": null,
+            "approval_key_legacy": null,
+            "is_mcp_app": null,
+            "hidden_in_chat": null,
+            "mcp_server_url": null
+          },
+          {
+            "start_timestamp": null,
+            "stop_timestamp": null,
+            "flags": null,
+            "type": "tool_result",
+            "tool_use_id": null,
+            "name": "redacted",
+            "content": [
+              {
+                "type": "text",
+                "text": "redacted",
+                "uuid": "04f0a62c-a3a2-407e-b616-b2fee3ad4f3d"
+              }
+            ],
+            "is_error": false,
+            "structured_content": null,
+            "meta": null,
+            "message": null,
+            "integration_name": null,
+            "mcp_server_url": null,
+            "integration_icon_url": null,
+            "icon_name": null,
+            "display_content": {
+              "type": "text",
+              "text": "redacted"
+            },
+            "hidden_in_chat": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:49:47.413584Z",
+            "stop_timestamp": "2025-10-22T09:49:47.959831Z",
+            "flags": null,
+            "type": "thinking",
+            "thinking": "redacted",
+            "summaries": [
+              {
+                "summary": "redacted"
+              }
+            ],
+            "cut_off": false,
+            "truncated": false,
+            "hidden": false,
+            "thinking_hidden": false,
+            "alternative_display_type": null,
+            "signature": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:49:48.668954Z",
+            "stop_timestamp": "2025-10-22T09:50:10.331475Z",
+            "flags": null,
+            "type": "tool_use",
+            "id": null,
+            "name": "redacted",
+            "input": {
+              "path": "redacted",
+              "file_text": "redacted",
+              "description": "redacted"
+            },
+            "message": "redacted",
+            "integration_name": null,
+            "integration_icon_url": null,
+            "tool_identifier": null,
+            "icon_name": null,
+            "context": null,
+            "display_content": {
+              "type": "json_block",
+              "json_block": "redacted"
+            },
+            "approval_options": null,
+            "approval_key": null,
+            "approval_key_legacy": null,
+            "is_mcp_app": null,
+            "hidden_in_chat": null,
+            "mcp_server_url": null
+          },
+          {
+            "start_timestamp": null,
+            "stop_timestamp": null,
+            "flags": null,
+            "type": "tool_result",
+            "tool_use_id": null,
+            "name": "redacted",
+            "content": [
+              {
+                "type": "text",
+                "text": "redacted",
+                "uuid": "91a825d7-3eb2-4b1c-a441-2cb43cb91064"
+              }
+            ],
+            "is_error": false,
+            "structured_content": null,
+            "meta": null,
+            "message": null,
+            "integration_name": null,
+            "mcp_server_url": null,
+            "integration_icon_url": null,
+            "icon_name": null,
+            "display_content": {
+              "type": "text",
+              "text": "redacted"
+            },
+            "hidden_in_chat": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:50:13.772094Z",
+            "stop_timestamp": "2025-10-22T09:50:14.465185Z",
+            "flags": null,
+            "type": "thinking",
+            "thinking": "redacted",
+            "summaries": [
+              {
+                "summary": "redacted"
+              }
+            ],
+            "cut_off": false,
+            "truncated": false,
+            "hidden": false,
+            "thinking_hidden": false,
+            "alternative_display_type": null,
+            "signature": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:50:15.355799Z",
+            "stop_timestamp": "2025-10-22T09:50:33.066777Z",
+            "flags": null,
+            "type": "tool_use",
+            "id": null,
+            "name": "redacted",
+            "input": {
+              "path": "redacted",
+              "file_text": "redacted",
+              "description": "redacted"
+            },
+            "message": "redacted",
+            "integration_name": null,
+            "integration_icon_url": null,
+            "tool_identifier": null,
+            "icon_name": null,
+            "context": null,
+            "display_content": {
+              "type": "json_block",
+              "json_block": "redacted"
+            },
+            "approval_options": null,
+            "approval_key": null,
+            "approval_key_legacy": null,
+            "is_mcp_app": null,
+            "hidden_in_chat": null,
+            "mcp_server_url": null
+          },
+          {
+            "start_timestamp": null,
+            "stop_timestamp": null,
+            "flags": null,
+            "type": "tool_result",
+            "tool_use_id": null,
+            "name": "redacted",
+            "content": [
+              {
+                "type": "text",
+                "text": "redacted",
+                "uuid": "71a3312b-f146-40f8-be40-d166be947462"
+              }
+            ],
+            "is_error": false,
+            "structured_content": null,
+            "meta": null,
+            "message": null,
+            "integration_name": null,
+            "mcp_server_url": null,
+            "integration_icon_url": null,
+            "icon_name": null,
+            "display_content": {
+              "type": "text",
+              "text": "redacted"
+            },
+            "hidden_in_chat": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:50:36.290100Z",
+            "stop_timestamp": "2025-10-22T09:50:38.611355Z",
+            "flags": null,
+            "type": "thinking",
+            "thinking": "redacted",
+            "summaries": [
+              {
+                "summary": "redacted"
+              }
+            ],
+            "cut_off": false,
+            "truncated": false,
+            "hidden": false,
+            "thinking_hidden": false,
+            "alternative_display_type": null,
+            "signature": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:50:39.328285Z",
+            "stop_timestamp": "2025-10-22T09:51:17.960186Z",
+            "flags": null,
+            "type": "tool_use",
+            "id": null,
+            "name": "redacted",
+            "input": {
+              "path": "redacted",
+              "file_text": "redacted",
+              "description": "redacted"
+            },
+            "message": "redacted",
+            "integration_name": null,
+            "integration_icon_url": null,
+            "tool_identifier": null,
+            "icon_name": null,
+            "context": null,
+            "display_content": {
+              "type": "json_block",
+              "json_block": "redacted"
+            },
+            "approval_options": null,
+            "approval_key": null,
+            "approval_key_legacy": null,
+            "is_mcp_app": null,
+            "hidden_in_chat": null,
+            "mcp_server_url": null
+          },
+          {
+            "start_timestamp": null,
+            "stop_timestamp": null,
+            "flags": null,
+            "type": "tool_result",
+            "tool_use_id": null,
+            "name": "redacted",
+            "content": [
+              {
+                "type": "text",
+                "text": "redacted",
+                "uuid": "67bd2c74-3bf8-4c0b-8b1f-37b6ba852d81"
+              }
+            ],
+            "is_error": false,
+            "structured_content": null,
+            "meta": null,
+            "message": null,
+            "integration_name": null,
+            "mcp_server_url": null,
+            "integration_icon_url": null,
+            "icon_name": null,
+            "display_content": {
+              "type": "text",
+              "text": "redacted"
+            },
+            "hidden_in_chat": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:51:29.576992Z",
+            "stop_timestamp": "2025-10-22T09:51:30.144094Z",
+            "flags": null,
+            "type": "thinking",
+            "thinking": "redacted",
+            "summaries": [],
+            "cut_off": false,
+            "truncated": false,
+            "hidden": false,
+            "thinking_hidden": false,
+            "alternative_display_type": null,
+            "signature": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:51:31.166943Z",
+            "stop_timestamp": "2025-10-22T09:51:32.290606Z",
+            "flags": null,
+            "type": "tool_use",
+            "id": null,
+            "name": "redacted",
+            "input": {
+              "command": "redacted",
+              "description": "redacted"
+            },
+            "message": "redacted",
+            "integration_name": null,
+            "integration_icon_url": null,
+            "tool_identifier": null,
+            "icon_name": null,
+            "context": null,
+            "display_content": {
+              "type": "json_block",
+              "json_block": "redacted"
+            },
+            "approval_options": null,
+            "approval_key": null,
+            "approval_key_legacy": null,
+            "is_mcp_app": null,
+            "hidden_in_chat": null,
+            "mcp_server_url": null
+          },
+          {
+            "start_timestamp": null,
+            "stop_timestamp": null,
+            "flags": null,
+            "type": "tool_result",
+            "tool_use_id": null,
+            "name": "redacted",
+            "content": [
+              {
+                "type": "text",
+                "text": "redacted",
+                "uuid": "06841b62-8c1b-4462-801c-5cd18d243fbf"
+              }
+            ],
+            "is_error": false,
+            "structured_content": null,
+            "meta": null,
+            "message": null,
+            "integration_name": null,
+            "mcp_server_url": null,
+            "integration_icon_url": null,
+            "icon_name": null,
+            "display_content": {
+              "type": "json_block",
+              "json_block": "redacted"
+            },
+            "hidden_in_chat": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:51:43.704820Z",
+            "stop_timestamp": "2025-10-22T09:51:45.139008Z",
+            "flags": null,
+            "type": "thinking",
+            "thinking": "redacted",
+            "summaries": [
+              {
+                "summary": "redacted"
+              }
+            ],
+            "cut_off": false,
+            "truncated": false,
+            "hidden": false,
+            "thinking_hidden": false,
+            "alternative_display_type": null,
+            "signature": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:51:45.646229Z",
+            "stop_timestamp": "2025-10-22T09:52:19.852376Z",
+            "flags": null,
+            "type": "tool_use",
+            "id": null,
+            "name": "redacted",
+            "input": {
+              "path": "redacted",
+              "new_str": "redacted",
+              "old_str": "redacted",
+              "description": "redacted"
+            },
+            "message": "redacted",
+            "integration_name": null,
+            "integration_icon_url": null,
+            "tool_identifier": null,
+            "icon_name": null,
+            "context": null,
+            "display_content": {
+              "type": "text",
+              "text": "redacted"
+            },
+            "approval_options": null,
+            "approval_key": null,
+            "approval_key_legacy": null,
+            "is_mcp_app": null,
+            "hidden_in_chat": null,
+            "mcp_server_url": null
+          },
+          {
+            "start_timestamp": null,
+            "stop_timestamp": null,
+            "flags": null,
+            "type": "tool_result",
+            "tool_use_id": null,
+            "name": "redacted",
+            "content": [
+              {
+                "type": "text",
+                "text": "redacted",
+                "uuid": "75d2eca7-e669-425f-a2ac-16fe29ee7907"
+              }
+            ],
+            "is_error": false,
+            "structured_content": null,
+            "meta": null,
+            "message": null,
+            "integration_name": null,
+            "mcp_server_url": null,
+            "integration_icon_url": null,
+            "icon_name": null,
+            "display_content": {
+              "type": "text",
+              "text": "redacted"
+            },
+            "hidden_in_chat": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:52:26.527846Z",
+            "stop_timestamp": "2025-10-22T09:52:27.279899Z",
+            "flags": null,
+            "type": "thinking",
+            "thinking": "redacted",
+            "summaries": [
+              {
+                "summary": "redacted"
+              }
+            ],
+            "cut_off": false,
+            "truncated": false,
+            "hidden": false,
+            "thinking_hidden": false,
+            "alternative_display_type": null,
+            "signature": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:52:28.214518Z",
+            "stop_timestamp": "2025-10-22T09:52:29.257625Z",
+            "flags": null,
+            "type": "tool_use",
+            "id": null,
+            "name": "redacted",
+            "input": {
+              "command": "redacted",
+              "description": "redacted"
+            },
+            "message": "redacted",
+            "integration_name": null,
+            "integration_icon_url": null,
+            "tool_identifier": null,
+            "icon_name": null,
+            "context": null,
+            "display_content": {
+              "type": "json_block",
+              "json_block": "redacted"
+            },
+            "approval_options": null,
+            "approval_key": null,
+            "approval_key_legacy": null,
+            "is_mcp_app": null,
+            "hidden_in_chat": null,
+            "mcp_server_url": null
+          },
+          {
+            "start_timestamp": null,
+            "stop_timestamp": null,
+            "flags": null,
+            "type": "tool_result",
+            "tool_use_id": null,
+            "name": "redacted",
+            "content": [
+              {
+                "type": "text",
+                "text": "redacted",
+                "uuid": "5eddffe0-9229-4f1d-a63d-5a86b6491503"
+              }
+            ],
+            "is_error": false,
+            "structured_content": null,
+            "meta": null,
+            "message": null,
+            "integration_name": null,
+            "mcp_server_url": null,
+            "integration_icon_url": null,
+            "icon_name": null,
+            "display_content": {
+              "type": "json_block",
+              "json_block": "redacted"
+            },
+            "hidden_in_chat": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:52:40.423841Z",
+            "stop_timestamp": "2025-10-22T09:52:41.497715Z",
+            "flags": null,
+            "type": "thinking",
+            "thinking": "redacted",
+            "summaries": [
+              {
+                "summary": "redacted"
+              }
+            ],
+            "cut_off": false,
+            "truncated": false,
+            "hidden": false,
+            "thinking_hidden": false,
+            "alternative_display_type": null,
+            "signature": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:52:42.079153Z",
+            "stop_timestamp": "2025-10-22T09:53:19.437079Z",
+            "flags": null,
+            "type": "tool_use",
+            "id": null,
+            "name": "redacted",
+            "input": {
+              "path": "redacted",
+              "new_str": "redacted",
+              "old_str": "redacted",
+              "description": "redacted"
+            },
+            "message": "redacted",
+            "integration_name": null,
+            "integration_icon_url": null,
+            "tool_identifier": null,
+            "icon_name": null,
+            "context": null,
+            "display_content": {
+              "type": "text",
+              "text": "redacted"
+            },
+            "approval_options": null,
+            "approval_key": null,
+            "approval_key_legacy": null,
+            "is_mcp_app": null,
+            "hidden_in_chat": null,
+            "mcp_server_url": null
+          },
+          {
+            "start_timestamp": null,
+            "stop_timestamp": null,
+            "flags": null,
+            "type": "tool_result",
+            "tool_use_id": null,
+            "name": "redacted",
+            "content": [
+              {
+                "type": "text",
+                "text": "redacted",
+                "uuid": "460a2cdb-47c8-49bb-a4df-86ae089a2207"
+              }
+            ],
+            "is_error": false,
+            "structured_content": null,
+            "meta": null,
+            "message": null,
+            "integration_name": null,
+            "mcp_server_url": null,
+            "integration_icon_url": null,
+            "icon_name": null,
+            "display_content": {
+              "type": "text",
+              "text": "redacted"
+            },
+            "hidden_in_chat": null
+          },
+          {
+            "start_timestamp": "2025-10-22T09:53:23.068998Z",
+            "stop_timestamp": "2025-10-22T09:53:23.068998Z",
+            "flags": null,
+            "type": "text",
+            "text": "",
+            "citations": []
+          }
+        ],
+        "sender": "assistant",
+        "created_at": "2025-10-22T09:53:23.237418Z",
+        "updated_at": "2025-10-22T09:53:23.237418Z",
+        "attachments": [],
+        "files": [],
+        "parent_message_uuid": "9aec5da3-3418-4d61-8a88-26f3d220b2c9"
+      }
+    ]
+  },
+  {
+    "uuid": "95033e57-28b0-4720-b0a3-e370428f956e",
+    "name": "",
+    "summary": "",
+    "created_at": "2025-09-30T00:19:14.260137Z",
+    "updated_at": "2025-09-30T00:19:14.260137Z",
+    "account": {
+      "uuid": "00000000-0000-4000-8000-000000000000"
+    },
+    "chat_messages": []
+  },
+  {
+    "uuid": "39c9595a-dd74-4f61-a703-fb0d18a2d0f0",
+    "name": "",
+    "summary": "",
+    "created_at": "2026-03-25T22:00:17.304636Z",
+    "updated_at": "2026-03-25T22:01:37.428513Z",
+    "account": {
+      "uuid": "00000000-0000-4000-8000-000000000000"
+    },
+    "chat_messages": [
+      {
+        "uuid": "019d2703-3c40-7de0-9875-c558052f7e3f",
+        "text": "",
+        "content": [],
+        "sender": "human",
+        "created_at": "2026-03-25T22:00:18.687536Z",
+        "updated_at": "2026-03-25T22:01:37.940605Z",
+        "attachments": [],
+        "files": [],
+        "parent_message_uuid": "00000000-0000-4000-8000-000000000000"
+      },
+      {
+        "uuid": "019d2703-3c40-7302-b8db-b80c7eab1c08",
+        "text": "",
+        "content": [],
+        "sender": "assistant",
+        "created_at": "2026-03-25T22:00:44.257771Z",
+        "updated_at": "2026-03-25T22:01:37.940605Z",
+        "attachments": [],
+        "files": [],
+        "parent_message_uuid": "019d2703-3c40-7de0-9875-c558052f7e3f"
+      }
+    ]
+  }
+]

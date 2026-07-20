@@ -3,6 +3,7 @@ import { claudeCodeConnector } from "./claude-code.js";
 import { codexCliConnector } from "./codex-cli.js";
 import { geminiCliConnector } from "./gemini-cli.js";
 import { cursorConnector } from "./cursor.js";
+import { claudeExportConnector } from "./claude-export.js";
 
 /**
  * The connector contract — the plugin shape every capture source implements.
@@ -137,11 +138,13 @@ export interface Connector {
 
 /**
  * The active connector registry. M3: Claude only; M4 appends Codex/Gemini; M13 13.7
- * appends the poll-mode Cursor connector.
+ * appends the poll-mode Cursor connector; M14 14.5 appends the Claude chat-export
+ * connector (snapshot drop-dir, uncosted/experimental).
  */
 export const connectors: Connector[] = [
   claudeCodeConnector,
   codexCliConnector,
   geminiCliConnector,
   cursorConnector,
+  claudeExportConnector,
 ];

@@ -267,6 +267,39 @@ No DB schema change; no ingest/server change; fingerprint untouched.
 
 ## NOTES
 
+### Task-1 findings — Claude export (VERIFIED 2026-07-20 against a real 16.7 MB `conversations.json`, 71 conversations / 480 messages)
+
+Inspected structure-only (string values truncated) — no message content pulled into context.
+
+- **File shape**: top-level is a **flat `array` of conversation objects** (NOT `{conversations:[…]}`). One
+  export file carries MANY conversations → the parser emits **one session per conversation within a single
+  `ParseResult`** (the collector drops one file; `captureMode:"snapshot"` re-reads it whole).
+- **Conversation object**: `uuid` (100% present, unique) → `sessionId` + attribution key; `name`
+  (conversation title, **absent on 2/71** — tolerate); `summary` (long text); `created_at`/`updated_at`
+  (ISO-8601 **microsecond** precision, e.g. `2025-08-07T15:32:40.100663Z`); `account:{uuid}` (the user's
+  account id — **scrubbed in the fixture**); `chat_messages: []`.
+- **Message node**: `uuid` (480/480 present, **all unique across the file** → stable `rawRecordId`,
+  fingerprint-invariant across re-imports); `sender` ∈ `{human, assistant}` (→ `message.user`/`message.assistant`);
+  `created_at` (ISO micros, 480/480 present, already in create order — 0 out-of-order); `text`; `content[]`
+  blocks `{start_timestamp, stop_timestamp, flags, type, text, citations}`; `attachments[]`; `files[]`;
+  `parent_message_uuid`.
+- **Model**: NONE at conversation or message level → `model` omitted (matches spike: Claude export model ✗).
+- **Tokens/cost**: none → uncosted (settled).
+- **Content-block types observed**: `text, thinking, tool_use, tool_result, token_budget`. The export DOES
+  carry tool activity, BUT the `tool_use`/`tool_result`/`files`/`attachments` block shapes were NOT verified
+  in this pass → per the Phase-0 gate, tool-lifecycle + file-interaction events are **deferred (knownGap)**,
+  NOT guessed. This slice emits **session + message events only** — the load-bearing contract.
+- **Timestamp normalization**: `created_at` is already ISO but with 6-digit micros; normalized through a
+  guarded `new Date(v).toISOString()` → canonical millisecond ISO (micros truncated; immaterial, not a
+  fingerprint input; the guard falls back to `ingestedAt` on an unparseable value).
+- **Edge cases confirmed present in the real file** (all covered by fixture): multi-conversation file;
+  **3 empty conversations** (0 messages → emit nothing); **2 conversations with no `name`**; microsecond
+  timestamps; messages carrying `thinking`/`tool_use` content blocks.
+- **ChatGPT**: export NOT yet obtained (email pending) → **surface skipped this slice**, recorded as a gap
+  per the plan's "ship-what's-feasible" gate. Claude ships now; ChatGPT follows when its export lands.
+
+### Prior spikes (planning-time evidence for Layer A confidence)
+
 - **Spikes run during planning (evidence for Layer A confidence):**
   - Recon confirmed the framework wiring is COMPLETE for a snapshot drop-dir connector — no change to
     `file-watcher.ts:57-85`, `snapshot.ts:36-49`, `capture-engine.ts:187-197`, `registry.ts`, ingest

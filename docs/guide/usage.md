@@ -96,6 +96,35 @@ nothing already captured; content-hash dedup + server-side fingerprint upsert ma
 Offline? The durable queue buffers and retries with backoff; a revoked token (401) stops the sync
 loop with a clear "re-pair needed" rather than spinning.
 
+### Importing chat exports (Claude web) — experimental (M14 14.5)
+
+Chat conversations (as opposed to coding-tool sessions) live only server-side — there is no local
+store to watch — so they are captured from the surface's **official data export**, dropped into an
+import directory the collector watches:
+
+| Connector        | `id`            | Drop file into                        | Mode     | Liveness |
+| ---------------- | --------------- | ------------------------------------- | -------- | -------- |
+| **Claude (web)** | `claude-export` | `~/.420ai/chat-imports/claude/*.json` | snapshot | batch    |
+
+To import your Claude chat history:
+
+1. In **claude.ai → Settings → Privacy → Export data**, request the export and wait for the email.
+2. Download and unzip the archive; find **`conversations.json`**.
+3. Drop it into `~/.420ai/chat-imports/claude/` (create the folder if absent) and run (or leave
+   running) `collector watch`. The whole-file snapshot parser picks it up on the next tick.
+
+Chat-export capture is deliberately **honest about its lower fidelity** (`gaps:` badges):
+
+- **`experimental`** status, **`batch`** liveness — the data is days-stale between manual exports.
+- **Uncosted** — the export carries **no token counts and no model**, so no `usage`/`cost` events
+  are emitted (`tokens: none`, `cost: none`). This is intentional, not a bug.
+- **Non-repo attribution** — a chat has no cwd/git, so each conversation is attributed to a stable
+  synthetic topic key `chat:claude:<conversation-uuid>`. Group several conversations under one
+  workspace by aliasing those keys via the normal `workspace_keys` mapping (§4) — no code needed.
+- Re-importing the same export is a **no-op** (message-uuid-keyed fingerprints dedup server-side).
+- `tool_use`/`thinking` content blocks and attachments/files in the export are **not yet** turned
+  into tool/file events (deferred). **ChatGPT** export support is planned for a follow-up.
+
 ---
 
 ## 3. Collector CLI reference

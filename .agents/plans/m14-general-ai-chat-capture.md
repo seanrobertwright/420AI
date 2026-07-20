@@ -100,6 +100,13 @@ code-reviews, execution-reports, system-reviews), and source comments. Findings,
   **non-repo attribution** (Work-Session/topic grouping instead of project/git). If the spike
   says extension-first, the extension is its own slice with a collector hand-off (likely a new
   capture mode, mirroring how 13.7 added `poll`).
+  - **14.5 shipped (2026-07-20): the `claude-export` connector** — snapshot drop-dir over
+    `~/.420ai/chat-imports/claude/*.json`, mapping the Claude web export onto the existing taxonomy
+    (`session.started`/`message.*`/`session.ended`), **experimental / batch / uncosted** (no
+    tokens/model in the export), with non-repo attribution via a `chat:claude:<uuid>` topic key.
+    Parser written against a Task-1-verified redacted fixture. **ChatGPT export deferred** (export
+    not yet obtainable at build time — recorded as a gap, per 12.7d ship-what's-feasible); Gemini
+    Takeout = 14.6; browser extension = 14.7.
 
 ## Pre-sign-off checklist (D-M14-4 — every box, maintainer manual)
 
