@@ -62,9 +62,13 @@ capture-surface spike (**DONE 2026-07-14** —
 [`docs/research/chat-capture-spike.md`](./docs/research/chat-capture-spike.md): **no chat surface
 stores conversations locally**, so capture = official exports (Batch) + a browser extension
 (live); gates the connector slices) · **14.1** ✅ truth & hygiene (**DONE 2026-07-14** — README
-roadmap, stale deferred-wording sweep, the M10–M13 system-review) · **14.2** catalog admin UIs ·
-**14.3** desktop polish trio · **14.4** per-event search granularity · **14.5+** the chat
-connectors + non-repo attribution, sliced from the spike's verdicts. Four scope decisions
+roadmap, stale deferred-wording sweep, the M10–M13 system-review) · **14.2** ✅ catalog admin UIs
+(**DONE 2026-07-17**, PR #52) · **14.3** ✅ desktop polish trio (**DONE 2026-07-19**, PR #53) ·
+**14.4** ✅ per-event search granularity (**DONE 2026-07-19**, PR #54) · **14.5** ✅ the Claude
+chat-export connector + non-repo attribution (**DONE 2026-07-20**, PR #55 — snapshot drop-dir,
+experimental/batch/uncosted; ChatGPT export deferred, Gemini Takeout = 14.6, browser extension =
+14.7) · **14.6+** the remaining chat connectors, sliced from the spike's verdicts. Four scope
+decisions
 (D-M14-1…4) are settled — including a **pre-sign-off checklist** of the outstanding maintainer
 manual actions (signing-key ceremony, restore drill, Cursor round-trip, live SMTP, auth QA) so
 they stop slipping.
