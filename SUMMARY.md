@@ -63,8 +63,12 @@ capture-surface spike (**DONE 2026-07-14** —
 stores conversations locally**, so capture = official exports (Batch) + a browser extension
 (live); gates the connector slices) · **14.1** ✅ truth & hygiene (**DONE 2026-07-14** — README
 roadmap, stale deferred-wording sweep, the M10–M13 system-review) · **14.2** catalog admin UIs ·
-**14.3** desktop polish trio · **14.4** per-event search granularity · **14.5+** the chat
-connectors + non-repo attribution, sliced from the spike's verdicts. Four scope decisions
+**14.3** desktop polish trio · **14.4** per-event search granularity · **14.5** ✅ the Claude
+`claude-export` connector (batch, non-repo attribution) · **14.7** ✅ browser extension
+(near-real-time Claude web capture) + collector **`push`** capture mode — a `127.0.0.1` token-authed
+`node:http` receiver + `claude-live` connector + a Claude-only MV3 extension (ChatGPT/Gemini extension
+origins deferred; per-origin gate in
+[`docs/research/extension-spike.md`](./docs/research/extension-spike.md)). Four scope decisions
 (D-M14-1…4) are settled — including a **pre-sign-off checklist** of the outstanding maintainer
 manual actions (signing-key ceremony, restore drill, Cursor round-trip, live SMTP, auth QA) so
 they stop slipping.
@@ -561,10 +565,15 @@ original M10 "hardening bundle" (exports, catalog signing, replay metadata, pers
       evidence, and the missing **M10–M13 system-review** written
       ([`.agents/system-reviews/m10-m13-review.md`](./.agents/system-reviews/m10-m13-review.md)) ·
       **14.2** catalog admin UIs · **14.3** desktop polish trio (connectorHealth, GUI unpair, auth/me
-      nav) · **14.4** per-event search granularity · **14.5+** chat connectors + non-repo
-      (Work-Session/topic) attribution, sliced from the 14.0 verdicts. Non-goals unchanged
-      (multi-user/SaaS, MSI/signing, Antigravity, semantic search). Next action: `/lril:plan-feature`
-      for 14.2 (or jump to 14.5 — its gate is lifted).
+      nav) · **14.4** per-event search granularity · **14.5** ✅ Claude `claude-export` connector
+      (batch snapshot drop-dir, `chat:claude:<uuid>` non-repo attribution, uncosted) · **14.7** ✅
+      browser extension (near-real-time Claude web capture) + collector **`push`** capture mode (a
+      `127.0.0.1` token-authed `node:http` receiver inside `runCaptureEngine`, a pure `parseClaudeWire`
+      normalizer + `claude-live` connector, and a Claude-only MV3 extension polling claude.ai's
+      conversation API; per-origin go/no-go gate in
+      [`docs/research/extension-spike.md`](./docs/research/extension-spike.md) — Claude GO, ChatGPT GO,
+      Gemini NO-GO-for-intercept; ChatGPT/Gemini extension origins + SSE + cross-connector dedup
+      deferred). Non-goals unchanged (multi-user/SaaS, MSI/signing, Antigravity, semantic search).
 - [x] **M11 (Tauri desktop)** — built across Slices 1–5; both open design points resolved (see the M11
       subsection in §4): JSON-lines control protocol (`m11-control-v2`) and Rust `std::process::Command`
       server-stack supervision. Signed off 2026-06-16.

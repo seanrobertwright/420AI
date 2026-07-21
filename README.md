@@ -164,8 +164,11 @@ _For the full setup and day-to-day guide, see [`docs/guide/install.md`](./docs/g
 - [x] M13 — Capability Gap Closure (7 slices): truth fixes, the 5 remaining report types + context
       governance, archive re-parse, incremental search, alert delivery completion, scheduled reports,
       the Cursor connector
-- [ ] **M14 — General AI Chat Capture** (planned): ChatGPT / Claude / Gemini web+desktop session
-      capture (spike-first), plus catalog admin UIs, desktop polish, and per-event search granularity
+- [ ] **M14 — General AI Chat Capture** (in progress): ChatGPT / Claude / Gemini web+desktop session
+      capture (spike-first), plus catalog admin UIs, desktop polish, and per-event search granularity.
+      Shipped: **14.5** Claude chat-export connector (batch, non-repo attribution); **14.7** browser
+      extension (near-real-time Claude web capture) + collector `push` capture mode — ChatGPT/Gemini
+      extension origins deferred
 
 See [`SUMMARY.md`](./SUMMARY.md) and the [open issues](https://github.com/seanrobertwright/420AI/issues)
 for the full list.

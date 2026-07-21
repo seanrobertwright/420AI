@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>420AI Chat Capture — Options</title>
+    <style>
+      body {
+        font-family:
+          system-ui,
+          -apple-system,
+          sans-serif;
+        max-width: 34rem;
+        margin: 2rem auto;
+        padding: 0 1rem;
+        line-height: 1.5;
+        color: #1a1a1a;
+      }
+      h1 {
+        font-size: 1.3rem;
+      }
+      label {
+        display: block;
+        margin-top: 1rem;
+        font-weight: 600;
+      }
+      input[type="text"] {
+        width: 100%;
+        padding: 0.5rem;
+        margin-top: 0.25rem;
+        box-sizing: border-box;
+        font-family: monospace;
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        margin-top: 1rem;
+      }
+      .row label {
+        margin: 0;
+      }
+      button {
+        margin-top: 1.5rem;
+        padding: 0.5rem 1rem;
+        margin-right: 0.5rem;
+        cursor: pointer;
+      }
+      #status {
+        margin-top: 1rem;
+        padding: 0.5rem;
+        border-radius: 4px;
+        display: none;
+      }
+      #status.ok {
+        display: block;
+        background: #e6f4ea;
+        color: #137333;
+      }
+      #status.err {
+        display: block;
+        background: #fce8e6;
+        color: #c5221f;
+      }
+      .hint {
+        font-size: 0.85rem;
+        color: #555;
+        font-weight: 400;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>420AI Chat Capture</h1>
+    <p class="hint">
+      Captures your claude.ai web conversations near-real-time and pushes them to your local 420AI
+      collector. Nothing is captured until you enable it below and paste the push token the collector
+      logs on its first <code>watch</code> start.
+    </p>
+
+    <label for="token">Push token</label>
+    <input id="token" type="text" placeholder="paste the token the collector logged on first start" />
+
+    <label for="collectorUrl">Collector URL</label>
+    <input id="collectorUrl" type="text" placeholder="http://127.0.0.1:42017" />
+
+    <div class="row">
+      <input id="enabled" type="checkbox" />
+      <label for="enabled">Enable capture</label>
+    </div>
+
+    <button id="save">Save</button>
+    <button id="test">Test connection</button>
+
+    <div id="status"></div>
+
+    <script src="options.js"></script>
+  </body>
+</html>

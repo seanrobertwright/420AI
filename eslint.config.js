@@ -44,5 +44,14 @@ export default tseslint.config(
       ],
     },
   },
+  {
+    // The browser extension (apps/extension) is plain JS loaded unpacked, OUT of the root
+    // tsc graph (like apps/dashboard/desktop). It runs in the MV3 service-worker + options
+    // contexts, so it needs the browser + webextension (`chrome`) globals, not Node's.
+    files: ["apps/extension/**/*.js"],
+    languageOptions: {
+      globals: { ...globals.browser, ...globals.webextensions },
+    },
+  },
   prettier,
 );

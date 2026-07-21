@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "420AI Chat Capture",
+  "version": "0.1.0",
+  "description": "Captures your claude.ai web conversations near-real-time and pushes them to your local 420AI collector.",
+  "permissions": ["storage", "alarms"],
+  "host_permissions": ["https://claude.ai/*", "http://127.0.0.1:42017/*"],
+  "background": {
+    "service_worker": "src/background.js",
+    "type": "module"
+  },
+  "options_page": "src/options.html"
+}

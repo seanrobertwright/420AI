@@ -8,6 +8,8 @@ import { FileWatcher } from "./watcher/file-watcher.js";
 import { syncOnce, runSyncLoop } from "./sync/sync-worker.js";
 import { captureGitCommits } from "./discovery/git-capture.js";
 import { postGit } from "./ingest-client.js";
+import { runPushServer } from "./push/push-server.js";
+import { loadOrCreatePushToken } from "./push/push-token.js";
 
 /** Default git-sweep cadence: a SLOW background sweep (commits change far less often than sessions). */
 const DEFAULT_GIT_INTERVAL_MS = 5 * 60_000;
@@ -69,6 +71,8 @@ export interface CaptureEngineOptions {
   gitIntervalMs?: number;
   /** M13 13.1: called with an ISO timestamp after each successful sync drain (serve.ts wires this to the StatusBar's `lastSyncAt`). */
   onSyncSuccess?: (at: string) => void;
+  /** M14 14.7: push-receiver port override (default `DEFAULT_PUSH_PORT`). Tests pass 0 for ephemeral. */
+  pushPort?: number;
 }
 
 /**
@@ -252,9 +256,26 @@ export async function runCaptureEngine(opts: CaptureEngineOptions): Promise<void
       .filter((c) => c.poll)
       .map((c) => pollLoop({ connector: c, home, queue, log }, internal.signal));
 
+    // M14 14.7: a single best-effort push receiver for the enabled+approved push connectors
+    // (Claude-live). Like the git/poll loops it is NOT part of the race (it resolves only on
+    // abort/close) and unwinds when `internal` aborts. Starts ONLY when ≥1 push connector is
+    // present, so the default (until claude-live is approved) is byte-identical to before.
+    const pushConnectors = connectors.filter((c) => c.push);
+    let pushServer: Promise<void> = Promise.resolve();
+    if (pushConnectors.length > 0) {
+      const { token, created } = loadOrCreatePushToken(home);
+      if (created) {
+        log(`push receiver token generated: ${token} — paste it into the 420AI browser extension`);
+      }
+      pushServer = runPushServer(
+        { connectors: pushConnectors, queue, token, port: opts.pushPort, log },
+        internal.signal,
+      );
+    }
+
     await Promise.race([watcherLoop, syncLoop]);
     internal.abort(); // ensure the other loops unwind too
-    await Promise.allSettled([watcherLoop, syncLoop, gitLoop, ...pollLoops]);
+    await Promise.allSettled([watcherLoop, syncLoop, gitLoop, ...pollLoops, pushServer]);
     opts.signal.removeEventListener("abort", onExternalAbort);
 
     // Best-effort final drain of anything captured but not yet sent — bounded by SHUTDOWN_DRAIN_MS

@@ -24,3 +24,4 @@ export * from "./parsers/claude-code.js";
 export * from "./parsers/codex-cli.js";
 export * from "./parsers/gemini-cli.js";
 export * from "./parsers/claude-export.js";
+export * from "./parsers/claude-wire.js";
