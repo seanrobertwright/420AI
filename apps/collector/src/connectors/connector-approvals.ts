@@ -59,12 +59,21 @@ function defaultApprovals(): ConnectorApprovals {
  * is present, so a path drift gates on `connectors.approve` (§10.4). The extra key is
  * omitted entirely for poll-less connectors, so their fingerprint is byte-identical to
  * before (no upgrade re-approval churn for the built-in file connectors).
+ *
+ * M14 14.7: a PUSH-mode connector (Claude-live) likewise has empty `watchGlobs`; its
+ * capture surface is `push.origins` (the origins it accepts data from). Folded in the
+ * same way — only when `push` is present — so an origin change gates on approve while
+ * push-less connectors stay byte-identical.
  */
 export function captureSurfaceFingerprint(c: Connector, home: string): string {
   const globs = [...c.watchGlobs(home)].sort();
   const perms = [...c.fidelity.requiredPermissions].sort();
-  const surface: { globs: string[]; perms: string[]; poll?: string[] } = { globs, perms };
+  const surface: { globs: string[]; perms: string[]; poll?: string[]; push?: string[] } = {
+    globs,
+    perms,
+  };
   if (c.poll) surface.poll = [...c.poll.sources(home)].sort();
+  if (c.push) surface.push = [...c.push.origins].sort();
   return createHash("sha256").update(JSON.stringify(surface)).digest("hex");
 }
 

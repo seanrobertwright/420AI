@@ -74,11 +74,17 @@ try {
 // (this is how M3's failed cross-project build leaked .js into apps/ingest/src).
 console.log("\n[2/6] Stray build-artifact scan (src/ dirs)");
 try {
+  // Plain-JS workspaces whose `src/` is authored in JS by design (not TypeScript output),
+  // so the "src is TS-only → any .js is a stray build" premise does not apply. The M14 14.7
+  // MV3 browser extension is loaded unpacked as plain JS (like the dashboard/desktop being
+  // out of the root tsc graph) — exclude it, else its legitimate src/*.js trip this scan.
+  const plainJsSrcWorkspaces = new Set(["extension"]);
   const srcDirs = [];
   for (const group of ["packages", "apps"]) {
     const base = join(root, group);
     if (!existsSync(base)) continue;
     for (const pkg of readdirSync(base)) {
+      if (group === "apps" && plainJsSrcWorkspaces.has(pkg)) continue;
       const src = join(base, pkg, "src");
       if (existsSync(src) && statSync(src).isDirectory()) srcDirs.push(src);
     }

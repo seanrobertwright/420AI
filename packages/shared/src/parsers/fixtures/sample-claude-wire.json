@@ -1,0 +1,135 @@
+[
+  {
+    "uuid": "52caf7a2-3a14-4a2d-8883-a8741b3c92d0",
+    "name": "redacted",
+    "summary": "redacted",
+    "model": "claude-opus-4-1",
+    "created_at": "2025-08-07T15:32:40.100663Z",
+    "updated_at": "2025-08-07T15:32:47.274858Z",
+    "chat_messages": [
+      {
+        "uuid": "256de3c4-39a9-40b5-b447-c5005eddfbb3",
+        "text": "redacted",
+        "content": [{ "type": "text", "text": "redacted", "citations": [] }],
+        "sender": "human",
+        "index": 0,
+        "created_at": "2025-08-07T15:32:41.623137Z",
+        "updated_at": "2025-08-07T15:32:41.623137Z",
+        "attachments": [],
+        "files": [],
+        "parent_message_uuid": "00000000-0000-4000-8000-000000000000"
+      },
+      {
+        "uuid": "8afa8c6d-4788-4072-8816-affbf2e1c7c8",
+        "text": "redacted",
+        "content": [{ "type": "text", "text": "redacted", "citations": [] }],
+        "sender": "assistant",
+        "index": 1,
+        "created_at": "2025-08-07T15:32:46.102719Z",
+        "updated_at": "2025-08-07T15:32:46.102719Z",
+        "attachments": [],
+        "files": [],
+        "parent_message_uuid": "256de3c4-39a9-40b5-b447-c5005eddfbb3"
+      }
+    ]
+  },
+  {
+    "uuid": "4cad368d-c568-453b-ac52-cf93d389b5b2",
+    "name": "redacted",
+    "summary": "redacted",
+    "model": "claude-sonnet-4-5",
+    "created_at": "2025-10-22T09:41:30.759440Z",
+    "updated_at": "2025-10-22T09:53:23.237418Z",
+    "chat_messages": [
+      {
+        "uuid": "9aec5da3-3418-4d61-8a88-26f3d220b2c9",
+        "text": "redacted",
+        "content": [{ "type": "text", "text": "redacted", "citations": [] }],
+        "sender": "human",
+        "index": 0,
+        "created_at": "2025-10-22T09:41:33.405649Z",
+        "updated_at": "2025-10-22T09:41:33.405649Z",
+        "attachments": [],
+        "files": [],
+        "parent_message_uuid": "00000000-0000-4000-8000-000000000000"
+      },
+      {
+        "uuid": "35d2a4d3-5ca4-48fc-8efc-36b49f21ee02",
+        "text": "redacted",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "redacted",
+            "summaries": [{ "summary": "redacted" }],
+            "signature": null
+          },
+          {
+            "type": "tool_use",
+            "id": null,
+            "name": "redacted",
+            "input": { "path": "redacted", "description": "redacted" },
+            "display_content": { "type": "text", "text": "redacted" }
+          },
+          {
+            "type": "tool_result",
+            "tool_use_id": null,
+            "name": "redacted",
+            "content": [{ "type": "text", "text": "redacted" }],
+            "is_error": false
+          },
+          { "type": "text", "text": "redacted", "citations": [] }
+        ],
+        "sender": "assistant",
+        "index": 1,
+        "created_at": "2025-10-22T09:41:40.512114Z",
+        "updated_at": "2025-10-22T09:41:40.512114Z",
+        "attachments": [],
+        "files": [],
+        "parent_message_uuid": "9aec5da3-3418-4d61-8a88-26f3d220b2c9"
+      }
+    ]
+  },
+  {
+    "uuid": "95033e57-2b1f-4c8e-9a70-1d3e5f7a9b21",
+    "name": "redacted",
+    "summary": "redacted",
+    "model": "claude-opus-4-1",
+    "created_at": "2026-01-02T12:00:00.000000Z",
+    "updated_at": "2026-01-02T12:00:00.000000Z",
+    "chat_messages": []
+  },
+  {
+    "uuid": "39c9595a-7d84-4e11-b2a6-c0f1e2d3a4b5",
+    "name": "",
+    "summary": "redacted",
+    "model": null,
+    "created_at": "2026-02-14T08:15:00.500000Z",
+    "updated_at": "2026-02-14T08:20:00.750000Z",
+    "chat_messages": [
+      {
+        "uuid": "a1b2c3d4-1111-2222-3333-444455556666",
+        "text": "redacted",
+        "content": [{ "type": "text", "text": "redacted", "citations": [] }],
+        "sender": "human",
+        "index": 0,
+        "created_at": "2026-02-14T08:15:01.000000Z",
+        "updated_at": "2026-02-14T08:15:01.000000Z",
+        "attachments": [],
+        "files": [],
+        "parent_message_uuid": "00000000-0000-4000-8000-000000000000"
+      },
+      {
+        "uuid": "b2c3d4e5-7777-8888-9999-aaaabbbbcccc",
+        "text": "redacted",
+        "content": [{ "type": "text", "text": "redacted", "citations": [] }],
+        "sender": "assistant",
+        "index": 1,
+        "created_at": "2026-02-14T08:15:05.250000Z",
+        "updated_at": "2026-02-14T08:15:05.250000Z",
+        "attachments": [],
+        "files": [],
+        "parent_message_uuid": "a1b2c3d4-1111-2222-3333-444455556666"
+      }
+    ]
+  }
+]

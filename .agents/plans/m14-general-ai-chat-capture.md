@@ -107,6 +107,17 @@ code-reviews, execution-reports, system-reviews), and source comments. Findings,
     Parser written against a Task-1-verified redacted fixture. **ChatGPT export deferred** (export
     not yet obtainable at build time — recorded as a gap, per 12.7d ship-what's-feasible); Gemini
     Takeout = 14.6; browser extension = 14.7.
+  - **14.7 shipped (2026-07-20): the browser extension + collector `push` capture mode** — a new
+    inbound `127.0.0.1`-bound, token-authed `node:http` receiver (a new capture mode beside
+    `tail`/`snapshot`/`poll`) running inside `runCaptureEngine`, routing pushed `{connector,
+    conversations}` through the existing `connector.parse` seam onto the durable queue. A pure
+    `parseClaudeWire` normalizer + a `claude-live` connector (`captureMode:"push"`, **experimental /
+    near-real-time / uncosted**, conversation-level model stamped on assistant events) and a minimal
+    MV3 Claude-only extension that polls claude.ai's conversation API and forwards raw JSON. Per-origin
+    go/no-go gate in [`docs/research/extension-spike.md`](../../docs/research/extension-spike.md)
+    (Claude GO, ChatGPT GO, Gemini NO-GO-for-intercept). **No** fingerprint/migration/control-protocol/
+    dependency change. **ChatGPT/Gemini extension origins, SSE interception, and cross-connector dedup
+    (`claude-live` vs `claude-export` → two sessions) deferred.**
 
 ## Pre-sign-off checklist (D-M14-4 — every box, maintainer manual)
 

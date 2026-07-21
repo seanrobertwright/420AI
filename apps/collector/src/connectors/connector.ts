@@ -4,6 +4,7 @@ import { codexCliConnector } from "./codex-cli.js";
 import { geminiCliConnector } from "./gemini-cli.js";
 import { cursorConnector } from "./cursor.js";
 import { claudeExportConnector } from "./claude-export.js";
+import { claudeLiveConnector } from "./claude-live.js";
 
 /**
  * The connector contract — the plugin shape every capture source implements.
@@ -101,6 +102,28 @@ export interface PollOutcome {
   unavailable?: boolean;
 }
 
+/**
+ * M14 14.7: a PUSH-mode capture source (the Claude-live connector). Unlike `watchGlobs`
+ * (files the FileWatcher tails/snapshots) or `poll` (a store swept on an interval), a push
+ * source receives data INBOUND: the browser extension reads the app's own conversation API
+ * and POSTs raw conversation JSON to the collector's localhost `push` receiver
+ * (`push-server.ts`), which routes it through this connector's `parse` seam.
+ *
+ * Additive + optional — every existing connector leaves `push` unset, so the FileWatcher,
+ * registry, discovery, and engine are byte-for-byte unchanged for them. A push connector's
+ * `watchGlobs` returns `[]` (nothing to tail); the engine starts ONE receiver when ≥1 push
+ * connector is enabled+approved.
+ */
+export interface PushCapability {
+  /**
+   * The human-readable origins this connector accepts pushed data from (e.g.
+   * `["https://claude.ai"]`). This is the push capture SURFACE — folded into the §10.4
+   * approval fingerprint exactly as `poll.sources` is, so an origin change gates on
+   * `connectors.approve`.
+   */
+  origins: string[];
+}
+
 export interface Connector {
   /** Stable connector id, stamped on every record/event (e.g. "claude-code"). */
   id: string;
@@ -112,8 +135,10 @@ export interface Connector {
    *     size/mtime change (Gemini). Absent = "tail" keeps the proven path intact.
    *   - "poll" — no FileWatcher involvement at all; capture is driven by the
    *     `poll` capability (M13 13.7, Cursor). `watchGlobs` is `[]` for these.
+   *   - "push" — no FileWatcher involvement at all; capture is driven by the inbound
+   *     `push` receiver (M14 14.7, Claude-live). `watchGlobs` is `[]` for these.
    */
-  captureMode?: "tail" | "snapshot" | "poll";
+  captureMode?: "tail" | "snapshot" | "poll" | "push";
   fidelity: ConnectorFidelity;
   /** Glob patterns (absolute, `~` pre-expanded to `home`) for session files. Empty for poll sources. */
   watchGlobs(home: string): string[];
@@ -134,12 +159,19 @@ export interface Connector {
    * runs a `pollLoop` for it instead.
    */
   poll?: PollCapability;
+  /**
+   * M14 14.7: OPTIONAL push-mode capture (Claude-live). Absent ⇒ this connector captures
+   * via `watchGlobs`/the FileWatcher or `poll`. Present ⇒ the engine starts the inbound
+   * `push` receiver, which routes pushed payloads through `parse` onto the durable queue.
+   */
+  push?: PushCapability;
 }
 
 /**
  * The active connector registry. M3: Claude only; M4 appends Codex/Gemini; M13 13.7
  * appends the poll-mode Cursor connector; M14 14.5 appends the Claude chat-export
- * connector (snapshot drop-dir, uncosted/experimental).
+ * connector (snapshot drop-dir, uncosted/experimental); M14 14.7 appends the push-mode
+ * Claude-live connector (browser-extension push receiver, uncosted/experimental).
  */
 export const connectors: Connector[] = [
   claudeCodeConnector,
@@ -147,4 +179,5 @@ export const connectors: Connector[] = [
   geminiCliConnector,
   cursorConnector,
   claudeExportConnector,
+  claudeLiveConnector,
 ];

@@ -95,6 +95,40 @@ describe("connector-approvals", () => {
     );
   });
 
+  it("M14 14.7: a push connector's origins drift its fingerprint, but push-less ones are byte-identical", () => {
+    const fileConn = fakeConnector("file", ["/g"], ["perm"]);
+    const pushA = {
+      ...fakeConnector("pushc", [], ["Receive claude.ai data"]),
+      push: { origins: ["https://claude.ai"] },
+    } as unknown as Connector;
+    const pushB = {
+      ...fakeConnector("pushc", [], ["Receive claude.ai data"]),
+      push: { origins: ["https://claude.ai", "https://chatgpt.com"] },
+    } as unknown as Connector;
+    // Push origins are folded in → an origin change flips the fingerprint (gates on approve).
+    expect(captureSurfaceFingerprint(pushA, HOME)).not.toBe(captureSurfaceFingerprint(pushB, HOME));
+    // Push-less fingerprint unchanged by the new code path (the `push` key is simply absent).
+    expect(captureSurfaceFingerprint(fileConn, HOME)).not.toBe(
+      captureSurfaceFingerprint(pushA, HOME),
+    );
+  });
+
+  it("M14 14.7: after seeding, a changed push.origins ⇒ needs-approval ⇒ dropped from filterByApproval", () => {
+    const pushConn = {
+      ...fakeConnector("claude-live", [], ["Receive claude.ai data"]),
+      push: { origins: ["https://claude.ai"] },
+    } as unknown as Connector;
+    const seeded = seedMissingApprovals([pushConn], defaultBlob(), HOME).approvals;
+    expect(approvalStatus(pushConn, seeded, HOME)).toBe("approved");
+    // Same id, WIDENED origins — its current fingerprint now drifts from the seeded one.
+    const drifted = {
+      ...fakeConnector("claude-live", [], ["Receive claude.ai data"]),
+      push: { origins: ["https://claude.ai", "https://chatgpt.com"] },
+    } as unknown as Connector;
+    expect(approvalStatus(drifted, seeded, HOME)).toBe("needs-approval");
+    expect(filterByApproval([drifted], seeded, HOME).map((c) => c.id)).toEqual([]);
+  });
+
   it("seedMissingApprovals records every connector's fingerprint; a re-seed is idempotent", () => {
     const first = seedMissingApprovals(REGISTRY, loadConnectorApprovals(tempApprovalsPath()), HOME);
     expect(first.changed).toBe(true);

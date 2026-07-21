@@ -1,0 +1,8 @@
+# The extension is plain static assets loaded unpacked — nothing is built or bundled.
+# This mirrors the desktop/dashboard convention; kept so a future bundler's output
+# (a packed .zip / .crx / dist/) is never committed.
+dist/
+*.zip
+*.crx
+*.pem
+node_modules/

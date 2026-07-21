@@ -181,6 +181,8 @@ export async function runWatch(opts: {
   collectorVersion?: string;
   /** M9: heartbeat cadence override (ms). */
   heartbeatIntervalMs?: number;
+  /** M14 14.7: push-receiver port override (default `DEFAULT_PUSH_PORT`). */
+  pushPort?: number;
 }): Promise<void> {
   const creds = resolveCreds(opts);
   const home = opts.home ?? homedir();
@@ -210,6 +212,7 @@ export async function runWatch(opts: {
     logger: opts.logger,
     collectorVersion: opts.collectorVersion,
     heartbeatIntervalMs: opts.heartbeatIntervalMs,
+    pushPort: opts.pushPort,
     connectors,
   });
 }
@@ -422,7 +425,7 @@ function usage(dbPath: string): string {
     "  collector report <sessionId> [--db <path>] [--out <file>]",
     "  collector pair <code> --url <baseUrl> [--name <n>] [--os <os>] [--hostname <h>]",
     "  collector push <file> [--url <baseUrl>] [--token <token>]",
-    "  collector watch [--url <baseUrl>] [--token <token>] [--interval <ms>] [--home <dir>]",
+    "  collector watch [--url <baseUrl>] [--token <token>] [--interval <ms>] [--home <dir>] [--push-port <port>]",
     "  collector sync [--url <baseUrl>] [--token <token>] [--home <dir>]",
     "  collector queue [--home <dir>]",
     "  collector discover [--url <baseUrl>] [--token <token>] [--home <dir>]",
@@ -535,6 +538,9 @@ async function main(argv: string[]): Promise<void> {
     process.stdout.write("watching… Ctrl-C to stop\n");
     const heartbeatFlag =
       getFlag(args, "--heartbeat-interval") ?? process.env.HEARTBEAT_INTERVAL_MS;
+    const pushPortFlag = getFlag(args, "--push-port");
+    const pushPort =
+      pushPortFlag && Number.isFinite(Number(pushPortFlag)) ? Number(pushPortFlag) : undefined;
     await runWatch({
       url: getFlag(args, "--url"),
       token: getFlag(args, "--token"),
@@ -544,6 +550,7 @@ async function main(argv: string[]): Promise<void> {
       logger: (msg) => process.stdout.write(msg + "\n"),
       collectorVersion: readCollectorVersion(),
       heartbeatIntervalMs: parseHeartbeatIntervalMs(heartbeatFlag),
+      pushPort,
     });
     process.exit(0);
   }
