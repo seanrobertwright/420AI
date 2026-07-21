@@ -65,6 +65,10 @@ interface HandlerContext extends PushServerOptions {
 
 /** Constant-time bearer check. Length-mismatch short-circuits (timingSafeEqual needs equal length). */
 function authOk(header: string | undefined, token: string): boolean {
+  // Defense-in-depth: an empty configured token would make `Bearer ` (empty) auth via a
+  // zero-length timingSafeEqual — reject outright. Not reachable in prod (the token is always
+  // randomBytes), but never leave the receiver open on a misconfiguration.
+  if (token.length === 0) return false;
   const prefix = "Bearer ";
   if (typeof header !== "string" || !header.startsWith(prefix)) return false;
   const provided = Buffer.from(header.slice(prefix.length));
@@ -86,6 +90,13 @@ function json(res: ServerResponse, status: number, body: unknown): void {
  */
 function handleRequest(req: IncomingMessage, res: ServerResponse, ctx: HandlerContext): void {
   try {
+    // Swallow response/request socket errors (armed BEFORE any write): a client that
+    // disconnects mid-response — or is RST after the 413 `req.destroy()` below — otherwise
+    // surfaces an unhandled 'error' that would crash the whole receiver. The record is
+    // already enqueued locally by then, so a failed response write is harmless to capture.
+    res.on("error", () => {});
+    req.on("error", () => {}); // also caught below for the in-flight-body case
+
     // Defensive preflight support.
     if (req.method === "OPTIONS") {
       res.writeHead(204, CORS_HEADERS);

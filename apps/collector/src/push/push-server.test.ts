@@ -111,6 +111,25 @@ describe("runPushServer", () => {
     }
   });
 
+  it("never authenticates against an empty configured token (defense-in-depth)", async () => {
+    const { portReady, ctrl, done, queue } = startServer({ token: "" });
+    try {
+      const port = await portReady;
+      // An empty bearer against an empty token must NOT pass (no zero-length timingSafeEqual).
+      const res = await fetch(`http://127.0.0.1:${port}/v1/push`, {
+        method: "POST",
+        headers: { authorization: "Bearer ", "content-type": "application/json" },
+        body: JSON.stringify({ connector: "claude-live", conversations: CONVERSATIONS }),
+      });
+      expect(res.status).toBe(401);
+      expect(queue.stats().pending).toBe(0);
+    } finally {
+      ctrl.abort();
+      await done;
+      queue.close();
+    }
+  });
+
   it("rejects an unknown/non-push connector id with 400", async () => {
     const { portReady, ctrl, done, queue } = startServer();
     try {
