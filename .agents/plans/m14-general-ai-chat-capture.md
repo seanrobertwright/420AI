@@ -142,7 +142,10 @@ code-reviews, execution-reports, system-reviews), and source comments. Findings,
       raw_source_records 156636, events 224126); evidence `.agents/qa/m14-signoff/restore-drill-20260722.txt`
 - [ ] Live auto-update E2E (needs the ceremony first)
 - [ ] 12.3 auth live QA + screenshots → `.agents/qa/m12-slice3/`
-- [ ] Live SMTP alert send (opt-in env set, one real email observed)
+- [x] Live SMTP alert send (opt-in env set, one real email observed) — done 2026-07-22 via a
+      local Mailpit catcher (`smtp://localhost:1025`); forced an `ingest.auth_failure` firing and
+      observed the delivered email (subject/body correct); evidence
+      `.agents/qa/m14-signoff/smtp-send-20260722.txt`
 - [x] Scheduled-reports cold run (`reports:generate` against a live stack) — done 2026-07-22;
       390 reports (all 6 project types × 65 projects), 0 failures, exit 0; evidence
       `.agents/qa/m14-signoff/reports-generate-20260722.txt`

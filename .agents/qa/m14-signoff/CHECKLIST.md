@@ -32,7 +32,7 @@ export ADMIN_TOKEN="<your admin token>"     # the retained machine/service crede
 | 2 | Restore-from-backup drill (scratch DB) | `restore-drill-<date>.txt` (script output) | ✅ (2026-07-22 — exact-match fidelity, 224126 events) |
 | 3 | Live auto-update E2E | `auto-update-e2e-<date>.md` + screenshots | ⬜ |
 | 4 | 12.3 auth live QA | screenshots in `.agents/qa/m12-slice3/` | ⬜ |
-| 5 | Live SMTP alert send | `smtp-send-<date>.md` (received email header/screenshot) | ⬜ |
+| 5 | Live SMTP alert send | `smtp-send-<date>.txt` (received email header/body) | ✅ (2026-07-22 — Mailpit captured the auth_failure email) |
 | 6 | Scheduled-reports cold run | `reports-generate-<date>.txt` | ✅ (2026-07-22 — 390 reports, 0 fail, all 6 types) |
 | 7 | Cursor live round-trip | screenshot of a Cursor session in Monitor | ⬜ |
 
@@ -151,7 +151,7 @@ Run the dashboard + ingest, then walk the login surface. Shot list (details in
 
 ---
 
-## 5. Live SMTP alert send  ⬜
+## 5. Live SMTP alert send  ✅ _(done 2026-07-22 — Mailpit local catcher; evidence: `smtp-send-20260722.txt`)_
 
 **Why it's blocking:** M13.5 shipped SMTP alert delivery (`createSmtpDeliverer`), but a **real
 email** has never been observed. Set the opt-in env, force one alert firing, confirm the email
@@ -181,8 +181,14 @@ sh scripts/smoke-alert.sh
 save `smtp-send-<date>.md` with the received message's subject/header (or a screenshot). Also confirm
 the firing appears in the dashboard AlertsPanel.
 
-> If your SMTP relay refuses the sandbox, Mailtrap/Ethereal give a captured-inbox URL that satisfies
-> "one real email observed" without a live mailbox.
+> **Validated path (2026-07-22): Mailpit** — a fully local SMTP catcher, no account/credentials:
+> `docker run -d --name mailpit -p 1025:1025 -p 8025:8025 axllent/mailpit`, then
+> `ALERT_SMTP_URL=smtp://localhost:1025` with any `FROM`/`TO` addresses; view captured mail at
+> `http://localhost:8025`. Mailtrap/Ethereal also work if you prefer a hosted sandbox.
+>
+> **Gotcha:** SMTP config is read at ingest **boot** — fully stop the old ingest and confirm port
+> 8420 is free before restarting, or the new (SMTP-configured) process silently `EADDRINUSE`s and
+> the old no-SMTP process keeps serving (delivery never fires).
 
 ---
 

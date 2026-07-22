@@ -1,0 +1,33 @@
+# M14 checklist item 5 — live SMTP alert send (evidence, 2026-07-22)
+
+## Setup
+- SMTP sink: Mailpit (local Docker catcher) — `docker run -d --name mailpit -p 1025:1025 -p 8025:8025 axllent/mailpit`
+- Ingest env: `ALERT_SMTP_URL=smtp://localhost:1025`  `ALERT_EMAIL_FROM=alerts@420ai.local`  `ALERT_EMAIL_TO=you@420ai.local`
+- Delivery path exercised: `createSmtpDeliverer` → `nodemailer.createTransport` → SMTP → Mailpit.
+
+## Method
+1. `scripts/smoke-alert.sh` landed 4 invalid-bearer GETs to `/v1/connector-catalog/active` (each records an ingest auth failure).
+2. `GET /v1/monitor` ran the evaluate-on-read reconcile → opened the `ingest.auth_failure` firing → `deliverPendingFirings` delivered every OPEN + un-attempted firing over SMTP.
+
+## Result — Mailpit captured 6 alert emails (real SMTP transactions)
+- `[420AI] warning ingest.auth_failure:*` → you@420ai.local  ← the forced firing (below)
+- 5× `[420AI] critical collector.offline:<machine>` → you@420ai.local (pre-existing open firings,
+  never delivered before SMTP was wired — delivered on this first reconcile per the
+  "any OPEN firing not yet attempted" rule).
+
+## The forced alert email (verbatim from Mailpit)
+
+SUBJECT: [420AI] warning ingest.auth_failure:*
+FROM: alerts@420ai.local
+TO: you@420ai.local
+---BODY---
+4 ingest authentication failures in the last 15 min
+
+Severity: warning
+Status:   open
+Opened:   2026-07-22T17:06:57.747Z
+
+## Verdict
+PASS — the SMTP delivery path (M13.5) works end-to-end against a live stack; one real email
+observed (subject + body correct, "4 … failures" matches the 4 forced attempts). View in the
+Mailpit UI at http://localhost:8025 while the container is running.
