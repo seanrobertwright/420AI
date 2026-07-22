@@ -192,11 +192,17 @@ export function parseChatgptExport(fileText: string, opts?: { ingestedAt?: strin
       const message = node.message;
       // rawRecordId keyed on the stable `message.id` (VERIFIED unique + present on
       // 100% of messages) so the fingerprint is invariant across whole-file
-      // re-imports; the positional fallback is defensive only.
+      // re-imports. The fallbacks are defensive only: the node's own `mapping` key
+      // (`node.id`, verified === the key on 100% of nodes) is likewise stable across
+      // re-imports (order-independent), so it is preferred over the sorted-position
+      // index — the latter would churn fingerprints if an earlier node were
+      // added/removed between exports.
       const rawId =
         typeof message.id === "string" && message.id.length > 0
           ? message.id
-          : `${sessionId}:msg:${i}`;
+          : typeof node.id === "string" && node.id.length > 0
+            ? node.id
+            : `${sessionId}:msg:${i}`;
       // Raw is sacred: EVERY message node is stored verbatim, including the
       // thoughts/reasoning_recap reasoning nodes that emit no normalized event.
       rawRecords.push({

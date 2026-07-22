@@ -102,19 +102,40 @@ export function parseGeminiExport(fileText: string, opts?: { ingestedAt?: string
   let skippedLines = 0;
 
   for (const record of list) {
-    if (!record || typeof record !== "object") continue;
-    // Process ONLY conversational "Prompted" activity from Gemini Apps. Non-
-    // conversation activity (canvas creation, feedback, image generation) is an
-    // INTENTIONAL skip — do NOT inflate skippedLines (mirrors gemini-cli's "info
-    // type carries no event").
-    if (record.header !== "Gemini Apps") continue;
+    // A malformed array entry (null / primitive) is a genuine parse anomaly —
+    // count it, mirroring the sibling parsers (chatgpt/claude-export).
+    if (!record || typeof record !== "object") {
+      skippedLines++;
+      continue;
+    }
+    // An UNEXPECTED header — a non-"Gemini Apps" record, or (the load-bearing case)
+    // a whole export from a non-English Takeout where the header is localized — is
+    // a shape this parser does not recognize. COUNT it, so a wholesale mismatch
+    // trips the "0 events but N skipped" alarm rather than silently parsing to
+    // nothing: in snapshot mode the watcher treats 0-events/0-skipped as a clean
+    // success and never retries, which would hide total data-loss on a locale/shape
+    // it wasn't verified against (real export: header is 100% "Gemini Apps").
+    if (record.header !== "Gemini Apps") {
+      skippedLines++;
+      continue;
+    }
+    // A "Gemini Apps" record that is NOT a "Prompted …" prompt is legitimate but
+    // non-conversational activity (canvas creation, feedback, image generation) —
+    // an INTENTIONAL silent skip, deliberately NOT inflated into skippedLines
+    // (mirrors gemini-cli's "info type carries no event"; keeps a normal English
+    // export at skippedLines 0 despite its ~188 non-prompt records).
     const rawTitle = typeof record.title === "string" ? record.title : "";
     if (!rawTitle.startsWith(PROMPTED_PREFIX)) continue;
 
     // There is NO native record id — derive a deterministic, stable key from the
     // 100%-unique `time` plus `title`. Stable across re-exports (Google's activity
-    // `time` is stable), so the fingerprint holds across re-imports. A record with
-    // no `time` can't be keyed → count it and skip.
+    // `time` is stable), so the fingerprint holds across re-imports. INTENTIONAL
+    // tradeoff: `time`+`title` IS the dedup identity, so two records with an
+    // identical millisecond timestamp AND identical prompt collapse to one session
+    // (verified never to occur — `time` is 100% unique in the real export). This is
+    // preferred over folding in the array index, which would churn EVERY fingerprint
+    // on re-export since Takeout prepends new activity (reverse-chronological). A
+    // record with no `time` can't be keyed → count it and skip.
     const time =
       typeof record.time === "string" && record.time.length > 0 ? record.time : undefined;
     if (!time) {

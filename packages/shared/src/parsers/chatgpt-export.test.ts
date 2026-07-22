@@ -134,6 +134,37 @@ describe("parseChatgptExport", () => {
     expect(set.size).toBe(first.events.length);
   });
 
+  it("falls back to the stable node id (not sorted position) when message.id is absent", () => {
+    // A message node lacking its own `id` keys on the node's `mapping` key (stable
+    // across re-imports, order-independent) rather than the sorted-position index
+    // (which would churn if an earlier node were added/removed between exports).
+    const input = JSON.stringify([
+      {
+        conversation_id: "conv-fallback",
+        title: "t",
+        create_time: 1763306665,
+        update_time: 1763306669,
+        default_model_slug: "gpt-5-1",
+        mapping: {
+          "stable-node-key": {
+            id: "stable-node-key",
+            message: {
+              author: { role: "user" },
+              create_time: 1763306666,
+              content: { content_type: "text", parts: ["hi"] },
+            },
+            parent: null,
+          },
+        },
+      },
+    ]);
+    const { events, rawRecords } = parseChatgptExport(input, opts);
+    expect(rawRecords.some((r) => r.id === "stable-node-key")).toBe(true);
+    expect(events.some((e) => e.rawRecordId === "stable-node-key")).toBe(true);
+    // NOT the positional fallback.
+    expect(rawRecords.some((r) => r.id === "conv-fallback:msg:0")).toBe(false);
+  });
+
   it("tolerates a malformed / mid-copy whole-file blob (empty result, skippedLines 1)", () => {
     const result = parseChatgptExport("[{not valid json", opts);
     expect(result.rawRecords).toHaveLength(0);

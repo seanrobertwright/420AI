@@ -33,7 +33,8 @@ export const geminiExportConnector: Connector = {
     cost: "none",
     knownGaps: [
       "Google Takeout 'My Activity' is a FLAT activity log with no conversation threading → each activity record is captured as its own single-turn session (topic grouping is a user-side workspace_keys concern)",
-      "records have no native id → the fingerprint key is derived from time+prompt (stable while Google's activity time is stable)",
+      "records have no native id → the fingerprint key is derived from time+prompt (a stable dedup identity while Google's activity time stays unique — verified 100% unique in the real export; two records with an identical timestamp AND identical prompt would collapse to one session, an accepted tradeoff since folding in array position would churn every fingerprint on each re-export)",
+      "the export shape is verified against an English Takeout (header 'Gemini Apps', 'Prompted …' prefix); a non-English/relabeled export whose records don't match is counted into skippedLines so a wholesale mismatch surfaces rather than silently capturing nothing",
       "no token counts and no model in the export → chat events are uncosted and carry no model attribution",
       "batch liveness — data is days-stale between manual Takeout exports",
       "response body is HTML (safeHtmlItem) stored verbatim → search may include markup; non-'Prompted' activity (image generation, canvas creation, feedback) is skipped; attachments (attachedFiles/imageFile) are deferred",

@@ -72,6 +72,28 @@ describe("parseGeminiExport", () => {
     expect(skippedLines).toBe(0);
   });
 
+  it("counts UNEXPECTED-header records and malformed entries into skippedLines", () => {
+    // A non-"Gemini Apps" header (e.g. a localized/relabeled export) or a malformed
+    // array entry is a shape we don't recognize — counted so a wholesale mismatch
+    // trips the "0 events but N skipped" alarm instead of silently capturing nothing.
+    const input = JSON.stringify([
+      null,
+      42,
+      {
+        header: "Applications Gemini",
+        title: "Prompted quelque chose",
+        time: "2026-07-20T00:00:00.000Z",
+      },
+      { header: "Gemini Apps", title: "Created something", time: "2026-07-20T00:00:01.000Z" },
+    ]);
+    const { events, rawRecords, skippedLines } = parseGeminiExport(input, opts);
+    expect(events).toHaveLength(0);
+    expect(rawRecords).toHaveLength(0);
+    // null + 42 + the non-"Gemini Apps" record = 3 counted; the "Created" record is
+    // a legit non-"Prompted" Gemini Apps activity → silent skip, NOT counted.
+    expect(skippedLines).toBe(3);
+  });
+
   it("carries the stripped prompt as the session.started title", () => {
     const { events } = parseGeminiExport(fixture, opts);
     const key = keyFor("2026-07-20T15:15:21.568Z", "Prompted redacted prompt one");
