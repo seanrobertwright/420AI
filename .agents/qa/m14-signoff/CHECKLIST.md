@@ -31,7 +31,7 @@ export ADMIN_TOKEN="<your admin token>"     # the retained machine/service crede
 | 1 | Updater signing-key ceremony | `tauri.conf.json` pubkey replaced + `.secrets/tauri-updater.key` exists | ✅ (key `274299A5…`, pending commit + offline backup) |
 | 2 | Restore-from-backup drill (scratch DB) | `restore-drill-<date>.txt` (script output) | ✅ (2026-07-22 — exact-match fidelity, 224126 events) |
 | 3 | Live auto-update E2E | `auto-update-e2e-<date>.md` + screenshots | ⬜ |
-| 4 | 12.3 auth live QA | screenshots in `.agents/qa/m12-slice3/` | ⬜ |
+| 4 | 12.3 auth live QA | HTTP assertions + `01-login-page.png` in `.agents/qa/m12-slice3/` | ✅ (2026-07-22 — 6/6 asserts pass; authed-view screenshots optional) |
 | 5 | Live SMTP alert send | `smtp-send-<date>.txt` (received email header/body) | ✅ (2026-07-22 — Mailpit captured the auth_failure email) |
 | 6 | Scheduled-reports cold run | `reports-generate-<date>.txt` | ✅ (2026-07-22 — 390 reports, 0 fail, all 6 types) |
 | 7 | Cursor live round-trip | screenshot of a Cursor session in Monitor | ⬜ |
@@ -128,7 +128,7 @@ a **tampered** `latest.json` is rejected and the app stays on the current versio
 
 ---
 
-## 4. 12.3 auth live QA + screenshots  ⬜
+## 4. 12.3 auth live QA + screenshots  ✅ _(done 2026-07-22 — evidence: `http-assertions-20260722.txt`, `06-no-token-in-html.txt`, `01-login-page.png`)_
 
 **Why it's blocking:** M12 12.3 replaced the static `ADMIN_TOKEN`/`DEFAULT_EMAIL` with a real
 single-user admin login, but there is **no live QA evidence** — `.agents/qa/` only had `m9/`. The

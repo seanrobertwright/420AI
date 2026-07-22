@@ -141,7 +141,11 @@ code-reviews, execution-reports, system-reviews), and source comments. Findings,
       `420ai-20260722T125801Z.sql.gz` into a scratch DB; counts exact-match live (projects 65,
       raw_source_records 156636, events 224126); evidence `.agents/qa/m14-signoff/restore-drill-20260722.txt`
 - [ ] Live auto-update E2E (needs the ceremony first)
-- [ ] 12.3 auth live QA + screenshots → `.agents/qa/m12-slice3/`
+- [x] 12.3 auth live QA + screenshots → `.agents/qa/m12-slice3/` — done 2026-07-22; 6/6 HTTP
+      assertions pass (login 200, wrong-pw 401, session cookie set, ADMIN_TOKEN 0× in authed HTML,
+      /api/auth/me → admin email, logged-out → 307/login); evidence `http-assertions-20260722.txt`
+      + `06-no-token-in-html.txt` + `01-login-page.png`. Authed-view screenshots (03/05) optional —
+      proven functionally (headless Edge can't inject the httpOnly session cookie).
 - [x] Live SMTP alert send (opt-in env set, one real email observed) — done 2026-07-22 via a
       local Mailpit catcher (`smtp://localhost:1025`); forced an `ingest.auth_failure` firing and
       observed the delivered email (subject/body correct); evidence

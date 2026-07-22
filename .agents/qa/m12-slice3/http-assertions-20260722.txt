@@ -1,0 +1,27 @@
+# M12 12.3 auth hardening — live QA (HTTP-layer assertions), 2026-07-22
+
+Stack: dashboard `next dev` on http://localhost:3002 → proxy → ingest on :8420 (real DB).
+SESSION_SECRET verified identical between ingest `.env` and dashboard `.env.local` (sha 7620c8198b0a).
+Method: curl with a cookie jar; login credentials from `.env` (ADMIN_EMAIL/ADMIN_PASSWORD).
+
+| # | Assertion | Command | Result | Expect |
+|---|-----------|---------|--------|--------|
+| 1 | Login page renders | `GET /login` | **200** | 200 |
+| 2 | Wrong password rejected | `POST /api/auth/login` (bad pw) | **401** | 401 |
+| 3 | Correct login sets session | `POST /api/auth/login` (good) | **200**, `ai_session` httpOnly cookie set | 200 |
+| 4 | Token NEVER in served HTML | `GET /projects` (authed) | **200**, 56 553 bytes, real data ("Projects", "UAT Test Project"), **`ADMIN_TOKEN` occurrences = 0** | 0 |
+| 5 | Session resolves server-side | `GET /api/auth/me` (authed) | **`{"email":"seanrobertwright@gmail.com"}`** | admin email |
+| 6 | Logged-out route fail-closed | `GET /projects` (no cookie) | **307** redirect → `/login` | 302/307 |
+
+## Verdict
+PASS — real admin login works end-to-end (12.3): correct creds authenticate, wrong creds are
+rejected 401, the session is an httpOnly HMAC cookie (NOT `ADMIN_TOKEN`), the admin token never
+appears in served HTML (the load-bearing 12.3 security assertion), the session resolves server-side
+to the admin email, and protected routes fail closed to `/login` when logged out.
+
+## Visual evidence
+- `01-login-page.png` — captured (headless Edge). ✅
+- `03-login-success.png` / `05-logout.png` — authed-view screenshots NOT auto-captured (headless
+  Edge screenshot mode can't inject the httpOnly session cookie). The authed state is proven
+  functionally by assertions 3–5 above. Capture manually if a visual is desired: open
+  http://localhost:3002/login, sign in with the admin creds, screenshot; then log out and screenshot.
