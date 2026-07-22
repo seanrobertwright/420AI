@@ -33,7 +33,7 @@ export ADMIN_TOKEN="<your admin token>"     # the retained machine/service crede
 | 3 | Live auto-update E2E | `auto-update-e2e-<date>.md` + screenshots | ⬜ |
 | 4 | 12.3 auth live QA | screenshots in `.agents/qa/m12-slice3/` | ⬜ |
 | 5 | Live SMTP alert send | `smtp-send-<date>.md` (received email header/screenshot) | ⬜ |
-| 6 | Scheduled-reports cold run | `reports-generate-<date>.log` | ⬜ |
+| 6 | Scheduled-reports cold run | `reports-generate-<date>.txt` | ✅ (2026-07-22 — 390 reports, 0 fail, all 6 types) |
 | 7 | Cursor live round-trip | screenshot of a Cursor session in Monitor | ⬜ |
 
 Recommended order: **1 → 3** (3 needs 1), then **2, 4, 5, 6, 7** in any order. Item 1 is the
@@ -186,7 +186,7 @@ the firing appears in the dashboard AlertsPanel.
 
 ---
 
-## 6. Scheduled-reports cold run  ⬜
+## 6. Scheduled-reports cold run  ✅ _(done 2026-07-22 — evidence: `reports-generate-20260722.txt`)_
 
 **Why it's blocking:** `scripts/generate-reports.mjs` (M13.6) is the OS-cron report generator; it has
 never been run against a live stack. Do one cold run.
@@ -195,8 +195,10 @@ Full runbook: [`docs/guide/operations.md`](../../../docs/guide/operations.md) **
 
 ```sh
 INGEST_URL=http://localhost:8420 ADMIN_TOKEN="$ADMIN_TOKEN" \
-  npm run reports:generate 2>&1 | tee .agents/qa/m14-signoff/reports-generate-$(date -u +%Y%m%d).log
+  npm run reports:generate 2>&1 | tee .agents/qa/m14-signoff/reports-generate-$(date -u +%Y%m%d).txt
 ```
+
+(Use a `.txt` extension, not `.log` — `*.log` is git-ignored, so the evidence wouldn't be trackable.)
 
 **Evidence / done when:** the log shows one line per generated artifact across your projects and the
 process exits **0** (it exits non-zero if any call fails). Save the teed log. (Optional: scope with

@@ -143,5 +143,7 @@ code-reviews, execution-reports, system-reviews), and source comments. Findings,
 - [ ] Live auto-update E2E (needs the ceremony first)
 - [ ] 12.3 auth live QA + screenshots → `.agents/qa/m12-slice3/`
 - [ ] Live SMTP alert send (opt-in env set, one real email observed)
-- [ ] Scheduled-reports cold run (`reports:generate` against a live stack)
+- [x] Scheduled-reports cold run (`reports:generate` against a live stack) — done 2026-07-22;
+      390 reports (all 6 project types × 65 projects), 0 failures, exit 0; evidence
+      `.agents/qa/m14-signoff/reports-generate-20260722.txt`
 - [ ] Cursor live round-trip: `collector watch → archive → Monitor` shows a Cursor session
