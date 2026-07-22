@@ -153,4 +153,7 @@ code-reviews, execution-reports, system-reviews), and source comments. Findings,
 - [x] Scheduled-reports cold run (`reports:generate` against a live stack) — done 2026-07-22;
       390 reports (all 6 project types × 65 projects), 0 failures, exit 0; evidence
       `.agents/qa/m14-signoff/reports-generate-20260722.txt`
-- [ ] Cursor live round-trip: `collector watch → archive → Monitor` shows a Cursor session
+- [x] Cursor live round-trip: `collector watch → archive → Monitor` shows a Cursor session — done
+      2026-07-22; collector captured 350 Cursor sessions, synced to the archive (179 distinct
+      sessions, 32k+ events), searchable in the dashboard and shown in the Monitor's cursor connector
+      row; evidence `.agents/qa/m14-signoff/cursor-roundtrip-20260722.txt`

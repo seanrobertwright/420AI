@@ -34,7 +34,7 @@ export ADMIN_TOKEN="<your admin token>"     # the retained machine/service crede
 | 4 | 12.3 auth live QA | HTTP assertions + `01-login-page.png` in `.agents/qa/m12-slice3/` | ✅ (2026-07-22 — 6/6 asserts pass; authed-view screenshots optional) |
 | 5 | Live SMTP alert send | `smtp-send-<date>.txt` (received email header/body) | ✅ (2026-07-22 — Mailpit captured the auth_failure email) |
 | 6 | Scheduled-reports cold run | `reports-generate-<date>.txt` | ✅ (2026-07-22 — 390 reports, 0 fail, all 6 types) |
-| 7 | Cursor live round-trip | screenshot of a Cursor session in Monitor | ⬜ |
+| 7 | Cursor live round-trip | `cursor-roundtrip-20260722.txt` (179 sessions in archive; Monitor shows cursor connector) | ✅ (2026-07-22) |
 
 Recommended order: **1 → 3** (3 needs 1), then **2, 4, 5, 6, 7** in any order. Item 1 is the
 critical path; item 5 has a helper script that forces the alert.
@@ -212,7 +212,7 @@ process exits **0** (it exits non-zero if any call fails). Save the teed log. (O
 
 ---
 
-## 7. Cursor live round-trip  ⬜
+## 7. Cursor live round-trip  ✅ _(done 2026-07-22 — evidence: `cursor-roundtrip-20260722.txt`)_
 
 **Why it's blocking:** the Cursor connector (M13.7, SQLite poll mode) passed a read-only local spike,
 but the full `collector watch → archive → Monitor` path with a real Cursor session has never been
