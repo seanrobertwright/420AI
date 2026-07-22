@@ -140,7 +140,10 @@ code-reviews, execution-reports, system-reviews), and source comments. Findings,
 - [x] Restore-from-backup drill into a scratch DB, verified — done 2026-07-22, restored
       `420ai-20260722T125801Z.sql.gz` into a scratch DB; counts exact-match live (projects 65,
       raw_source_records 156636, events 224126); evidence `.agents/qa/m14-signoff/restore-drill-20260722.txt`
-- [ ] Live auto-update E2E (needs the ceremony first)
+- [x] Live auto-update E2E (needs the ceremony first) — done 2026-07-22; built + published a v0.1.1
+      GitHub release, an installed 0.1.0 auto-updated to 0.1.1 (signature verified against the baked
+      pubkey), and a tampered latest.json was rejected (stayed 0.1.1); evidence
+      `.agents/qa/m14-signoff/auto-update-e2e-20260722.md`
 - [x] 12.3 auth live QA + screenshots → `.agents/qa/m12-slice3/` — done 2026-07-22; 6/6 HTTP
       assertions pass (login 200, wrong-pw 401, session cookie set, ADMIN_TOKEN 0× in authed HTML,
       /api/auth/me → admin email, logged-out → 307/login); evidence `http-assertions-20260722.txt`

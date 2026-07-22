@@ -30,7 +30,7 @@ export ADMIN_TOKEN="<your admin token>"     # the retained machine/service crede
 |---|------|-------------------|--------|
 | 1 | Updater signing-key ceremony | `tauri.conf.json` pubkey replaced + `.secrets/tauri-updater.key` exists | ✅ (key `274299A5…`, pending commit + offline backup) |
 | 2 | Restore-from-backup drill (scratch DB) | `restore-drill-<date>.txt` (script output) | ✅ (2026-07-22 — exact-match fidelity, 224126 events) |
-| 3 | Live auto-update E2E | `auto-update-e2e-<date>.md` + screenshots | ⬜ |
+| 3 | Live auto-update E2E | `auto-update-e2e-20260722.md` (positive + negative both PASS) | ✅ (2026-07-22) |
 | 4 | 12.3 auth live QA | HTTP assertions + `01-login-page.png` in `.agents/qa/m12-slice3/` | ✅ (2026-07-22 — 6/6 asserts pass; authed-view screenshots optional) |
 | 5 | Live SMTP alert send | `smtp-send-<date>.txt` (received email header/body) | ✅ (2026-07-22 — Mailpit captured the auth_failure email) |
 | 6 | Scheduled-reports cold run | `reports-generate-<date>.txt` | ✅ (2026-07-22 — 390 reports, 0 fail, all 6 types) |
@@ -98,7 +98,7 @@ the scratch DB matching the live archive's scale, with no error. Save the teed o
 
 ---
 
-## 3. Live auto-update E2E  ⬜  _(needs item 1 first)_
+## 3. Live auto-update E2E  ✅ _(done 2026-07-22 — positive + negative both PASS; evidence: `auto-update-e2e-20260722.md`)_
 
 **Why it's blocking:** proves the whole updater loop — an installed older build detects a newer
 GitHub release, verifies its signature against the baked pubkey, installs, and relaunches.
