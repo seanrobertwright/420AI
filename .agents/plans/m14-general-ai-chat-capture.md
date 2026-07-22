@@ -137,7 +137,9 @@ code-reviews, execution-reports, system-reviews), and source comments. Findings,
 - [x] Updater signing-key ceremony run; `tauri.conf.json` placeholder replaced; key in
       `.secrets/` (runbook: `docs/guide/operations.md` §13.1) — done 2026-07-22, key id
       `274299A56AD1A676`; private key `.secrets/tauri-updater.key` (git-ignored, passwordless `--ci`)
-- [ ] Restore-from-backup drill into a scratch DB, verified
+- [x] Restore-from-backup drill into a scratch DB, verified — done 2026-07-22, restored
+      `420ai-20260722T125801Z.sql.gz` into a scratch DB; counts exact-match live (projects 65,
+      raw_source_records 156636, events 224126); evidence `.agents/qa/m14-signoff/restore-drill-20260722.txt`
 - [ ] Live auto-update E2E (needs the ceremony first)
 - [ ] 12.3 auth live QA + screenshots → `.agents/qa/m12-slice3/`
 - [ ] Live SMTP alert send (opt-in env set, one real email observed)

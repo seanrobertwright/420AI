@@ -29,7 +29,7 @@ export ADMIN_TOKEN="<your admin token>"     # the retained machine/service crede
 | # | Item | Evidence artifact | Status |
 |---|------|-------------------|--------|
 | 1 | Updater signing-key ceremony | `tauri.conf.json` pubkey replaced + `.secrets/tauri-updater.key` exists | ✅ (key `274299A5…`, pending commit + offline backup) |
-| 2 | Restore-from-backup drill (scratch DB) | `restore-drill-<date>.txt` (script output) | ⬜ |
+| 2 | Restore-from-backup drill (scratch DB) | `restore-drill-<date>.txt` (script output) | ✅ (2026-07-22 — exact-match fidelity, 224126 events) |
 | 3 | Live auto-update E2E | `auto-update-e2e-<date>.md` + screenshots | ⬜ |
 | 4 | 12.3 auth live QA | screenshots in `.agents/qa/m12-slice3/` | ⬜ |
 | 5 | Live SMTP alert send | `smtp-send-<date>.md` (received email header/screenshot) | ⬜ |
@@ -75,7 +75,7 @@ future updates).
 
 ---
 
-## 2. Restore-from-backup drill (into a scratch DB)  ⬜
+## 2. Restore-from-backup drill (into a scratch DB)  ✅ _(done 2026-07-22 — evidence: `restore-drill-20260722.txt`)_
 
 **Why it's blocking:** the backup path (`npm run backup`) is proven by tests, but a **restore** has
 never been exercised end-to-end. Verify it **non-destructively** against a scratch DB so the live
