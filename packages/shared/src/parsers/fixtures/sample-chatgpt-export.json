@@ -1,0 +1,184 @@
+[
+  {
+    "conversation_id": "6919eca9-1470-8332-a4c6-264eb782adeb",
+    "conversation_template_id": null,
+    "create_time": 1763306665.654753,
+    "current_node": "node-0-asst",
+    "default_model_slug": "gpt-5-1",
+    "id": "6919eca9-1470-8332-a4c6-264eb782adeb",
+    "is_archived": false,
+    "is_starred": false,
+    "title": "redacted title zero",
+    "update_time": 1763306669.014988,
+    "mapping": {
+      "node-0-root": {
+        "id": "node-0-root",
+        "message": null,
+        "parent": null
+      },
+      "node-0-user": {
+        "id": "node-0-user",
+        "message": {
+          "id": "msg-0-user",
+          "author": { "name": null, "role": "user" },
+          "create_time": 1763306665.5,
+          "content": { "content_type": "text", "parts": ["redacted user prompt"] },
+          "metadata": {}
+        },
+        "parent": "node-0-root"
+      },
+      "node-0-asst": {
+        "id": "node-0-asst",
+        "message": {
+          "id": "msg-0-asst",
+          "author": { "name": null, "role": "assistant" },
+          "create_time": 1763306668.1,
+          "content": { "content_type": "text", "parts": ["redacted assistant reply"] },
+          "metadata": { "model_slug": "gpt-5-1" }
+        },
+        "parent": "node-0-user"
+      }
+    }
+  },
+  {
+    "conversation_id": "6919abcd-2233-4455-6677-8899aabbccdd",
+    "conversation_template_id": null,
+    "create_time": 1763310000.111111,
+    "current_node": "node-1-recap",
+    "default_model_slug": "gpt-5-1",
+    "id": "6919abcd-2233-4455-6677-8899aabbccdd",
+    "is_archived": false,
+    "is_starred": false,
+    "title": "redacted title one",
+    "update_time": 1763310500.222222,
+    "mapping": {
+      "node-1-root": {
+        "id": "node-1-root",
+        "message": null,
+        "parent": null
+      },
+      "node-1-user": {
+        "id": "node-1-user",
+        "message": {
+          "id": "msg-1-user",
+          "author": { "name": null, "role": "user" },
+          "create_time": 1763310001.0,
+          "content": { "content_type": "text", "parts": ["redacted user prompt one"] },
+          "metadata": {}
+        },
+        "parent": "node-1-root"
+      },
+      "node-1-thoughts": {
+        "id": "node-1-thoughts",
+        "message": {
+          "id": "msg-1-thoughts",
+          "author": { "name": null, "role": "assistant" },
+          "create_time": 1763310002.0,
+          "content": {
+            "content_type": "thoughts",
+            "source_analysis_msg_id": "msg-1-asst",
+            "thoughts": [{ "summary": "redacted", "content": "redacted" }]
+          },
+          "metadata": { "model_slug": "gpt-5-1" }
+        },
+        "parent": "node-1-user"
+      },
+      "node-1-asst": {
+        "id": "node-1-asst",
+        "message": {
+          "id": "msg-1-asst",
+          "author": { "name": null, "role": "assistant" },
+          "create_time": 1763310003.0,
+          "content": { "content_type": "text", "parts": ["redacted assistant reply one"] },
+          "metadata": { "model_slug": "gpt-5-1" }
+        },
+        "parent": "node-1-thoughts"
+      },
+      "node-1-recap": {
+        "id": "node-1-recap",
+        "message": {
+          "id": "msg-1-recap",
+          "author": { "name": null, "role": "assistant" },
+          "create_time": 1763310004.0,
+          "content": { "content_type": "reasoning_recap", "content": "redacted recap" },
+          "metadata": { "model_slug": "gpt-5-1" }
+        },
+        "parent": "node-1-asst"
+      }
+    }
+  },
+  {
+    "conversation_id": "6919ef01-3344-5566-7788-99aabbccddee",
+    "conversation_template_id": null,
+    "create_time": 1763320000.5,
+    "current_node": "node-2-asst",
+    "default_model_slug": "gpt-5-1",
+    "id": "6919ef01-3344-5566-7788-99aabbccddee",
+    "is_archived": false,
+    "is_starred": false,
+    "title": "redacted title two",
+    "update_time": 1763320100.9,
+    "mapping": {
+      "node-2-root": {
+        "id": "node-2-root",
+        "message": null,
+        "parent": null
+      },
+      "node-2-user": {
+        "id": "node-2-user",
+        "message": {
+          "id": "msg-2-user",
+          "author": { "name": null, "role": "user" },
+          "create_time": 1763320000.7,
+          "content": {
+            "content_type": "multimodal_text",
+            "parts": [
+              {
+                "asset_pointer": "file-service://file-REDACTED",
+                "content_type": "image_asset_pointer",
+                "fovea": null,
+                "height": 512,
+                "metadata": null,
+                "size_bytes": 12345,
+                "width": 512
+              },
+              "redacted multimodal prompt"
+            ]
+          },
+          "metadata": {}
+        },
+        "parent": "node-2-root"
+      },
+      "node-2-asst": {
+        "id": "node-2-asst",
+        "message": {
+          "id": "msg-2-asst",
+          "author": { "name": null, "role": "assistant" },
+          "create_time": 1763320050.2,
+          "content": { "content_type": "text", "parts": ["redacted assistant reply two"] },
+          "metadata": { "model_slug": "gpt-5-1" }
+        },
+        "parent": "node-2-user"
+      }
+    }
+  },
+  {
+    "conversation_id": "6919dead-beef-0000-1111-222233334444",
+    "conversation_template_id": null,
+    "create_time": 1763330000.0,
+    "current_node": "node-3-root",
+    "default_model_slug": "gpt-5-1",
+    "id": "6919dead-beef-0000-1111-222233334444",
+    "is_archived": false,
+    "is_starred": false,
+    "title": "redacted empty conversation",
+    "update_time": 1763330000.0,
+    "mapping": {
+      "node-3-root": {
+        "id": "node-3-root",
+        "message": null,
+        "parent": null
+      }
+    }
+  }
+]

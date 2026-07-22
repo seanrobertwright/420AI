@@ -115,12 +115,19 @@ under-claiming is acceptable.
 
 ## Open follow-ups
 
-- [~] Live-verify all three export flows end-to-end (request → email → archive shape) before
-  14.5 planning locks the parser contracts. **[the [documented] items above]**
-  **Claude [verified 2026-07-20]** — real 71-conversation `conversations.json` inspected;
-  the parser contract (`claude-export`) was written against a redacted fixture of it, not
-  docs (see `.agents/plans/m14-slice5-chat-export-connectors.md` NOTES). **ChatGPT / Gemini
-  still [documented]** — exports not yet obtained; those connectors deferred until verified.
+- [x] Live-verify all three export flows end-to-end (request → email → archive shape) before
+      each slice locks the parser contracts. **[the [documented] items above]**
+      **Claude [verified 2026-07-20]** — real 71-conversation `conversations.json` inspected;
+      the parser contract (`claude-export`) was written against a redacted fixture of it, not
+      docs (see `.agents/plans/m14-slice5-chat-export-connectors.md` NOTES).
+      **ChatGPT [verified 2026-07-21]** — real 63-conversation `conversations.json` (OpenAI export)
+      inspected; the `chatgpt-export` connector (14.6) was written against a redacted fixture of it
+      (flat conversation array, `mapping` message store ordered by `create_time`, epoch-seconds
+      timestamps, `model_slug` present → model-attributed but uncosted).
+      **Gemini [verified 2026-07-21]** — real 1452-record `MyActivity.json` (Google Takeout "Gemini
+      Apps", JSON) inspected; the `gemini-export` connector (14.6) was written against a redacted
+      fixture of it (flat activity log, no threading, no native id → derived `time`+prompt key,
+      uncosted + model-less).
 - [ ] Inspect the desktop-app `claude-code-sessions/local_*.json` format vs. the JSONL the
       existing parser expects.
 - [ ] Decide the token-estimation confidence tier (Q6 widening) — 14.5 planning.

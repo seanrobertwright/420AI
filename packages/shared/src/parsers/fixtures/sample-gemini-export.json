@@ -1,0 +1,41 @@
+[
+  {
+    "header": "Gemini Apps",
+    "title": "Prompted redacted prompt one",
+    "titleUrl": null,
+    "time": "2026-07-20T15:15:21.568Z",
+    "products": ["Gemini Apps"],
+    "activityControls": ["Gemini Apps Activity"],
+    "safeHtmlItem": [{ "html": "<div>redacted response one</div>" }]
+  },
+  {
+    "header": "Gemini Apps",
+    "title": "Prompted redacted prompt two with no response",
+    "time": "2026-07-20T16:02:03.111Z",
+    "products": ["Gemini Apps"],
+    "activityControls": ["Gemini Apps Activity"]
+  },
+  {
+    "header": "Gemini Apps",
+    "title": "Created Gemini Canvas titled redacted canvas",
+    "time": "2026-07-20T16:30:44.900Z",
+    "products": ["Gemini Apps"],
+    "activityControls": ["Gemini Apps Activity"]
+  },
+  {
+    "header": "Gemini Apps",
+    "title": "Prompted redacted prompt three with attachment",
+    "time": "2026-07-20T17:45:10.222Z",
+    "products": ["Gemini Apps"],
+    "activityControls": ["Gemini Apps Activity"],
+    "safeHtmlItem": [{ "html": "<div>redacted response three</div>" }],
+    "attachedFiles": [{ "name": "redacted.pdf" }]
+  },
+  {
+    "header": "Gemini Apps",
+    "title": "Selected preferred draft",
+    "time": "2026-07-20T18:00:00.000Z",
+    "products": ["Gemini Apps"],
+    "activityControls": ["Gemini Apps Activity"]
+  }
+]

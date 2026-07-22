@@ -61,6 +61,11 @@ exports/
 # M12 12.4d archive backups — dumps contain ciphertext + plaintext metadata; NEVER commit.
 backups/
 
+# M14 raw chat exports (OpenAI/Gemini/Claude data-export dumps used to derive parser field maps).
+# These carry full conversation bodies + personal reasoning (PII); only the REDACTED fixtures under
+# packages/shared/src/parsers/fixtures/ are committed. NEVER commit the raw exports.
+docs/data/
+
 # Windows service (WinSW): the third-party wrapper + the copied collector binary are large and not
 # ours to vendor — only the .xml + README under apps/collector/service/ are committed.
 apps/collector/service/*.exe
