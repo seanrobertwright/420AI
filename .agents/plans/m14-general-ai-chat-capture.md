@@ -134,8 +134,9 @@ code-reviews, execution-reports, system-reviews), and source comments. Findings,
 
 ## Pre-sign-off checklist (D-M14-4 — every box, maintainer manual)
 
-- [ ] Updater signing-key ceremony run; `tauri.conf.json` placeholder replaced; key in
-      `.secrets/` (runbook: `docs/guide/operations.md` §13.1)
+- [x] Updater signing-key ceremony run; `tauri.conf.json` placeholder replaced; key in
+      `.secrets/` (runbook: `docs/guide/operations.md` §13.1) — done 2026-07-22, key id
+      `274299A56AD1A676`; private key `.secrets/tauri-updater.key` (git-ignored, passwordless `--ci`)
 - [ ] Restore-from-backup drill into a scratch DB, verified
 - [ ] Live auto-update E2E (needs the ceremony first)
 - [ ] 12.3 auth live QA + screenshots → `.agents/qa/m12-slice3/`
