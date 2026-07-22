@@ -4,6 +4,8 @@ import { codexCliConnector } from "./codex-cli.js";
 import { geminiCliConnector } from "./gemini-cli.js";
 import { cursorConnector } from "./cursor.js";
 import { claudeExportConnector } from "./claude-export.js";
+import { chatgptExportConnector } from "./chatgpt-export.js";
+import { geminiExportConnector } from "./gemini-export.js";
 import { claudeLiveConnector } from "./claude-live.js";
 
 /**
@@ -170,8 +172,10 @@ export interface Connector {
 /**
  * The active connector registry. M3: Claude only; M4 appends Codex/Gemini; M13 13.7
  * appends the poll-mode Cursor connector; M14 14.5 appends the Claude chat-export
- * connector (snapshot drop-dir, uncosted/experimental); M14 14.7 appends the push-mode
- * Claude-live connector (browser-extension push receiver, uncosted/experimental).
+ * connector (snapshot drop-dir, uncosted/experimental); M14 14.6 appends the ChatGPT
+ * (model-attributed, uncosted) + Gemini (flat activity log, uncosted/model-less)
+ * chat-export connectors; M14 14.7 appends the push-mode Claude-live connector
+ * (browser-extension push receiver, uncosted/experimental).
  */
 export const connectors: Connector[] = [
   claudeCodeConnector,
@@ -179,5 +183,7 @@ export const connectors: Connector[] = [
   geminiCliConnector,
   cursorConnector,
   claudeExportConnector,
+  chatgptExportConnector,
+  geminiExportConnector,
   claudeLiveConnector,
 ];

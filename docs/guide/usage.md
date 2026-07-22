@@ -102,28 +102,42 @@ Chat conversations (as opposed to coding-tool sessions) live only server-side �
 store to watch — so they are captured from the surface's **official data export**, dropped into an
 import directory the collector watches:
 
-| Connector        | `id`            | Drop file into                        | Mode     | Liveness |
-| ---------------- | --------------- | ------------------------------------- | -------- | -------- |
-| **Claude (web)** | `claude-export` | `~/.420ai/chat-imports/claude/*.json` | snapshot | batch    |
+| Connector         | `id`             | Drop file into                         | Mode     | Liveness |
+| ----------------- | ---------------- | -------------------------------------- | -------- | -------- |
+| **Claude (web)**  | `claude-export`  | `~/.420ai/chat-imports/claude/*.json`  | snapshot | batch    |
+| **ChatGPT (web)** | `chatgpt-export` | `~/.420ai/chat-imports/chatgpt/*.json` | snapshot | batch    |
+| **Gemini (web)**  | `gemini-export`  | `~/.420ai/chat-imports/gemini/*.json`  | snapshot | batch    |
 
-To import your Claude chat history:
+To import your chat history:
 
-1. In **claude.ai → Settings → Privacy → Export data**, request the export and wait for the email.
-2. Download and unzip the archive; find **`conversations.json`**.
-3. Drop it into `~/.420ai/chat-imports/claude/` (create the folder if absent) and run (or leave
-   running) `collector watch`. The whole-file snapshot parser picks it up on the next tick.
+- **Claude** — in **claude.ai → Settings → Privacy → Export data**, request the export and wait for
+  the email; unzip and find **`conversations.json`**. Drop it into `~/.420ai/chat-imports/claude/`.
+- **ChatGPT** — in **ChatGPT → Settings → Data controls → Export data**, request the export and wait
+  for the email; unzip and find **`conversations.json`**. Drop it into `~/.420ai/chat-imports/chatgpt/`.
+- **Gemini** — in **Google Takeout**, select **My Activity → Gemini Apps** in **JSON** format, download
+  the archive, and find **`MyActivity.json`**. Drop it into `~/.420ai/chat-imports/gemini/`.
+
+Create the folder if absent, then run (or leave running) `collector watch`. The whole-file snapshot
+parser picks each file up on the next tick.
 
 Chat-export capture is deliberately **honest about its lower fidelity** (`gaps:` badges):
 
 - **`experimental`** status, **`batch`** liveness — the data is days-stale between manual exports.
-- **Uncosted** — the export carries **no token counts and no model**, so no `usage`/`cost` events
-  are emitted (`tokens: none`, `cost: none`). This is intentional, not a bug.
+- **Uncosted** — the exports carry **no token counts**, so no `usage`/`cost` events are emitted
+  (`tokens: none`, `cost: none`). This is intentional, not a bug. ChatGPT additionally carries a
+  **model** (`model_slug`), so its chat events ARE model-attributed; Claude and Gemini carry no model.
 - **Non-repo attribution** — a chat has no cwd/git, so each conversation is attributed to a stable
-  synthetic topic key `chat:claude:<conversation-uuid>`. Group several conversations under one
-  workspace by aliasing those keys via the normal `workspace_keys` mapping (§4) — no code needed.
-- Re-importing the same export is a **no-op** (message-uuid-keyed fingerprints dedup server-side).
-- `tool_use`/`thinking` content blocks and attachments/files in the export are **not yet** turned
-  into tool/file events (deferred). **ChatGPT** export support is planned for a follow-up.
+  synthetic topic key: `chat:claude:<conversation-uuid>`, `chat:chatgpt:<conversation-id>`, or
+  `chat:gemini:<derived-key>`. Group several conversations under one workspace by aliasing those keys
+  via the normal `workspace_keys` mapping (§4) — no code needed.
+- Re-importing the same export is a **no-op** (stable-id-keyed fingerprints dedup server-side).
+- **Gemini** is a Google Takeout "My Activity" **flat activity log** with no conversation threading —
+  each "Prompted" record becomes its own single-turn session (keyed by a derived `time`+prompt hash,
+  since Takeout records carry no native id); non-conversation activity (canvas, feedback, image
+  generation) is skipped, and attachments are deferred.
+- ChatGPT `thoughts`/`reasoning_recap` reasoning nodes and `multimodal_text` attachments, and Claude
+  `tool_use`/`thinking` blocks and files, are stored as raw records but **not yet** turned into
+  normalized tool/file events (deferred).
 
 ---
 

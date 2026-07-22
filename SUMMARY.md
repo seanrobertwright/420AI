@@ -64,7 +64,9 @@ stores conversations locally**, so capture = official exports (Batch) + a browse
 (live); gates the connector slices) · **14.1** ✅ truth & hygiene (**DONE 2026-07-14** — README
 roadmap, stale deferred-wording sweep, the M10–M13 system-review) · **14.2** catalog admin UIs ·
 **14.3** desktop polish trio · **14.4** per-event search granularity · **14.5** ✅ the Claude
-`claude-export` connector (batch, non-repo attribution) · **14.7** ✅ browser extension
+`claude-export` connector (batch, non-repo attribution) · **14.6** ✅ the `chatgpt-export`
+(model-attributed, uncosted) + `gemini-export` (Takeout activity log, single-turn sessions,
+uncosted/model-less) connectors · **14.7** ✅ browser extension
 (near-real-time Claude web capture) + collector **`push`** capture mode — a `127.0.0.1` token-authed
 `node:http` receiver + `claude-live` connector + a Claude-only MV3 extension (ChatGPT/Gemini extension
 origins deferred; per-origin gate in
@@ -566,7 +568,11 @@ original M10 "hardening bundle" (exports, catalog signing, replay metadata, pers
       ([`.agents/system-reviews/m10-m13-review.md`](./.agents/system-reviews/m10-m13-review.md)) ·
       **14.2** catalog admin UIs · **14.3** desktop polish trio (connectorHealth, GUI unpair, auth/me
       nav) · **14.4** per-event search granularity · **14.5** ✅ Claude `claude-export` connector
-      (batch snapshot drop-dir, `chat:claude:<uuid>` non-repo attribution, uncosted) · **14.7** ✅
+      (batch snapshot drop-dir, `chat:claude:<uuid>` non-repo attribution, uncosted) · **14.6** ✅
+      the `chatgpt-export` + `gemini-export` connectors (two more snapshot drop-dirs over verified real
+      exports; ChatGPT model-attributed via `model_slug`, ordered by `create_time`, epoch→ISO; Gemini a
+      Takeout activity log → one single-turn session per "Prompted" record keyed by `sha256(time|title)`;
+      both uncosted, raw exports gitignored under `docs/data/`) · **14.7** ✅
       browser extension (near-real-time Claude web capture) + collector **`push`** capture mode (a
       `127.0.0.1` token-authed `node:http` receiver inside `runCaptureEngine`, a pure `parseClaudeWire`
       normalizer + `claude-live` connector, and a Claude-only MV3 extension polling claude.ai's

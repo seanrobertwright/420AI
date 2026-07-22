@@ -107,6 +107,19 @@ code-reviews, execution-reports, system-reviews), and source comments. Findings,
     Parser written against a Task-1-verified redacted fixture. **ChatGPT export deferred** (export
     not yet obtainable at build time — recorded as a gap, per 12.7d ship-what's-feasible); Gemini
     Takeout = 14.6; browser extension = 14.7.
+  - **14.6 shipped (2026-07-21): the `chatgpt-export` + `gemini-export` connectors** — two more
+    snapshot drop-dir connectors (`~/.420ai/chat-imports/chatgpt/*.json`,
+    `~/.420ai/chat-imports/gemini/*.json`), each a thin connector object over a pure parser in
+    `@420ai/shared`, mapping the real exports (both verified structure-only, 2026-07-21) onto the
+    existing taxonomy. Both **experimental / batch / uncosted** (no token counts). **ChatGPT** is
+    **model-attributed** (`metadata.model_slug` stamped on message events), flat conversation array
+    ordered by `create_time` (empty `children[]` → no tree-walk), epoch-seconds→ISO (×1000),
+    `thoughts`/`reasoning_recap` reasoning nodes raw-kept-but-not-evented, `chat:chatgpt:<id>`
+    attribution. **Gemini** is a Google Takeout "My Activity" **flat activity log** (no threading,
+    no native id): each "Prompted" record → one single-turn session keyed by a derived
+    `sha256(time|title)` slice, response from `safeHtmlItem[0].html`, non-"Prompted" activity
+    skipped, model-less, `chat:gemini:<key>` attribution. **No** fingerprint/schema/ingest/server
+    change; parsers written against redacted fixtures (raw exports gitignored under `docs/data/`).
   - **14.7 shipped (2026-07-20): the browser extension + collector `push` capture mode** — a new
     inbound `127.0.0.1`-bound, token-authed `node:http` receiver (a new capture mode beside
     `tail`/`snapshot`/`poll`) running inside `runCaptureEngine`, routing pushed `{connector,
