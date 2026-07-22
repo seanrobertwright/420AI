@@ -6,7 +6,7 @@
 
 ---
 
-## 0. Status — 2026-07-14
+## 0. Status — 2026-07-22
 
 **V1 is ~95% built.** Milestones **1–9 are implemented and on `main`** (M9 Live Monitor merged via
 PR #12). **M10 (hardening)** is a _bundle_ built in slices: the **operational-alerts slice** (the
@@ -54,16 +54,24 @@ empty state) · **13.7** the **Cursor** connector (a new SQLite **poll** capture
 to `main` (PRs #42–#49); the full gate + `--require-db` (0 skipped) stayed green after every slice; the
 suite grew 622 → **743** tests. See §6 and PRD §25 M13.
 
-**M14 (General AI Chat Capture + deferral sweep)** is **IN PROGRESS** (planned 2026-07-14 via the
-same deferral-audit + scope-conversation process that produced M12/M13; definition + audit in
+**M14 (General AI Chat Capture + deferral sweep)** is **CODE-COMPLETE — AWAITING MAINTAINER
+SIGN-OFF** (planned 2026-07-14 via the same deferral-audit + scope-conversation process that
+produced M12/M13; definition + audit in
 [`.agents/plans/m14-general-ai-chat-capture.md`](./.agents/plans/m14-general-ai-chat-capture.md)).
-It promotes the PRD §25 sketch item 14 — the V2 flagship — into a real milestone: **14.0** ✅ the
-capture-surface spike (**DONE 2026-07-14** —
+**All eight code slices (14.0–14.7) are DONE and on `main`** (PRs #51–#57, each carrying a
+code-review and an execution report); the only thing between M14 and sign-off is the **D-M14-4
+pre-sign-off checklist** of maintainer manual actions (see §6 / the milestone plan), which is
+**still fully unchecked**. It promotes the PRD §25 sketch item 14 — the V2 flagship — into a real milestone:
+**14.0** ✅ the capture-surface spike (**DONE 2026-07-14** —
 [`docs/research/chat-capture-spike.md`](./docs/research/chat-capture-spike.md): **no chat surface
 stores conversations locally**, so capture = official exports (Batch) + a browser extension
 (live); gates the connector slices) · **14.1** ✅ truth & hygiene (**DONE 2026-07-14** — README
-roadmap, stale deferred-wording sweep, the M10–M13 system-review) · **14.2** catalog admin UIs ·
-**14.3** desktop polish trio · **14.4** per-event search granularity · **14.5** ✅ the Claude
+roadmap, stale deferred-wording sweep, the M10–M13 system-review) · **14.2** ✅ catalog admin UIs
+(**DONE 2026-07-15**, PR #52 — dashboard connector-catalog approve/reject + signed pricing-catalog
+upload) · **14.3** ✅ desktop polish trio (**DONE 2026-07-16**, PR #53 — `connectorHealth` from the
+monitor snapshot + `/api/auth/me` admin-email nav; GUI unpair already shipped in M11 Slice 4) ·
+**14.4** ✅ per-event search granularity (**DONE 2026-07-18**, PR #54 — hybrid per-session +
+per-message/per-tool-call index) · **14.5** ✅ the Claude
 `claude-export` connector (batch, non-repo attribution) · **14.6** ✅ the `chatgpt-export`
 (model-attributed, uncosted) + `gemini-export` (Takeout activity log, single-turn sessions,
 uncosted/model-less) connectors · **14.7** ✅ browser extension
@@ -73,7 +81,9 @@ origins deferred; per-origin gate in
 [`docs/research/extension-spike.md`](./docs/research/extension-spike.md)). Four scope decisions
 (D-M14-1…4) are settled — including a **pre-sign-off checklist** of the outstanding maintainer
 manual actions (signing-key ceremony, restore drill, Cursor round-trip, live SMTP, auth QA) so
-they stop slipping.
+they stop slipping. **⚠️ Two checklist items have hard "not-done" evidence in-repo:** the updater
+signing-key ceremony (`tauri.conf.json` still carries `REPLACE_WITH_TAURI_UPDATER_PUBKEY` →
+auto-update non-functional) and 12.3 auth QA (`.agents/qa/` has only `m9/`, no `m12-slice3/`).
 
 **CI gate:** a `repo-health` GitHub Actions check (repo-root `tsc -b` + NUL/stray scans + the full
 vitest suite **including the Postgres integration layer**) runs on every PR to `main`
@@ -184,10 +194,13 @@ decrypt → re-parse → upsert-by-fingerprint + orphan GC; parsers relocated to
 **13.4** Incremental search (at-ingest index) + dashboard polish (`<b>` highlight, react-markdown/Mermaid,
 pagination) · **13.5** Alert delivery completion (SMTP fan-out, deliver-on-resolve, windowed
 connector-failure-rate alert; migration `0012`) · **13.6** Scheduled reports (OS-cron script) + guided
-onboarding · **13.7** Cursor connector (SQLite **poll** capture mode). See PRD §25 M13. 14. 🔜 **General AI Chat capture (+ deferral sweep)** — **PLANNED 2026-07-14**, the V2 flagship promoted
+onboarding · **13.7** Cursor connector (SQLite **poll** capture mode). See PRD §25 M13. 14. ⏳ **General AI Chat capture (+ deferral sweep)** — **CODE-COMPLETE (14.0–14.7 merged, PRs #51–#57);
+AWAITING MAINTAINER SIGN-OFF** (planned 2026-07-14), the V2 flagship promoted
 from the §25 sketch via the deferral-audit + scope-conversation process. Spike-first (**14.0 gates the
 connector slices**), plus three category-B pull-ins (catalog admin UIs, desktop polish, per-event search
-granularity) and a truth slice + maintainer pre-sign-off checklist. See
+granularity) and a truth slice + maintainer pre-sign-off checklist. **Only the D-M14-4 pre-sign-off
+checklist (maintainer manual actions — updater key ceremony, restore drill, auth QA, SMTP, scheduled
+reports, Cursor round-trip) remains; still fully unchecked.** See
 [`.agents/plans/m14-general-ai-chat-capture.md`](./.agents/plans/m14-general-ai-chat-capture.md).
 
 > **Principle:** nothing shows value until the pipe is whole — so make the _thinnest_ end-to-end
@@ -548,7 +561,9 @@ original M10 "hardening bundle" (exports, catalog signing, replay metadata, pers
       ordering split into read-only `pollChanged` + post-enqueue `pollCommit`) fixed. Live (read-only):
       92 composers → 6950 raw records / 18934 events across 30, 0 costed, no ItemTable leak; the full
       `collector watch → archive → Monitor` round-trip remains a manual pre-sign-off step._
-- [ ] **M14 — General AI Chat Capture (+ deferral sweep)** — **IN PROGRESS** (planned 2026-07-14;
+- [ ] **M14 — General AI Chat Capture (+ deferral sweep)** — **CODE-COMPLETE (14.0–14.7 all merged,
+      PRs #51–#57); AWAITING MAINTAINER SIGN-OFF** on the D-M14-4 pre-sign-off checklist (still fully
+      unchecked — see the checklist reproduced at the end of this bullet). Planned 2026-07-14;
       deferral audit + scope conversation run 2026-07-14; four decisions D-M14-1…4 settled — see
       [`.agents/plans/m14-general-ai-chat-capture.md`](./.agents/plans/m14-general-ai-chat-capture.md)
       for the full audit, slice breakdown, and the maintainer pre-sign-off checklist). Dependency order:
@@ -566,8 +581,14 @@ original M10 "hardening bundle" (exports, catalog signing, replay metadata, pers
       CATALOG-SIGNING.md replay engine), all four connector-capture-spike follow-ups closed with
       evidence, and the missing **M10–M13 system-review** written
       ([`.agents/system-reviews/m10-m13-review.md`](./.agents/system-reviews/m10-m13-review.md)) ·
-      **14.2** catalog admin UIs · **14.3** desktop polish trio (connectorHealth, GUI unpair, auth/me
-      nav) · **14.4** per-event search granularity · **14.5** ✅ Claude `claude-export` connector
+      ✅ **14.2** catalog admin UIs — **DONE 2026-07-15** (PR #52: dashboard connector-catalog
+      approve/reject + signed pricing-catalog upload; dashboard-only, proxy discipline) · ✅ **14.3**
+      desktop polish trio — **DONE 2026-07-16** (PR #53: `connectorHealth` rendered from the monitor
+      snapshot in `SyncHealth.tsx` + `/api/auth/me` admin-email nav; GUI unpair already shipped in M11
+      Slice 4, its "deferral" row was stale) · ✅ **14.4** per-event search granularity — **DONE
+      2026-07-18** (PR #54: hybrid — per-session rows KEPT, per-message/per-tool-call event rows ADDED
+      via the `rawRecordId` join, capped, incremental + full-rebuild both emit event docs) · **14.5** ✅
+      Claude `claude-export` connector
       (batch snapshot drop-dir, `chat:claude:<uuid>` non-repo attribution, uncosted) · **14.6** ✅
       the `chatgpt-export` + `gemini-export` connectors (two more snapshot drop-dirs over verified real
       exports; ChatGPT model-attributed via `model_slug`, ordered by `create_time`, epoch→ISO; Gemini a
@@ -580,6 +601,20 @@ original M10 "hardening bundle" (exports, catalog signing, replay metadata, pers
       [`docs/research/extension-spike.md`](./docs/research/extension-spike.md) — Claude GO, ChatGPT GO,
       Gemini NO-GO-for-intercept; ChatGPT/Gemini extension origins + SSE + cross-connector dedup
       deferred). Non-goals unchanged (multi-user/SaaS, MSI/signing, Antigravity, semantic search).
+
+      **↳ What is ACTUALLY left to complete M14 (D-M14-4 pre-sign-off checklist — all maintainer
+      manual actions, no code):** the milestone does not sign off while any box is unchecked.
+      - [ ] Updater signing-key ceremony run; `tauri.conf.json` placeholder replaced (**still
+            `REPLACE_WITH_TAURI_UPDATER_PUBKEY` as of 2026-07-22 — auto-update non-functional**);
+            key in `.secrets/` (runbook: `docs/guide/operations.md` §13.1)
+      - [ ] Restore-from-backup drill into a scratch DB, verified
+      - [ ] Live auto-update E2E (needs the ceremony first)
+      - [ ] 12.3 auth live QA + screenshots → `.agents/qa/m12-slice3/` (**folder does not exist as
+            of 2026-07-22 — `.agents/qa/` has only `m9/`**)
+      - [ ] Live SMTP alert send (opt-in env set, one real email observed)
+      - [ ] Scheduled-reports cold run (`reports:generate` against a live stack)
+      - [ ] Cursor live round-trip: `collector watch → archive → Monitor` shows a Cursor session
+
 - [x] **M11 (Tauri desktop)** — built across Slices 1–5; both open design points resolved (see the M11
       subsection in §4): JSON-lines control protocol (`m11-control-v2`) and Rust `std::process::Command`
       server-stack supervision. Signed off 2026-06-16.

@@ -1,7 +1,7 @@
 #!/bin/sh
 # Enforced pre-commit gate (system review M1-3). Runs the FAST repo-health
-# subset (NUL scan + stray-artifact scan + root typecheck); the full test suite
-# stays in `npm run repo-health` / CI to keep commits snappy.
+# subset (NUL scan + stray-artifact scan + SUMMARY consistency + root typecheck);
+# the full test suite stays in `npm run repo-health` / CI to keep commits snappy.
 #
 # Enabled via `git config core.hooksPath .githooks` (run automatically by the
 # npm `prepare` script on install). Bypass in a genuine emergency with

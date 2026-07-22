@@ -126,9 +126,23 @@ Before any commit, `npm run repo-health` must pass. It is the enforced gate and 
    typecheck + tests (the compiler tolerates NULs in comments) yet is corrupt; this catches it.
 4. **Stray-artifact scan** — no emitted `*.js`/`*.d.ts`/`*.map` under any `src/`, no `dist/` or
    `*.sqlite` staged.
+5. **SUMMARY consistency** (`scripts/check-summary.mjs`) — every shipped slice (one with a
+   `.agents/execution-reports/m<M>-slice<S>-*.md`) must be marked done in `SUMMARY.md` with a ✅
+   next to its `**<slice>**` token, UNLESS its milestone is declared `is **DONE**` (milestone-level
+   done subsumes per-slice marks). Pure/fast, so it runs in `--fast` too.
 
 A pre-commit hook (`.githooks/pre-commit`, enabled via `git config core.hooksPath .githooks`) runs
-the fast subset (typecheck + NUL + artifact scans) automatically.
+the fast subset (typecheck + NUL + artifact + SUMMARY scans) automatically.
+
+**SUMMARY.md is a rebuildable projection, not a free-text log — keep it in sync as a build-loop
+step, not an afterthought.** It drifted once (M14 slices 14.2–14.4 shipped with execution reports +
+merged PRs while SUMMARY still showed them un-done and the milestone "IN PROGRESS") precisely because
+updating it was discretionary — done when someone remembered to narrate a slice, skipped for the
+"un-narratable" mechanical ones. So: **when you write a slice's `/lril:execution-report` (or at the
+latest, its `/lril:commit`), update `SUMMARY.md` in the SAME commit** — flip the slice to `✅` with a
+one-line "DONE `<date>` (PR #NN)" note in both the §0 status block and the §6 roadmap, and adjust the
+milestone status line if it was the last open slice. Check 5 above is the backstop that FAILS the
+gate when this is forgotten (the honor-system version is what let it rot).
 
 **Integration tests self-skip without `DATABASE_URL_TEST` (which lives in gitignored `.env`), and a
 skipped layer still reports green — `skipped ≠ passed`.** A plain `repo-health` PASS does NOT prove the
