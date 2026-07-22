@@ -23,5 +23,18 @@ services:
       timeout: 5s
       retries: 10
 
+  # Local SMTP catcher for testing alert delivery (M13.5 SMTP). OPT-IN via the "mail" profile so a
+  # normal `docker compose up` stays archive-only (a real deployment points ALERT_SMTP_URL at its own
+  # relay). Start it with `docker compose --profile mail up -d mailpit` (or just name it directly:
+  # `docker compose up -d mailpit`). Then set ingest env ALERT_SMTP_URL=smtp://localhost:1025 with any
+  # FROM/TO addresses and view captured mail at http://localhost:8025.
+  mailpit:
+    image: axllent/mailpit
+    container_name: 420ai-mailpit
+    profiles: ["mail"]
+    ports:
+      - "1025:1025" # SMTP intake
+      - "8025:8025" # web UI / REST API
+
 volumes:
   archive-data:

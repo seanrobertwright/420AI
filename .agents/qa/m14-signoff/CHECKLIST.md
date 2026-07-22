@@ -181,9 +181,9 @@ sh scripts/smoke-alert.sh
 save `smtp-send-<date>.md` with the received message's subject/header (or a screenshot). Also confirm
 the firing appears in the dashboard AlertsPanel.
 
-> **Validated path (2026-07-22): Mailpit** — a fully local SMTP catcher, no account/credentials:
-> `docker run -d --name mailpit -p 1025:1025 -p 8025:8025 axllent/mailpit`, then
-> `ALERT_SMTP_URL=smtp://localhost:1025` with any `FROM`/`TO` addresses; view captured mail at
+> **Validated path (2026-07-22): Mailpit** — a fully local SMTP catcher, no account/credentials.
+> It's a compose service (opt-in `mail` profile): `docker compose --profile mail up -d mailpit`,
+> then `ALERT_SMTP_URL=smtp://localhost:1025` with any `FROM`/`TO` addresses; view captured mail at
 > `http://localhost:8025`. Mailtrap/Ethereal also work if you prefer a hosted sandbox.
 >
 > **Gotcha:** SMTP config is read at ingest **boot** — fully stop the old ingest and confirm port
