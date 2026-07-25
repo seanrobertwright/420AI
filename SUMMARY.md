@@ -85,6 +85,15 @@ origins deferred; per-origin gate in
 negative), restore-from-backup drill, Cursor `watch → archive → Monitor` round-trip, live SMTP send
 (local Mailpit), scheduled-reports cold run, and 12.3 auth QA (`.agents/qa/m12-slice3/`).
 
+**What's next — V2 (M15–M19) is committed scope, unsequenced.** With M14 signed off, **nothing is in
+flight**. On 2026-07-21 the post-V1 bucket was promoted from a PRD "tentative sketch" to **committed
+scope** — all five milestones are wanted (multi-user, SaaS, cross-platform collectors, advanced
+intelligence, connector ecosystem/local models); the scope conversation asked for one strategic
+direction and the answer was all three. **The order is still open**, and it is decided by _who the next
+milestone is for_, not by technical dependency — the schema is already multi-user-capable, so M15/M16
+are a product-surface build, not a data migration. See §3 for the entries and §6 for the one next
+action: run the deferral-audit + scope conversation that promotes one of them into a sliced plan.
+
 **CI gate:** a `repo-health` GitHub Actions check (repo-root `tsc -b` + NUL/stray scans + the full
 vitest suite **including the Postgres integration layer**) runs on every PR to `main`
 (`.github/workflows/repo-health.yml`).
@@ -202,6 +211,28 @@ granularity) and a truth slice + maintainer pre-sign-off checklist. **The D-M14-
 checklist (updater key ceremony, restore drill, auth QA, SMTP, scheduled reports, Cursor round-trip) is
 fully cleared — evidence under `.agents/qa/m14-signoff/`.** See
 [`.agents/plans/m14-general-ai-chat-capture.md`](./.agents/plans/m14-general-ai-chat-capture.md).
+
+**V2 (M15–M19) — committed scope 2026-07-21, order TBD.** The post-V1 bucket stopped being a sketch:
+the scope conversation asked which single strategic direction to take and the answer was **all
+three** — deepen the single-user product, go multi-user/SaaS, extend cross-platform reach — so all
+five are committed. **The order is not**: the numbering is inherited from the old PRD sketch, and
+sequencing is driven by **who the next milestone is for**, not technical dependency (the schema is
+already multi-user-capable, so M15/M16 are a product-surface build, not a data migration). Nothing
+here is executable until it goes through the deferral-audit + scope conversation that produced
+M12/M13/M14. Full entries in PRD §25.
+
+- **M15 — Multi-user & access control.** Auth beyond M12's single-admin login, per-user isolation,
+  roles/RBAC, team/org concepts. _Builds on 12.3; the foundation for SaaS._
+- **M16 — Cloud-hosted SaaS.** Multi-tenancy, managed archive, quotas/rate limits beyond 12.4,
+  billing, hosted onboarding. _Genuinely depends on M15. Biggest architectural shift — local-first
+  stays a first-class deployment mode._
+- **M17 — Cross-platform collectors.** macOS + Linux (V1/M11 are Windows-first) + portable signed
+  installers/auto-update. _Most parallelizable — best candidate to run alongside another milestone._
+- **M18 — Advanced intelligence & automation.** Semantic/vector search, scheduled _analysis_,
+  in-tool context-rule enforcement, trend/anomaly detection, subscription cost amortization.
+  _Deepens data already captured; benefits from M14's larger corpus._
+- **M19 — Connector ecosystem & local models.** Script/plugin connector runtime, local-model
+  lifecycle, graduating the experimental catalog, mobile consumption app. _Extensibility + breadth._
 
 > **Principle:** nothing shows value until the pipe is whole — so make the _thinnest_ end-to-end
 > pipe first (milestone 1), then thicken each stage.
@@ -336,6 +367,15 @@ original M10 "hardening bundle" (exports, catalog signing, replay metadata, pers
 ---
 
 ## 6. Immediate next steps
+
+- [ ] **NEXT — promote one of M15–M19 into a real milestone.** M14 is signed off, so nothing is in
+      flight. V2 (M15–M19) is **committed scope** as of 2026-07-21 but **deliberately unsequenced**
+      (§3, PRD §25) — the open question is _which one first_, and it is answered by **who the next
+      milestone is for**, not by technical dependency. The step that turns a committed direction into
+      executable work is the same one that produced M12/M13/M14: a **deferral audit** (sweep every
+      "deferred"/"V2" marker in the docs, plans, code-reviews, and comments) **+ a scope conversation**,
+      landing in `.agents/plans/m<N>-<name>.md` with settled decisions and dependency-ordered slices.
+      Do that before writing any code.
 
 - [ ] **V1 close-out** (scope confirmed 2026-06-19 — see §4) — completed to **full written scope**.
       Sequenced slices, each run through the build loop (§2). Recommended order is value/dependency-first: 1. **Git Outcomes & Attribution** (§11.3/§11.4, full) — capture commits (hash/author/time/branch +
