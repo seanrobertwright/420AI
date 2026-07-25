@@ -889,7 +889,9 @@ Requirements:
     shipped); server-side re-parse of Gemini + Cursor history (D-M13-2 — Cursor stores the envelope for a
     future engine); everything in the M12 deferral list above.
 
-14. **General AI Chat Capture (+ deferral sweep). PLANNED (2026-07-14).** The V2 flagship (§1, §4)
+14. **General AI Chat Capture (+ deferral sweep). DONE** (planned 2026-07-14; **signed off 2026-07-22**
+    — slices 14.0–14.7 merged as PRs #51–#57, and the D-M14-4 pre-sign-off checklist fully cleared with
+    evidence under `.agents/qa/m14-signoff/`). The V2 flagship (§1, §4)
     promoted from the sketch below via the standard deferral-audit + scope-conversation process (audit,
     slice breakdown, and settled decisions D-M14-1…4 in `.agents/plans/m14-general-ai-chat-capture.md`).
     **Spike-first:** Slice 14.0 is the (previously unrun) chat capture-surface spike — Claude web+desktop,
@@ -902,24 +904,36 @@ Requirements:
     truth slice (stale README/comments; the missing M12/M13 system-review), and a **maintainer
     pre-sign-off checklist** (updater signing-key ceremony, restore drill, live auto-update E2E, live
     SMTP send, auth QA screenshots, Cursor live round-trip) so the outstanding manual actions stop
-    slipping. **Non-goals unchanged:** multi-user/RBAC/SaaS, MSI/code signing/CI release, Antigravity,
-    semantic/vector search, mobile, in-tool enforcement, scheduled analysis.
+    slipping — **all seven verified 2026-07-22**, which is what closed the milestone. **Non-goals
+    unchanged (for M14 — several are now committed V2 scope below):** multi-user/RBAC/SaaS, MSI/code
+    signing/CI release, Antigravity, semantic/vector search, mobile, in-tool enforcement, scheduled
+    analysis.
 
-### Post-V1 / V2 roadmap (TENTATIVE SKETCH — not committed scope)
+### V2 roadmap — M15–M19 (COMMITTED SCOPE 2026-07-21; order TBD)
 
-> **Status: a planning sketch, not a plan.** **M14 (General AI Chat Capture, above) is now the last
-> _defined_ milestone** — promoted from item 14 of this sketch by the 2026-07-14 deferral audit + scope
-> conversation, exactly the process this note recommends (as M13 was on 2026-07-07 after GA). Everything below is the
-> deferred-to-V2 bucket (PRD §1, §4) grouped into a _candidate_ milestone sequence so the direction is
-> visible — **numbering, scope, and order are provisional** (these were sketched as 13–18 before the real
-> M13 existed; they are shown renumbered 14–19 below, but the labels are still a rough sketch, NOT
-> committed scope). **Do not execute from this.** When starting the next milestone, re-run the same
-> deferral-audit + scope conversation and promote one of these into a real, sliced milestone. Each is
-> sized at "milestone", and several will sub-slice like M12/M13 did.
+> **Status: committed scope, not yet sequenced.** On **2026-07-21** this bucket was promoted from a
+> tentative sketch into **committed scope**: all five milestones below are wanted. The scope
+> conversation asked which strategic direction to take — deepen the single-user product, go
+> multi-user/SaaS, or extend cross-platform reach — and the answer was **all three**, so none of
+> M15–M19 is a "maybe" any more.
+>
+> **What is still open is the ORDER.** The numbering below is inherited from the old sketch and is
+> **not** a commitment to sequence. Sequencing is driven by **who the next milestone is for**, not by
+> technical dependency: the archive schema is already multi-user-capable, so M15/M16 are a
+> product-surface build rather than a data migration, and M17 is largely parallelizable with the rest.
+> Where a genuine technical dependency exists it is called out in the entry itself (e.g. M16 needs
+> M15).
+>
+> **M14 is DONE (signed off 2026-07-22)**, so the "finish M14 first" gate is cleared and V2 planning is
+> unblocked. **Still do not execute directly from this list.** Each entry is milestone-sized and must
+> first be promoted through the same **deferral-audit + scope conversation** that produced M12, M13, and
+> M14 — that step is what turns a committed direction into a real, sliced, executable plan, and several
+> of these will sub-slice as heavily as M12/M13 did.
 
-Recommended order is value- and dependency-first:
+Listed in their inherited sketch numbering — **this is not the execution order**:
 
-14. ~~**General AI Chat capture (V2 flagship).**~~ **PROMOTED → the real M14 above (2026-07-14).**
+14. ~~**General AI Chat capture (V2 flagship).**~~ **PROMOTED → the real M14 above (2026-07-14) and
+    now DONE (2026-07-22).** Kept here only to explain the numbering.
 
 15. **Multi-user & access control.** Turn the already-multi-user-capable **schema** into a real
     multi-user _product_: authentication beyond M12's single-admin login, per-user data isolation,
@@ -933,7 +947,8 @@ Recommended order is value- and dependency-first:
 
 17. **Cross-platform collectors.** macOS + Linux collectors (V1/M11 are Windows-first), and portable,
     signed installers + auto-update across OSes (extends M12 §12.8 distribution). _The architecture was
-    kept portable for exactly this; largely parallelizable with the M14–M16 track._
+    kept portable for exactly this; largely parallelizable with the M15–M16 track — the strongest
+    candidate to run alongside another milestone rather than in sequence._
 
 18. **Advanced intelligence & automation.** Semantic / vector search (V1 ships keyword FTS in §12.1),
     **scheduled analysis** (scheduled report _generation_ already shipped in M13.6; V1 analysis stays
@@ -946,6 +961,13 @@ Recommended order is value- and dependency-first:
     graduating the experimental connector catalog (opencode, Aider, Copilot, Windsurf, Continue, Cline,
     etc.), and a **mobile** consumption app. _Extensibility + breadth; naturally last._
 
-**Still unsequenced / fold-in candidates:** mobile app (sketched in M19 but could pair with M16 SaaS as a
-consumption surface); browser-extension capture (sketched as M14's mechanism but could be its own slice).
-These are deliberately left loose until the post-GA scope conversation.
+**Fold-in candidates (committed, but not tied to a specific milestone):** the mobile app — sketched
+inside M19, though it pairs at least as naturally with M16 SaaS as a consumption surface. Resolve its
+home in the scope conversation that promotes whichever of the two runs first.
+
+**Resolved since the sketch:** browser-extension capture was listed here as a loose candidate; it
+shipped in **M14.7** (Claude-only MV3 extension + the collector `push` capture mode). The remaining
+extension work — ChatGPT/Gemini origins, SSE interception, and `claude-live` vs `claude-export`
+cross-connector dedup — is tracked as M14 deferrals in
+`.agents/plans/m14-general-ai-chat-capture.md`, and is a natural fold-in for M19 (connector ecosystem)
+rather than a milestone of its own.
