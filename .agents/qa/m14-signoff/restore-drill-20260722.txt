@@ -1,0 +1,21 @@
+== restore drill ==
+backup:     ./backups/420ai-20260722T125801Z.sql.gz
+scratch db: scratch (live '420ai' is untouched)
+NOTICE:  database "scratch" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+== row counts in 'scratch' ==
+projects|65
+events|224126
+raw_source_records|156636
+== drill complete ==
+the scratch DB 'scratch' is left in place for inspection; drop it with:
+  docker compose exec -T archive psql -U 420ai -c 'DROP DATABASE IF EXISTS scratch;'
+
+== fidelity check: LIVE 420ai vs restored scratch (2026-07-22) ==
+LIVE 420ai:
+  projects|65
+  raw_source_records|156636
+  events|224126
+RESULT: EXACT MATCH on all three counts → backup->restore reconstructs the archive with full
+fidelity. Live DB untouched throughout; scratch DB dropped after verification.

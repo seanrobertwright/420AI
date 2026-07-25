@@ -1,0 +1,36 @@
+# M14 checklist item 7 — Cursor live round-trip (evidence, 2026-07-22)
+
+## Method
+Ran `npm run -w @420ai/collector watch` against the real home (`C:\Users\seanr`), paired to the
+running local ingest (`http://localhost:8420`, machine `b3b24164…`). The collector's Cursor POLL
+connector read `%APPDATA%\Cursor\User\globalStorage\state.vscdb` and captured its composers; the
+sync worker drained the durable queue to the archive; the dashboard reads the archive.
+
+## Collector capture (from the collector log)
+    cursor: 350/350 session(s) changed → 22652 record(s), 53985 event(s)
+
+## Round-trip landed in the archive
+- `events where source_connector='cursor'`: **32,468 events** (climbing as the queue drains)
+- distinct Cursor **sessions**: **179**
+- sample session ids: 02d72419-…, 030715cf-…, 05585144-…
+
+## Visible in the product
+- **Dashboard search** for "cursor" → returns `entityType:"session"` hits (e.g. 78c16d74-…).
+- **Live Monitor** snapshot (`GET /v1/monitor`) shows the Cursor connector row:
+      {"sourceConnector":"cursor","lastEventAt":"2025-12-07 21:05:25+00","eventCount":32468,
+       "toolCalls":9191,"toolsFailed":284,"parserVersions":["1.0.0"],
+       "models":["claude-4.5-sonnet-thinking","claude-4…"]}
+
+## Note on the "sync stall" false alarm
+An early snapshot showed the queue growing (93k→241k) with "only 1 ingest POST", read as a stall.
+That was WRONG — it caught (a) the one-time enqueue burst of the initial Cursor poll (76k items)
+before the drain caught up, and (b) the first sync batch still in flight. The ingest log then showed
+steady `/v1/ingest` 200s every ~5 s (~500 items/batch), the queue began draining (241k→227k), and
+Cursor events flowed into the archive (0→32k). The sync is HEALTHY; the backlog is a large one-time
+drain, not a stall.
+
+## Verdict
+PASS — Cursor capture round-trips `collector watch → archive → dashboard/Monitor`. The Monitor shows
+the Cursor connector with real events/tool-calls/models. (These are historical sessions from the
+existing store; a session shown as *active* in the live view would need fresh Cursor chatting during
+the collector run — not required to prove the round-trip.)

@@ -1,0 +1,10 @@
+M12 12.3 — load-bearing security assertion: ADMIN_TOKEN never in served HTML.
+
+Command (authed request via server-side proxy discipline):
+  curl -b <session-cookie> http://localhost:3002/projects  →  grep -c "$ADMIN_TOKEN"
+
+Result: 0 occurrences of ADMIN_TOKEN in the 56 553-byte rendered /projects page
+(page confirmed to contain real authed data: "Projects", "UAT Test Project").
+
+→ The admin token stays server-side; the browser only ever holds the httpOnly ai_session
+  HMAC cookie. PASS. Captured 2026-07-22.

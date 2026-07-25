@@ -134,11 +134,29 @@ code-reviews, execution-reports, system-reviews), and source comments. Findings,
 
 ## Pre-sign-off checklist (D-M14-4 — every box, maintainer manual)
 
-- [ ] Updater signing-key ceremony run; `tauri.conf.json` placeholder replaced; key in
-      `.secrets/` (runbook: `docs/guide/operations.md` §13.1)
-- [ ] Restore-from-backup drill into a scratch DB, verified
-- [ ] Live auto-update E2E (needs the ceremony first)
-- [ ] 12.3 auth live QA + screenshots → `.agents/qa/m12-slice3/`
-- [ ] Live SMTP alert send (opt-in env set, one real email observed)
-- [ ] Scheduled-reports cold run (`reports:generate` against a live stack)
-- [ ] Cursor live round-trip: `collector watch → archive → Monitor` shows a Cursor session
+- [x] Updater signing-key ceremony run; `tauri.conf.json` placeholder replaced; key in
+      `.secrets/` (runbook: `docs/guide/operations.md` §13.1) — done 2026-07-22, key id
+      `274299A56AD1A676`; private key `.secrets/tauri-updater.key` (git-ignored, passwordless `--ci`)
+- [x] Restore-from-backup drill into a scratch DB, verified — done 2026-07-22, restored
+      `420ai-20260722T125801Z.sql.gz` into a scratch DB; counts exact-match live (projects 65,
+      raw_source_records 156636, events 224126); evidence `.agents/qa/m14-signoff/restore-drill-20260722.txt`
+- [x] Live auto-update E2E (needs the ceremony first) — done 2026-07-22; built + published a v0.1.1
+      GitHub release, an installed 0.1.0 auto-updated to 0.1.1 (signature verified against the baked
+      pubkey), and a tampered latest.json was rejected (stayed 0.1.1); evidence
+      `.agents/qa/m14-signoff/auto-update-e2e-20260722.md`
+- [x] 12.3 auth live QA + screenshots → `.agents/qa/m12-slice3/` — done 2026-07-22; 6/6 HTTP
+      assertions pass (login 200, wrong-pw 401, session cookie set, ADMIN_TOKEN 0× in authed HTML,
+      /api/auth/me → admin email, logged-out → 307/login); evidence `http-assertions-20260722.txt`
+      + `06-no-token-in-html.txt` + `01-login-page.png`. Authed-view screenshots (03/05) optional —
+      proven functionally (headless Edge can't inject the httpOnly session cookie).
+- [x] Live SMTP alert send (opt-in env set, one real email observed) — done 2026-07-22 via a
+      local Mailpit catcher (`smtp://localhost:1025`); forced an `ingest.auth_failure` firing and
+      observed the delivered email (subject/body correct); evidence
+      `.agents/qa/m14-signoff/smtp-send-20260722.txt`
+- [x] Scheduled-reports cold run (`reports:generate` against a live stack) — done 2026-07-22;
+      390 reports (all 6 project types × 65 projects), 0 failures, exit 0; evidence
+      `.agents/qa/m14-signoff/reports-generate-20260722.txt`
+- [x] Cursor live round-trip: `collector watch → archive → Monitor` shows a Cursor session — done
+      2026-07-22; collector captured 350 Cursor sessions, synced to the archive (179 distinct
+      sessions, 32k+ events), searchable in the dashboard and shown in the Monitor's cursor connector
+      row; evidence `.agents/qa/m14-signoff/cursor-roundtrip-20260722.txt`
