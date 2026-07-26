@@ -674,7 +674,7 @@ ROW LEVEL SECURITY` does **not** fix it → a non-owner app role is load-bearing
       deferred). Non-goals unchanged (multi-user/SaaS, MSI/signing, Antigravity, semantic search).
 
       **↳ D-M14-4 pre-sign-off checklist — COMPLETE (all seven verified 2026-07-22; evidence under
-      [`.agents/qa/m14-signoff/`](../.agents/qa/m14-signoff/)):**
+      [`.agents/qa/m14-signoff/`](./.agents/qa/m14-signoff/)):**
       - [x] Updater signing-key ceremony run; `tauri.conf.json` carries the real pubkey `274299A5…`
             (was `REPLACE_WITH_TAURI_UPDATER_PUBKEY`); key in `.secrets/tauri-updater.key`
       - [x] Restore-from-backup drill into a scratch DB, verified (exact-match fidelity)

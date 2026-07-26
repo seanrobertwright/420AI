@@ -129,8 +129,10 @@ over-disclosure**, not an error. Three consequences that 15.0 must prove before 
   SQL, an injection vector in the isolation primitive itself. A plain `SET` persists for the life
   of the physical connection and the next request to borrow it inherits the previous tenant's
   context — a proven cross-tenant leak. ⇒ **every request touching tenant data must run in a
-  transaction.** Only 11 call sites use `db.transaction()` today; this is the single largest
-  mechanical cost of D-M15-3. Evidence: `docs/research/m15-rls-spike.md` (Findings 3–4).
+  transaction.** Only **10** call sites use `db.transaction()` today (count corrected from 11 by
+  the 15.0 code review, which re-derived it; see the research doc's Finding 3 for the enumeration
+  and the command); this is the single largest mechanical cost of D-M15-3. Evidence:
+  `docs/research/m15-rls-spike.md` (Findings 3–4).
 - **Superuser bypass — worse than "owner bypass", and FORCE does NOT fix it.** _Corrected
   2026-07-25 by the 15.0 spike, which disproved the original wording of this bullet._ The role in
   `DATABASE_URL`/`DATABASE_URL_TEST` is `420ai`, which is `rolsuper=t, rolbypassrls=t`. RLS is

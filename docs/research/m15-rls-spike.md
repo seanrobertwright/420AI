@@ -121,8 +121,17 @@ connection. The context persists for the lifetime of the connection, not merely 
 borrow.
 
 **Consequence (the largest mechanical cost in M15):** every request touching tenant data must run
-**inside a transaction** — reads included, not only writes. Only **11** `db.transaction()` call sites
-exist in the repo today.
+**inside a transaction** — reads included, not only writes. Only **10** `db.transaction()` call sites
+exist in the repo today — 8 in `packages/db/src/repositories/` (`connector-catalogs`, `git`,
+`ingest`, `key-rotation`, `pricing-catalogs`, `reports`, `reprice`, `search`) and 2 route handlers
+(`apps/ingest/src/routes/pair.ts`, `workspaces.ts`). Re-derive with:
+
+```bash
+grep -rn "\.transaction(async" --include=*.ts packages apps scripts | grep -v node_modules | grep -v "/dist/"
+```
+
+(A bare `grep "db.transaction("` returns 12 — it also matches two prose comments in
+`client.ts:7` and `:12`.)
 
 ## Finding 4 — the decided pattern works through Drizzle's `transaction()`, with a BOUND parameter.
 
@@ -152,11 +161,16 @@ after a thrown/rolled-back transaction, or into a subsequent transaction.
 
 ## DECIDED (15.0) — the transaction-wrapping pattern 15.3 implements
 
-`sql` and the `Db` / `Tx` types come from
-[`packages/db/src/client.ts`](../../packages/db/src/client.ts) (`DbClient = Db | Tx`).
+The `Db` / `Tx` types come from [`packages/db/src/client.ts`](../../packages/db/src/client.ts)
+(`DbClient = Db | Tx`); `sql` comes from **`drizzle-orm`**, as everywhere else in the repo
+(e.g. `packages/db/src/schema.ts:13`). The snippet below is copy-complete and was **verified to
+compile**: written into `packages/db/src/` verbatim, root `tsc -b` exits 0.
 
 ```ts
 // DECIDED (15.0) — 15.3 implements this. Proven by Findings 2-4.
+import { sql } from "drizzle-orm";
+import type { Db, Tx } from "./client.js";
+
 export async function withOrg<T>(db: Db, orgId: string, fn: (tx: Tx) => Promise<T>): Promise<T> {
   return db.transaction(async (tx) => {
     // set_config(..., true) == SET LOCAL, but PARAMETERIZED.
@@ -199,7 +213,8 @@ forgets, it does not replace the code.
    add a **role-identity assertion** (e.g. a test asserting `current_setting('is_superuser') = 'off'`
    on the connection the RLS tests use).
 5. **Transaction wrapping is required on every tenant-touching read**, not just writes (Finding 3).
-   Only **11** `db.transaction()` call sites exist today. If 15.3's planning finds this cost
+   Only **10** `db.transaction()` call sites exist today (enumerated under Finding 3, with the
+   command that re-derives the count). If 15.3's planning finds this cost
    prohibitive, the fallback — RLS on `events`, `raw_source_records`, `report_artifacts`, and
    `search_documents` only, with application scoping everywhere else — is decided in the
    **milestone plan** (Risk 2), **not** mid-implementation.
