@@ -509,10 +509,15 @@ export async function rebuildSearchIndex(db: DbClient): Promise<ReindexCounts> {
  * makes PG treat the SELECT/ORDER-BY exprs as distinct). Hits are ranked by
  * `ts_rank` (defensively `Number()`-coerced per the CLAUDE.md numeric gotcha) and
  * carry a redacted `ts_headline` snippet.
+ *
+ * M15 15.2: `orgId` is REQUIRED, not optional. An optional field a caller forgets is a
+ * silent full-index read across every tenant's decrypted-then-redacted bodies; a required
+ * one is a compile error. Before this predicate, search spanned all orgs.
  */
 export async function searchDocuments(
   db: DbClient,
   opts: {
+    orgId: string;
     q: string;
     type?: SearchEntityType;
     projectId?: string | null;
@@ -523,7 +528,10 @@ export async function searchDocuments(
   const tsq = sql`websearch_to_tsquery('english', ${opts.q})`;
   const rank = sql<number>`ts_rank(${searchDocumentsTbl.searchVector}, ${tsq})`;
 
-  const conditions = [sql`${searchDocumentsTbl.searchVector} @@ ${tsq}`];
+  const conditions = [
+    sql`${searchDocumentsTbl.searchVector} @@ ${tsq}`,
+    eq(searchDocumentsTbl.orgId, opts.orgId),
+  ];
   if (opts.type) conditions.push(eq(searchDocumentsTbl.entityType, opts.type));
   if (opts.projectId) conditions.push(eq(searchDocumentsTbl.projectId, opts.projectId));
 

@@ -49,7 +49,11 @@ export async function findOrCreateProjectByRemote(
   gitRemote: string,
   name: string,
 ): Promise<{ id: string; created: boolean }> {
-  // M15 15.1: superseded by the 15.2 request principal.
+  // M15 15.2: this write is reached ONLY from the MACHINE-authed
+  // POST /v1/workspaces/discover, where there is no request principal to take an
+  // org from — the caller is a collector bearing a machine token. `getOrgIdForUser`
+  // therefore SURVIVES here by design; D-M15-7 (slice 15.9) is where the machine
+  // credential tier gets its own org resolution.
   const orgId = await getOrgIdForUser(db, userId);
   const inserted = await db
     .insert(projects)
@@ -73,7 +77,11 @@ export async function createProject(
   name: string,
   gitRemote?: string,
 ): Promise<{ id: string }> {
-  // M15 15.1: superseded by the 15.2 request principal.
+  // M15 15.2: this write is reached ONLY from the MACHINE-authed
+  // POST /v1/workspaces/discover, where there is no request principal to take an
+  // org from — the caller is a collector bearing a machine token. `getOrgIdForUser`
+  // therefore SURVIVES here by design; D-M15-7 (slice 15.9) is where the machine
+  // credential tier gets its own org resolution.
   const orgId = await getOrgIdForUser(db, userId);
   const [row] = await db
     .insert(projects)
@@ -110,28 +118,50 @@ export async function listProjects(
 /** Rename a project (the editable mapping, D4). Returns the updated row, if any. */
 export async function renameProject(
   db: DbClient,
+  orgId: string,
   projectId: string,
   name: string,
 ): Promise<ProjectRow | undefined> {
   const [row] = await db
     .update(projects)
     .set({ name })
-    .where(eq(projects.id, projectId))
+    // M15 15.2: org-scoped — without it another tenant could RENAME this project.
+    // A miss returns undefined, which the route already turns into 404.
+    .where(and(eq(projects.id, projectId), eq(projects.orgId, orgId)))
     .returning(projectRowColumns);
   return row;
 }
 
-/** Look up a project's display name (for the discover mapping response). */
-export async function getProjectName(db: DbClient, projectId: string): Promise<string | undefined> {
+/**
+ * Look up a project's display name (for the discover mapping response).
+ *
+ * M15 15.2: org-scoped. This doubles as the EXISTENCE CHECK on the report-generation
+ * write path, so an unscoped version let one tenant generate a report against another
+ * tenant's project id — and the other tenant's project NAME was rendered into the
+ * resulting Markdown. Unknown id and other-org id are now both `undefined` → 404.
+ */
+export async function getProjectName(
+  db: DbClient,
+  orgId: string,
+  projectId: string,
+): Promise<string | undefined> {
   const [row] = await db
     .select({ name: projects.name })
     .from(projects)
-    .where(eq(projects.id, projectId))
+    .where(and(eq(projects.id, projectId), eq(projects.orgId, orgId)))
     .limit(1);
   return row?.name;
 }
 
 /** Archive a project (soft delete — sets `archived_at`). */
-export async function archiveProject(db: DbClient, projectId: string): Promise<void> {
-  await db.update(projects).set({ archivedAt: new Date() }).where(eq(projects.id, projectId));
+export async function archiveProject(
+  db: DbClient,
+  orgId: string,
+  projectId: string,
+): Promise<void> {
+  // M15 15.2: org-scoped — archiving is a WRITE; another tenant must not reach it.
+  await db
+    .update(projects)
+    .set({ archivedAt: new Date() })
+    .where(and(eq(projects.id, projectId), eq(projects.orgId, orgId)));
 }

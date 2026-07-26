@@ -27,7 +27,11 @@ export async function createPairingCode(
   userId: string,
   ttlMs: number = DEFAULT_TTL_MS,
 ): Promise<{ code: string; expiresAt: Date }> {
-  // M15 15.1: superseded by the 15.2 request principal.
+  // M15 15.2: the org is deliberately resolved from `userId`, NOT taken from the
+  // request principal. A pairing code is minted FOR A TARGET USER, and POST
+  // /v1/pairing-codes accepts a `body.email` that may name someone other than the
+  // caller (D-15.2-5 keeps that primitive until 15.5). Stamping the CALLER's org on a
+  // code whose `user_id` belongs to another org would write a cross-org row.
   const orgId = await getOrgIdForUser(db, userId);
   const code = randomBytes(8).toString("base64url");
   const expiresAt = new Date(Date.now() + ttlMs);

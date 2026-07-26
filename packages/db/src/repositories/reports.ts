@@ -1,7 +1,6 @@
 import { and, desc, eq, sql } from "drizzle-orm";
-import type { DbClient } from "../client.js";
+import type { Db, DbClient } from "../client.js";
 import { reportArtifacts } from "../schema.js";
-import { getOrgIdForUser } from "./organizations.js";
 
 /**
  * Report-artifact repository (M7, PRD §15/§23). Durable, VERSIONED report storage:
@@ -53,47 +52,91 @@ const reportArtifactRowColumns = {
 };
 
 /**
+ * Attempts before a version conflict surfaces to the caller. 12 absorbs ≥16-way
+ * concurrent generation (measured during 15.2 planning); 6 did not — 6 of 16 still
+ * failed. Chosen from measurement, not taste.
+ */
+const MAX_VERSION_ATTEMPTS = 12;
+
+/**
+ * True for the `report_artifacts_scope_version` unique violation — i.e. "another
+ * generation claimed this version first", the ONLY error worth retrying here.
+ * Drizzle WRAPS the driver error, so the pg `code`/`constraint` fields live on
+ * `.cause` (same shape asserted in tenancy.int.test.ts).
+ */
+export function isVersionConflict(e: unknown): boolean {
+  const c = (e as { cause?: { code?: string; constraint?: string } })?.cause;
+  return c?.code === "23505" && c?.constraint === "report_artifacts_scope_version";
+}
+
+/**
  * Insert a new artifact, bumping `version` per (userId, reportType, scopeId). The
  * max-version read and the insert run in ONE transaction; the
  * `report_artifacts_scope_version` unique index is the backstop if two generations
- * race (single-user → low contention, but correct). `metrics`/`params` are passed
- * as JS objects — Drizzle serializes them to jsonb. Returns the stored row.
+ * race. `metrics`/`params` are passed as JS objects — Drizzle serializes them to
+ * jsonb. Returns the stored row.
+ *
+ * M15 15.2 — RETRY, not a bigger transaction. Under READ COMMITTED the `max(version)+1`
+ * read inside a transaction does not see a concurrent uncommitted insert, so N racing
+ * generations all compute the same version and N-1 hit the unique index (measured: at
+ * N=8, 2 succeeded and 6 returned 500). The retry MUST wrap the WHOLE transaction —
+ * a failed statement aborts the surrounding one, so retrying inside it errors with
+ * `current transaction is aborted`. Hence `Db`, not `DbClient`: re-opening a
+ * transaction is something a `Tx` cannot do. (Verified: both callers pass a `Db`.)
+ *
+ * `orgId` now comes in on `a` from the request principal instead of a
+ * `getOrgIdForUser` lookup inside the transaction — one less query per generation,
+ * and it retires one of 15.1's temporary seams.
  */
 export async function insertReportArtifact(
-  db: DbClient,
-  a: Omit<ReportArtifactRow, "id" | "version" | "generatedAt">,
+  db: Db,
+  a: Omit<ReportArtifactRow, "id" | "version" | "generatedAt"> & { orgId: string },
 ): Promise<ReportArtifactRow> {
-  return db.transaction(async (tx) => {
-    const [prev] = await tx
-      .select({ v: sql<number>`coalesce(max(${reportArtifacts.version}), 0)::int` })
-      .from(reportArtifacts)
-      .where(
-        and(
-          eq(reportArtifacts.userId, a.userId),
-          eq(reportArtifacts.reportType, a.reportType),
-          eq(reportArtifacts.scopeId, a.scopeId),
-        ),
-      );
-    const version = (prev?.v ?? 0) + 1;
-    // M15 15.1: superseded by the 15.2 request principal.
-    const orgId = await getOrgIdForUser(tx, a.userId);
-    const [row] = await tx
-      .insert(reportArtifacts)
-      .values({ ...a, orgId, version })
-      .returning(reportArtifactRowColumns);
-    return row as ReportArtifactRow;
-  });
+  for (let attempt = 1; attempt <= MAX_VERSION_ATTEMPTS; attempt++) {
+    try {
+      return await db.transaction(async (tx) => {
+        const [prev] = await tx
+          .select({ v: sql<number>`coalesce(max(${reportArtifacts.version}), 0)::int` })
+          .from(reportArtifacts)
+          .where(
+            and(
+              eq(reportArtifacts.userId, a.userId),
+              eq(reportArtifacts.reportType, a.reportType),
+              eq(reportArtifacts.scopeId, a.scopeId),
+            ),
+          );
+        const version = (prev?.v ?? 0) + 1;
+        const [row] = await tx
+          .insert(reportArtifacts)
+          .values({ ...a, version })
+          .returning(reportArtifactRowColumns);
+        return row as ReportArtifactRow;
+      });
+    } catch (e) {
+      if (!isVersionConflict(e) || attempt === MAX_VERSION_ATTEMPTS) throw e;
+      // Lost the race — another generation took this version. Re-read and retry.
+    }
+  }
+  /* c8 ignore next -- unreachable: the loop either returns or throws on the last attempt */
+  throw new Error("unreachable");
 }
 
-/** Fetch a single artifact by id, or undefined if no row matches. */
+/**
+ * Fetch a single artifact by id WITHIN an org, or undefined if no row matches.
+ *
+ * M15 15.2: an unknown id and another org's id are deliberately indistinguishable —
+ * both yield `undefined`, which the route turns into 404. Never 403: that would leak
+ * the existence of another tenant's report.
+ */
 export async function getReportArtifact(
   db: DbClient,
+  orgId: string,
   id: string,
 ): Promise<ReportArtifactRow | undefined> {
   const [row] = await db
     .select(reportArtifactRowColumns)
     .from(reportArtifacts)
-    .where(eq(reportArtifacts.id, id))
+    .where(and(eq(reportArtifacts.id, id), eq(reportArtifacts.orgId, orgId)))
     .limit(1);
   return row as ReportArtifactRow | undefined;
 }
@@ -109,10 +152,14 @@ export async function getReportArtifact(
  */
 export async function listReportArtifacts(
   db: DbClient,
+  orgId: string,
   userId: string,
   filter?: { reportType?: string; scopeId?: string; limit?: number; offset?: number },
 ): Promise<ReportArtifactRow[]> {
-  const conditions = [eq(reportArtifacts.userId, userId)];
+  // M15 15.2: org AND user — defense in depth. The route passes both from ONE principal,
+  // so they cannot disagree; the org predicate is what survives if user-scoping is ever
+  // widened (e.g. 15.10's shared-org views).
+  const conditions = [eq(reportArtifacts.orgId, orgId), eq(reportArtifacts.userId, userId)];
   if (filter?.reportType) conditions.push(eq(reportArtifacts.reportType, filter.reportType));
   if (filter?.scopeId) conditions.push(eq(reportArtifacts.scopeId, filter.scopeId));
   const query = db

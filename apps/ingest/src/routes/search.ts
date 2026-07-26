@@ -2,11 +2,11 @@ import type { FastifyInstance } from "fastify";
 import { searchDocuments, rebuildSearchIndex } from "@420ai/db";
 import type { SearchEntityType } from "@420ai/shared";
 import { searchQuerySchema } from "../schemas.js";
-import { adminAuthorized, isUuid } from "../auth.js";
+import { resolvePrincipal, isUuid } from "../auth.js";
 
 /**
  * M12 §21 admin search endpoints. Both admin-gated (mirrors routes/projections.ts:
- * inline `adminAuthorized`→401, `isUuid`→404). Hits come from the REDACTED
+ * inline `resolvePrincipal`→401, `isUuid`→404). Hits come from the REDACTED
  * `search_documents` projection — never the encrypted originals (PRD §18.1).
  *
  *   - GET  /v1/search          — ranked, redacted hits (querystring-validated `q`).
@@ -26,7 +26,8 @@ export default async function searchRoutes(app: FastifyInstance): Promise<void> 
       offset?: number;
     };
   }>("/v1/search", { schema: { querystring: searchQuerySchema } }, async (request, reply) => {
-    if (!adminAuthorized(app, request)) {
+    const principal = await resolvePrincipal(app, request);
+    if (!principal) {
       return reply.code(401).send({ error: "admin authorization required" });
     }
     const { q, type, projectId, limit, offset } = request.query;
@@ -35,17 +36,27 @@ export default async function searchRoutes(app: FastifyInstance): Promise<void> 
     if (projectId !== undefined && !isUuid(projectId)) {
       return reply.code(404).send({ error: "project not found" });
     }
-    return reply
-      .code(200)
-      .send(
-        await searchDocuments(app.db, { q, type, projectId: projectId ?? null, limit, offset }),
-      );
+    return reply.code(200).send(
+      await searchDocuments(app.db, {
+        orgId: principal.orgId,
+        q,
+        type,
+        projectId: projectId ?? null,
+        limit,
+        offset,
+      }),
+    );
   });
 
   app.post("/v1/search/reindex", async (request, reply) => {
-    if (!adminAuthorized(app, request)) {
+    const principal = await resolvePrincipal(app, request);
+    if (!principal) {
       return reply.code(401).send({ error: "admin authorization required" });
     }
+    // D-15.2-7: DELIBERATELY not org-scoped. Reindex is a deployment-wide maintenance
+    // operation, and after 15.1 its writers already stamp the correct per-row `org_id`
+    // (pinned by tenancy.int.test.ts "indexSessions emits ONE doc PER ORG"). Restricting
+    // WHO may run it is 15.4's RBAC job, not this slice's.
     return reply.code(200).send(await rebuildSearchIndex(app.db));
   });
 }

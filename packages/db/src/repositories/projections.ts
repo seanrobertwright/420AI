@@ -22,6 +22,16 @@ import { events, machines, workspaceKeys, workspaces } from "../schema.js";
  * columns — never decrypts a payload (PRD §18.1, D3). On-demand, no materialized
  * rollups (D2). Silent library (CLAUDE.md): throws, never logs.
  *
+ * M15 15.2 ORG-SCOPING RULE (applies repo-wide): a read keyed by a CONNECTOR-SUPPLIED
+ * string — `session_id`, `project_path`, `fingerprint` — MUST take `orgId` and apply
+ * `eq(events.orgId, orgId)`. Those keys are globally scoped, so two tenants can share
+ * one: the five rollups below join `events.project_path = workspace_keys.project_key`,
+ * and before the predicate two orgs whose machines used the same path (`C:\dev\app`)
+ * had their events, tokens and cost merged into whichever org owned the project row.
+ * `orgId` is always the SECOND parameter (D-15.2-4) so a transposed argument is visible.
+ * `connectorHealth`/`connectorHealthWindowed` are DELIBERATELY exempt — they join
+ * `machines` and filter `machines.user_id`, which is already tenant-correct.
+ *
  * Token sums use the four `computeTotal` sub-types and RECOMPUTE `total` (never
  * trust a possibly-stale stored `total`) so server totals match the M1 report
  * arithmetic (D5). Cost USD sums in SQL; the confidence LABEL reduces in TS via
@@ -74,7 +84,11 @@ function tokensFromRow(r: TokenRow | undefined): NormalizedTokens {
 }
 
 /** Per-project token + cost totals (the on-demand version of the D5 summary, scaled to metrics). */
-export async function usageTotals(db: DbClient, projectId: string): Promise<UsageTotals> {
+export async function usageTotals(
+  db: DbClient,
+  orgId: string,
+  projectId: string,
+): Promise<UsageTotals> {
   const [row] = await db
     .select({
       ...tokenColumns,
@@ -85,7 +99,13 @@ export async function usageTotals(db: DbClient, projectId: string): Promise<Usag
     .from(events)
     .innerJoin(workspaceKeys, eq(events.projectPath, workspaceKeys.projectKey))
     .innerJoin(workspaces, eq(workspaces.id, workspaceKeys.workspaceId))
-    .where(eq(workspaces.projectId, projectId));
+    .where(
+      and(
+        eq(workspaces.projectId, projectId),
+        eq(workspaceKeys.orgId, orgId),
+        eq(events.orgId, orgId),
+      ),
+    );
   return {
     tokens: tokensFromRow(row),
     costUsd: Number(row?.costUsd ?? 0),
@@ -95,7 +115,11 @@ export async function usageTotals(db: DbClient, projectId: string): Promise<Usag
 }
 
 /** Per-model token + cost breakdown for a project (tool/model comparison input, PRD §14). */
-export async function usageByModel(db: DbClient, projectId: string): Promise<UsageByModelRow[]> {
+export async function usageByModel(
+  db: DbClient,
+  orgId: string,
+  projectId: string,
+): Promise<UsageByModelRow[]> {
   const rows = await db
     .select({
       model: events.model,
@@ -111,6 +135,8 @@ export async function usageByModel(db: DbClient, projectId: string): Promise<Usa
     .where(
       and(
         eq(workspaces.projectId, projectId),
+        eq(workspaceKeys.orgId, orgId),
+        eq(events.orgId, orgId),
         inArray(events.eventType, ["usage.reported", "cost.estimated"]),
       ),
     )
@@ -125,6 +151,7 @@ export async function usageByModel(db: DbClient, projectId: string): Promise<Usa
 /** Per-time-bucket usage for a project (cost-over-time, PRD §14). Ascending by bucket. */
 export async function usageOverTime(
   db: DbClient,
+  orgId: string,
   projectId: string,
   bucket: "day" | "week",
 ): Promise<UsageOverTimeRow[]> {
@@ -142,7 +169,13 @@ export async function usageOverTime(
     .from(events)
     .innerJoin(workspaceKeys, eq(events.projectPath, workspaceKeys.projectKey))
     .innerJoin(workspaces, eq(workspaces.id, workspaceKeys.workspaceId))
-    .where(eq(workspaces.projectId, projectId))
+    .where(
+      and(
+        eq(workspaces.projectId, projectId),
+        eq(workspaceKeys.orgId, orgId),
+        eq(events.orgId, orgId),
+      ),
+    )
     .groupBy(bucketExpr)
     .orderBy(bucketExpr);
   return rows.map((r) => ({
@@ -227,6 +260,7 @@ function sessionFromRow(sessionId: string, r: SessionRow | undefined): SessionPr
 /** Reconstruct every session in a project (newest first by last activity, PRD §15 precursor). */
 export async function sessionProjections(
   db: DbClient,
+  orgId: string,
   projectId: string,
 ): Promise<SessionProjection[]> {
   const rows = await db
@@ -234,7 +268,13 @@ export async function sessionProjections(
     .from(events)
     .innerJoin(workspaceKeys, eq(events.projectPath, workspaceKeys.projectKey))
     .innerJoin(workspaces, eq(workspaces.id, workspaceKeys.workspaceId))
-    .where(eq(workspaces.projectId, projectId))
+    .where(
+      and(
+        eq(workspaces.projectId, projectId),
+        eq(workspaceKeys.orgId, orgId),
+        eq(events.orgId, orgId),
+      ),
+    )
     .groupBy(events.sessionId)
     .orderBy(sql`max(${events.ts}) desc`);
   return rows.map((r) => sessionFromRow(r.sessionId, r as SessionRow));
@@ -243,12 +283,20 @@ export async function sessionProjections(
 /**
  * One session's shape, identified directly by `session_id` (NOT project-joined —
  * a session is its own identity). Returns a zeroed projection if no rows match.
+ *
+ * M15 15.2: `session_id` is a CONNECTOR-SUPPLIED, globally-scoped string — two tenants
+ * can hold the same one — so this read MUST take `orgId`. Before the predicate below,
+ * org A's 3 events and org B's 5 under a shared id merged into ONE projection of 8.
  */
-export async function sessionDetail(db: DbClient, sessionId: string): Promise<SessionDetail> {
+export async function sessionDetail(
+  db: DbClient,
+  orgId: string,
+  sessionId: string,
+): Promise<SessionDetail> {
   const [row] = await db
     .select(sessionAggregateColumns)
     .from(events)
-    .where(eq(events.sessionId, sessionId));
+    .where(and(eq(events.sessionId, sessionId), eq(events.orgId, orgId)));
   // count(*) is 0 (not absent) for an unknown session — treat as "no session".
   if (!row || row.eventCount === 0) return sessionFromRow(sessionId, undefined);
   return sessionFromRow(sessionId, { sessionId, ...row } as SessionRow);
@@ -342,6 +390,7 @@ export async function connectorHealthWindowed(
  */
 export async function projectGitMetadata(
   db: DbClient,
+  orgId: string,
   projectId: string,
 ): Promise<ProjectGitMetadata> {
   const [row] = await db
@@ -356,6 +405,12 @@ export async function projectGitMetadata(
     .from(events)
     .innerJoin(workspaceKeys, eq(events.projectPath, workspaceKeys.projectKey))
     .innerJoin(workspaces, eq(workspaces.id, workspaceKeys.workspaceId))
-    .where(eq(workspaces.projectId, projectId));
+    .where(
+      and(
+        eq(workspaces.projectId, projectId),
+        eq(workspaceKeys.orgId, orgId),
+        eq(events.orgId, orgId),
+      ),
+    );
   return { branches: row?.branches ?? [], projectPaths: row?.projectPaths ?? [] };
 }

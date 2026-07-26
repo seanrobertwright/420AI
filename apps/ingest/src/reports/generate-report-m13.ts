@@ -39,13 +39,14 @@ import {
 
 export async function generateToolModelComparisonReport(
   db: Db,
+  orgId: string,
   userId: string,
   projectId: string,
   generatedAt: string,
 ): Promise<ReportArtifactRow> {
   const [rows, projectName] = await Promise.all([
-    toolStatsByModel(db, projectId),
-    getProjectName(db, projectId),
+    toolStatsByModel(db, orgId, projectId),
+    getProjectName(db, orgId, projectId),
   ]);
   const metrics = { rows };
   const markdown = renderToolModelComparisonReport({
@@ -54,6 +55,7 @@ export async function generateToolModelComparisonReport(
     ...metrics,
   });
   return insertReportArtifact(db, {
+    orgId,
     userId,
     projectId,
     reportType: "project.tool_model_comparison",
@@ -70,15 +72,16 @@ export async function generateToolModelComparisonReport(
 
 export async function generateFailedToolCallsReport(
   db: Db,
+  orgId: string,
   userId: string,
   projectId: string,
   bucket: "day" | "week",
   generatedAt: string,
 ): Promise<ReportArtifactRow> {
   const [breakdown, series, projectName] = await Promise.all([
-    failedToolBreakdown(db, projectId),
-    failureSeries(db, projectId, bucket),
-    getProjectName(db, projectId),
+    failedToolBreakdown(db, orgId, projectId),
+    failureSeries(db, orgId, projectId, bucket),
+    getProjectName(db, orgId, projectId),
   ]);
   const metrics = { breakdown, series };
   const markdown = renderFailedToolCallsReport({
@@ -88,6 +91,7 @@ export async function generateFailedToolCallsReport(
     ...metrics,
   });
   return insertReportArtifact(db, {
+    orgId,
     userId,
     projectId,
     reportType: "project.failed_tool_calls",
@@ -104,13 +108,14 @@ export async function generateFailedToolCallsReport(
 
 export async function generateContextWasteReport(
   db: Db,
+  orgId: string,
   userId: string,
   projectId: string,
   generatedAt: string,
 ): Promise<ReportArtifactRow> {
   const [sample, projectName] = await Promise.all([
-    contextPathSample(db, projectId),
-    getProjectName(db, projectId),
+    contextPathSample(db, orgId, projectId),
+    getProjectName(db, orgId, projectId),
   ]);
   // The deterministic §17 deliverable: a project-specific, ranked ignore-recommendation
   // list derived purely from the classified counts (no I/O, no clock).
@@ -122,6 +127,7 @@ export async function generateContextWasteReport(
     ...metrics,
   });
   return insertReportArtifact(db, {
+    orgId,
     userId,
     projectId,
     reportType: "project.context_waste",
@@ -138,15 +144,16 @@ export async function generateContextWasteReport(
 
 export async function generateProjectEfficiencyReport(
   db: Db,
+  orgId: string,
   userId: string,
   projectId: string,
   generatedAt: string,
 ): Promise<ReportArtifactRow> {
   const [totals, sessions, commits, projectName] = await Promise.all([
-    usageTotals(db, projectId),
-    sessionProjections(db, projectId),
-    gitCommitsByProject(db, projectId),
-    getProjectName(db, projectId),
+    usageTotals(db, orgId, projectId),
+    sessionProjections(db, orgId, projectId),
+    gitCommitsByProject(db, orgId, projectId),
+    getProjectName(db, orgId, projectId),
   ]);
   const metrics = { totals, sessions, commits };
   const markdown = renderProjectEfficiencyReport({
@@ -155,6 +162,7 @@ export async function generateProjectEfficiencyReport(
     ...metrics,
   });
   return insertReportArtifact(db, {
+    orgId,
     userId,
     projectId,
     reportType: "project.efficiency",
@@ -171,15 +179,16 @@ export async function generateProjectEfficiencyReport(
 
 export async function generateTrendAnomaliesReport(
   db: Db,
+  orgId: string,
   userId: string,
   projectId: string,
   bucket: "day" | "week",
   generatedAt: string,
 ): Promise<ReportArtifactRow> {
   const [costSeries, failureSeriesRows, projectName] = await Promise.all([
-    usageOverTime(db, projectId, bucket),
-    failureSeries(db, projectId, bucket),
-    getProjectName(db, projectId),
+    usageOverTime(db, orgId, projectId, bucket),
+    failureSeries(db, orgId, projectId, bucket),
+    getProjectName(db, orgId, projectId),
   ]);
   const costAnomalies = detectAnomalies(
     costSeries.map((r) => ({ bucket: r.bucket, value: r.costUsd })),
@@ -204,6 +213,7 @@ export async function generateTrendAnomaliesReport(
     ...metrics,
   });
   return insertReportArtifact(db, {
+    orgId,
     userId,
     projectId,
     reportType: "project.trend_anomalies",

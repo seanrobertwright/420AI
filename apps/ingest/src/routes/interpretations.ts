@@ -1,11 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import {
-  ensureUserByEmail,
-  getProjectName,
-  sessionDetail,
-  usageTotals,
-  indexReportDoc,
-} from "@420ai/db";
+import { getProjectName, sessionDetail, usageTotals, indexReportDoc } from "@420ai/db";
 import {
   generateSessionInterpretation,
   generateProjectInterpretation,
@@ -14,7 +8,7 @@ import {
   generateSessionInterpretationBodySchema,
   generateProjectInterpretationBodySchema,
 } from "../schemas.js";
-import { adminAuthorized, isUuid } from "../auth.js";
+import { resolvePrincipal, isUuid } from "../auth.js";
 
 interface GenerateSessionInterpretationBody {
   type?: "session.ai_interpretation";
@@ -42,20 +36,22 @@ export default async function interpretationRoutes(app: FastifyInstance): Promis
     "/v1/sessions/:sessionId/interpretations",
     { schema: { body: generateSessionInterpretationBodySchema } },
     async (request, reply) => {
-      if (!adminAuthorized(app, request)) {
+      const principal = await resolvePrincipal(app, request);
+      if (!principal) {
         return reply.code(401).send({ error: "admin authorization required" });
       }
       // sessionId is a connector text id (NOT a uuid) — ungated. Empty/unknown → 404
       // BEFORE the (billable) provider call (D8).
-      const detail = await sessionDetail(app.db, request.params.sessionId);
+      const detail = await sessionDetail(app.db, principal.orgId, request.params.sessionId);
       if (detail.eventCount === 0) {
         return reply.code(404).send({ error: "session not found or has no events" });
       }
-      const userId = await ensureUserByEmail(app.db, app.adminEmail);
+      const userId = principal.userId;
       const generatedAt = new Date().toISOString();
       const row = await generateSessionInterpretation(
         app.db,
         app.analysisProvider,
+        principal.orgId,
         userId,
         request.params.sessionId,
         generatedAt,
@@ -76,7 +72,8 @@ export default async function interpretationRoutes(app: FastifyInstance): Promis
     "/v1/projects/:id/interpretations",
     { schema: { body: generateProjectInterpretationBodySchema } },
     async (request, reply) => {
-      if (!adminAuthorized(app, request)) {
+      const principal = await resolvePrincipal(app, request);
+      if (!principal) {
         return reply.code(401).send({ error: "admin authorization required" });
       }
       if (!isUuid(request.params.id)) {
@@ -84,19 +81,20 @@ export default async function interpretationRoutes(app: FastifyInstance): Promis
       }
       // Existence guard (M7 FK lesson) — a well-formed-but-missing project must 404
       // BEFORE the insert (report_artifacts.project_id FKs to projects.id).
-      if (!(await getProjectName(app.db, request.params.id))) {
+      if (!(await getProjectName(app.db, principal.orgId, request.params.id))) {
         return reply.code(404).send({ error: "project not found" });
       }
       // Empty project → 404 before the billable provider call (D8).
-      const totals = await usageTotals(app.db, request.params.id);
+      const totals = await usageTotals(app.db, principal.orgId, request.params.id);
       if (totals.eventCount === 0) {
         return reply.code(404).send({ error: "project has no events" });
       }
-      const userId = await ensureUserByEmail(app.db, app.adminEmail);
+      const userId = principal.userId;
       const generatedAt = new Date().toISOString();
       const row = await generateProjectInterpretation(
         app.db,
         app.analysisProvider,
+        principal.orgId,
         userId,
         request.params.id,
         generatedAt,

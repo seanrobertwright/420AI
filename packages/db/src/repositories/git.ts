@@ -106,6 +106,7 @@ const gitCommitRowColumns = {
  */
 export async function gitCommitsByProject(
   db: DbClient,
+  orgId: string,
   projectId: string,
 ): Promise<GitCommitRow[]> {
   const rows = await db
@@ -113,7 +114,16 @@ export async function gitCommitsByProject(
     .from(gitCommits)
     .innerJoin(workspaceKeys, eq(gitCommits.repoRootPath, workspaceKeys.projectKey))
     .innerJoin(workspaces, eq(workspaces.id, workspaceKeys.workspaceId))
-    .where(eq(workspaces.projectId, projectId))
+    // M15 15.2: `repo_root_path` is a machine-supplied PATH string joined to
+    // `project_key` — the same globally-scoped-key defect as the M6 rollups, so the
+    // org predicate is required, not defensive.
+    .where(
+      and(
+        eq(workspaces.projectId, projectId),
+        eq(workspaceKeys.orgId, orgId),
+        eq(gitCommits.orgId, orgId),
+      ),
+    )
     .orderBy(desc(gitCommits.authoredAt));
   return rows;
 }

@@ -11,11 +11,27 @@ import { memberships, organizations } from "../schema.js";
  * Every function takes `DbClient` (not `Db`) so it composes inside a caller's
  * transaction — `pair.ts` and the users upserts both call these mid-transaction.
  *
- * SCOPE NOTE: `getOrgIdForUser` is a knowingly TEMPORARY seam. It answers "the org of
- * a user who has exactly one membership", which is true today and made true by
- * construction for every new user (`ensurePersonalOrg` runs on both `users` insert
- * paths). Slice 15.2 introduces the request principal and replaces every call site
- * with `principal.orgId`; each is marked with a grep-able comment.
+ * SCOPE NOTE (updated by 15.2). `ensurePersonalOrg` is PERMANENT — it is how the
+ * "every user has at least one org" invariant holds by construction, and both `users`
+ * insert paths plus every boot-time seed call it.
+ *
+ * `getOrgIdForUser` was expected to disappear entirely in 15.2, when the request
+ * principal (`resolvePrincipal` → `principal.orgId`) took over. It did not, and the two
+ * places it legitimately SURVIVES are worth naming, because both are cases where
+ * "just use the principal's org" would be actively wrong:
+ *
+ *   1. MACHINE-authed writes. `POST /v1/workspaces/discover` is authenticated by a
+ *      collector's machine token, so there is no request principal at all
+ *      (`upsertWorkspace`, `addWorkspaceKey`, `findOrCreateProjectByRemote`,
+ *      `createProject` on that path). D-M15-7 / slice 15.9 gives the machine credential
+ *      tier its own org resolution.
+ *   2. Rows written FOR ANOTHER USER. `createPairingCode` mints a code for a target user
+ *      that `POST /v1/pairing-codes` may name via `body.email` (D-M15-8 / 15.5 closes
+ *      that primitive). The code's org must be the TARGET's, never the caller's —
+ *      otherwise `user_id` and `org_id` disagree and the row is cross-org.
+ *
+ * The rule that generalizes both: a row's `org_id` must match the org of whoever the row
+ * BELONGS to, which is the principal only when the principal is also the owner.
  */
 
 /**

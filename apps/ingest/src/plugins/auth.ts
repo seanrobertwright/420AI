@@ -36,6 +36,9 @@ declare module "fastify" {
   }
   interface FastifyRequest {
     machineId: string;
+    /** M15 15.2 — the resolved caller (user + org + role), or null before/without resolution.
+     *  Set by resolvePrincipal(); read by handlers that need it after their own gate. */
+    principal: import("@420ai/db").Principal | null;
   }
 }
 
@@ -49,6 +52,9 @@ function bearer(req: FastifyRequest): string | null {
 
 export default fp(async function authPlugin(app) {
   app.decorateRequest("machineId", "");
+  // M15 15.2: `null`, never an object literal — Fastify shares a reference-type decorator
+  // default across every request, so a per-request assignment is the only safe form.
+  app.decorateRequest("principal", null);
 
   app.decorate(
     "authenticate",

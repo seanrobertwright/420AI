@@ -9,7 +9,7 @@ import {
   getActiveConnectorCatalog,
 } from "@420ai/db";
 import { connectorCatalogUploadBodySchema } from "../schemas.js";
-import { adminAuthorized, isUuid } from "../auth.js";
+import { resolvePrincipal, isUuid } from "../auth.js";
 
 interface ConnectorCatalogUploadBody {
   version: string;
@@ -36,7 +36,8 @@ export default async function connectorCatalogRoutes(app: FastifyInstance): Prom
     "/v1/connector-catalog",
     { schema: { body: connectorCatalogUploadBodySchema } },
     async (request, reply) => {
-      if (!adminAuthorized(app, request)) {
+      const principal = await resolvePrincipal(app, request);
+      if (!principal) {
         return reply.code(401).send({ error: "admin authorization required" });
       }
       const { version, payload, signature } = request.body;
@@ -51,7 +52,8 @@ export default async function connectorCatalogRoutes(app: FastifyInstance): Prom
   );
 
   app.get("/v1/connector-catalog", async (request, reply) => {
-    if (!adminAuthorized(app, request)) {
+    const principal = await resolvePrincipal(app, request);
+    if (!principal) {
       return reply.code(401).send({ error: "admin authorization required" });
     }
     return reply.code(200).send(await listConnectorCatalogs(app.db));
@@ -60,7 +62,8 @@ export default async function connectorCatalogRoutes(app: FastifyInstance): Prom
   app.post<{ Params: { id: string } }>(
     "/v1/connector-catalog/:id/approve",
     async (request, reply) => {
-      if (!adminAuthorized(app, request)) {
+      const principal = await resolvePrincipal(app, request);
+      if (!principal) {
         return reply.code(401).send({ error: "admin authorization required" });
       }
       if (!isUuid(request.params.id)) {
@@ -75,7 +78,8 @@ export default async function connectorCatalogRoutes(app: FastifyInstance): Prom
   app.post<{ Params: { id: string } }>(
     "/v1/connector-catalog/:id/reject",
     async (request, reply) => {
-      if (!adminAuthorized(app, request)) {
+      const principal = await resolvePrincipal(app, request);
+      if (!principal) {
         return reply.code(401).send({ error: "admin authorization required" });
       }
       if (!isUuid(request.params.id)) {

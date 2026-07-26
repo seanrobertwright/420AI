@@ -8,6 +8,7 @@ import {
   approveCatalog,
   users,
   machines,
+  ensureUserByEmail,
 } from "@420ai/db";
 import type { IngestBatch, ModelPricing } from "@420ai/shared";
 import { buildApp } from "./app.js";
@@ -100,6 +101,11 @@ describe.skipIf(!TEST_URL)("POST /v1/replay/reprice (integration) — M12 12.5a"
     await dbh.db.execute(
       sql`TRUNCATE pricing_catalogs, raw_source_records, events, ingest_tokens, pairing_codes, machines, memberships, organizations, users RESTART IDENTITY CASCADE`,
     );
+    // M15 15.2: the ADMIN_TOKEN service token now resolves to the BOOTSTRAP ADMIN
+    // PRINCIPAL, so `adminEmail`'s user + org must exist or every admin route 401s.
+    // server.ts seeds this on boot; these suites build the app directly, so they seed
+    // it here. Idempotent, and ensureUserByEmail also creates the personal org.
+    await ensureUserByEmail(dbh.db, "seanrobertwright@gmail.com");
     const [u] = await dbh.db
       .insert(users)
       .values({ email: "test@example.com" })

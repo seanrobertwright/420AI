@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from "vitest";
 import { sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
-import { createDb } from "@420ai/db";
+import { createDb, ensureUserByEmail } from "@420ai/db";
 import type { IngestBatch } from "@420ai/shared";
 import { buildApp } from "./app.js";
 import {
@@ -44,6 +44,11 @@ describe.skipIf(!TEST_URL)("export API (HTTP e2e via inject) — PRD §22", () =
     await dbh.db.execute(
       sql`TRUNCATE report_artifacts, workspace_keys, workspaces, projects, raw_source_records, events, ingest_tokens, pairing_codes, machines, memberships, organizations, users RESTART IDENTITY CASCADE`,
     );
+    // M15 15.2: the ADMIN_TOKEN service token now resolves to the BOOTSTRAP ADMIN
+    // PRINCIPAL, so `adminEmail`'s user + org must exist or every admin route 401s.
+    // server.ts seeds this on boot; these suites build the app directly, so they seed
+    // it here. Idempotent, and ensureUserByEmail also creates the personal org.
+    await ensureUserByEmail(dbh.db, "seanrobertwright@gmail.com");
   });
 
   // --- harness (copied from app.int.test.ts; int test files are self-contained) ---

@@ -181,7 +181,7 @@ describe.skipIf(!TEST_URL)("projections repository (integration)", () => {
 
   it("usageTotals sums the four sub-types, recomputes total, sums cost, lowest-confidence-wins", async () => {
     await seedSession();
-    const t = await usageTotals(dbh.db, projectId);
+    const t = await usageTotals(dbh.db, orgId, projectId);
     expect(t.tokens.input).toBe(110);
     expect(t.tokens.output).toBe(55);
     expect(t.tokens.cache_read).toBe(33);
@@ -194,17 +194,17 @@ describe.skipIf(!TEST_URL)("projections repository (integration)", () => {
   });
 
   it("empty project → all-zero tokens, costUsd 0, confidence unknown, no sessions", async () => {
-    const t = await usageTotals(dbh.db, projectId);
+    const t = await usageTotals(dbh.db, orgId, projectId);
     expect(t.tokens).toEqual(tokens({}));
     expect(t.costUsd).toBe(0);
     expect(t.costConfidence).toBe("unknown");
     expect(t.eventCount).toBe(0);
-    expect(await sessionProjections(dbh.db, projectId)).toEqual([]);
+    expect(await sessionProjections(dbh.db, orgId, projectId)).toEqual([]);
   });
 
   it("usageByModel splits across two models", async () => {
     await seedSession();
-    const rows = await usageByModel(dbh.db, projectId);
+    const rows = await usageByModel(dbh.db, orgId, projectId);
     // exactly the two real models — no phantom null-model row from message/tool/file events
     expect(rows).toHaveLength(2);
     expect(rows.every((r) => r.model !== null)).toBe(true);
@@ -217,7 +217,7 @@ describe.skipIf(!TEST_URL)("projections repository (integration)", () => {
 
   it("usageOverTime buckets by day, ascending", async () => {
     await seedSession();
-    const rows = await usageOverTime(dbh.db, projectId, "day");
+    const rows = await usageOverTime(dbh.db, orgId, projectId, "day");
     expect(rows).toHaveLength(2); // 06-14 and 06-15
     expect(rows[0]!.bucket).toContain("2026-06-14");
     expect(rows[1]!.bucket).toContain("2026-06-15");
@@ -227,7 +227,7 @@ describe.skipIf(!TEST_URL)("projections repository (integration)", () => {
 
   it("sessionProjections returns exact message/tool/file counts + distinct models + min/max ts", async () => {
     await seedSession();
-    const [s] = await sessionProjections(dbh.db, projectId);
+    const [s] = await sessionProjections(dbh.db, orgId, projectId);
     expect(s!.sessionId).toBe(SESSION);
     expect(s!.userMessages).toBe(1);
     expect(s!.assistantMessages).toBe(1);
@@ -245,11 +245,11 @@ describe.skipIf(!TEST_URL)("projections repository (integration)", () => {
 
   it("sessionDetail matches the session; unknown id → zeroed projection (no throw)", async () => {
     await seedSession();
-    const detail = await sessionDetail(dbh.db, SESSION);
+    const detail = await sessionDetail(dbh.db, orgId, SESSION);
     expect(detail.eventCount).toBe(10);
     expect(detail.toolsFailed).toBe(1);
 
-    const missing = await sessionDetail(dbh.db, "no-such-session");
+    const missing = await sessionDetail(dbh.db, orgId, "no-such-session");
     expect(missing.sessionId).toBe("no-such-session");
     expect(missing.eventCount).toBe(0);
     expect(missing.tokens.total).toBe(0);
@@ -305,7 +305,7 @@ describe.skipIf(!TEST_URL)("projections repository (integration)", () => {
 
   it("projectGitMetadata returns distinct branches + project_path keys", async () => {
     await seedSession();
-    const git = await projectGitMetadata(dbh.db, projectId);
+    const git = await projectGitMetadata(dbh.db, orgId, projectId);
     expect(git.branches).toEqual(["main"]);
     expect(git.projectPaths).toEqual([PROJECT_KEY]);
   });

@@ -61,6 +61,7 @@ export interface EventExportRow {
  */
 export async function exportEvents(
   db: DbClient,
+  orgId: string,
   userId: string,
   filters: EventExportFilters,
   cap = EXPORT_MAX_ROWS,
@@ -80,20 +81,36 @@ export async function exportEvents(
     catalogVersion: events.catalogVersion,
   };
 
-  const conditions = [];
+  // M15 15.2: the org predicate applies to BOTH branches, and it is not optional on either.
+  // `sessionId` and `projectPath` are connector-supplied, globally-scoped strings.
+  const conditions = [eq(events.orgId, orgId)];
   if (filters.sessionId) conditions.push(eq(events.sessionId, filters.sessionId));
   if (filters.connector) conditions.push(eq(events.sourceConnector, filters.connector));
   if (filters.start) conditions.push(gte(events.ts, filters.start));
   if (filters.end) conditions.push(lte(events.ts, filters.end));
 
-  // Project scope → workspace_keys join (user-scoped through the project, mirrors
-  // usageTotals); else → machines join scoped to the owner (mirrors connectorHealth).
+  // Project scope → workspace_keys join (mirrors usageTotals); else → machines join scoped
+  // to the owner (mirrors connectorHealth).
+  //
+  // M15 15.2: the project branch needs `eq(workspaceKeys.orgId, orgId)` ON TOP of the
+  // `events.org_id` predicate above, for the same reason usageTotals does — the first gives
+  // ISOLATION (you never see another org's events), the second gives OWNERSHIP (you cannot
+  // export through another org's project mapping at all). Before both, two orgs whose machines
+  // used the same path shared `project_key` rows, and this endpoint serialised BOTH tenants'
+  // event rows straight out as json/jsonl/csv/parquet. Redaction does not mitigate that:
+  // `redactJson` strips PII patterns, not other tenants' records.
   const base = db.select(columns).from(events);
   const scoped = filters.projectId
     ? base
         .innerJoin(workspaceKeys, eq(events.projectPath, workspaceKeys.projectKey))
         .innerJoin(workspaces, eq(workspaces.id, workspaceKeys.workspaceId))
-        .where(and(eq(workspaces.projectId, filters.projectId), ...conditions))
+        .where(
+          and(
+            eq(workspaces.projectId, filters.projectId),
+            eq(workspaceKeys.orgId, orgId),
+            ...conditions,
+          ),
+        )
     : base
         .innerJoin(machines, eq(events.machineId, machines.id))
         .where(and(eq(machines.userId, userId), ...conditions));

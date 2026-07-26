@@ -31,16 +31,17 @@ import {
  */
 export async function generateProjectCostReport(
   db: Db,
+  orgId: string,
   userId: string,
   projectId: string,
   bucket: "day" | "week",
   generatedAt: string,
 ): Promise<ReportArtifactRow> {
   const [totals, byModel, overTime, projectName] = await Promise.all([
-    usageTotals(db, projectId),
-    usageByModel(db, projectId),
-    usageOverTime(db, projectId, bucket),
-    getProjectName(db, projectId),
+    usageTotals(db, orgId, projectId),
+    usageByModel(db, orgId, projectId),
+    usageOverTime(db, orgId, projectId, bucket),
+    getProjectName(db, orgId, projectId),
   ]);
   const metrics = { totals, byModel, overTime };
   const markdown = renderCostOverTimeReport({
@@ -50,6 +51,7 @@ export async function generateProjectCostReport(
     ...metrics,
   });
   return insertReportArtifact(db, {
+    orgId,
     userId,
     projectId,
     reportType: "project.cost_over_time",
@@ -71,13 +73,15 @@ export async function generateProjectCostReport(
  */
 export async function generateSessionAutopsyReport(
   db: Db,
+  orgId: string,
   userId: string,
   sessionId: string,
   generatedAt: string,
 ): Promise<ReportArtifactRow> {
-  const session = await sessionDetail(db, sessionId);
+  const session = await sessionDetail(db, orgId, sessionId);
   const markdown = renderSessionAutopsyReport({ generatedAt, session });
   return insertReportArtifact(db, {
+    orgId,
     userId,
     projectId: null,
     reportType: "session.autopsy",

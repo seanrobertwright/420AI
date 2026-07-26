@@ -50,13 +50,14 @@ function mergeFindings(findings: RedactionFinding[]): RedactionFinding[] {
 export async function generateSessionInterpretation(
   db: Db,
   provider: AnalysisProvider,
+  orgId: string,
   userId: string,
   sessionId: string,
   generatedAt: string,
   maxOutputTokens: number,
 ): Promise<ReportArtifactRow> {
-  const metrics = await sessionDetail(db, sessionId);
-  const raw = await sessionTranscript(db, sessionId); // DECRYPTED plaintext (transient)
+  const metrics = await sessionDetail(db, orgId, sessionId);
+  const raw = await sessionTranscript(db, orgId, sessionId); // DECRYPTED plaintext (transient)
 
   // §18: redact each decrypted entry BEFORE it enters the bundle.
   const transcriptFindings: RedactionFinding[] = [];
@@ -84,6 +85,7 @@ export async function generateSessionInterpretation(
   const result = await provider.interpret({ system, user: final.redacted, maxOutputTokens });
 
   return insertReportArtifact(db, {
+    orgId,
     userId,
     projectId: null,
     reportType: "session.ai_interpretation",
@@ -110,6 +112,7 @@ export async function generateSessionInterpretation(
 export async function generateProjectInterpretation(
   db: Db,
   provider: AnalysisProvider,
+  orgId: string,
   userId: string,
   projectId: string,
   generatedAt: string,
@@ -118,11 +121,11 @@ export async function generateProjectInterpretation(
   // Project interpretation is metrics-only — NO transcript/decrypt (D4: cross-session
   // content is unbounded). The route already guaranteed the project exists + has events.
   const [totals, byModel, overTime, sessions, projectName] = await Promise.all([
-    usageTotals(db, projectId),
-    usageByModel(db, projectId),
-    usageOverTime(db, projectId, "day"),
-    sessionProjections(db, projectId),
-    getProjectName(db, projectId),
+    usageTotals(db, orgId, projectId),
+    usageByModel(db, orgId, projectId),
+    usageOverTime(db, orgId, projectId, "day"),
+    sessionProjections(db, orgId, projectId),
+    getProjectName(db, orgId, projectId),
   ]);
 
   const bundle: ProjectBundle = {
@@ -140,6 +143,7 @@ export async function generateProjectInterpretation(
   const result = await provider.interpret({ system, user: final.redacted, maxOutputTokens });
 
   return insertReportArtifact(db, {
+    orgId,
     userId,
     projectId,
     reportType: "project.ai_interpretation",

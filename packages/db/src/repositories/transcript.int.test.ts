@@ -110,7 +110,7 @@ describe.skipIf(!TEST_URL)("sessionTranscript (integration)", () => {
 
   it("decrypts, orders, dedupes, and excludes non-message lines", async () => {
     await ingestBatch(dbh.db, machineId, makeBatch());
-    const { entries, truncated } = await sessionTranscript(dbh.db, "s1");
+    const { entries, truncated } = await sessionTranscript(dbh.db, orgId, "s1");
 
     // Exactly the two message entries (r2 deduped), ordered by ts.
     expect(entries).toHaveLength(2);
@@ -126,7 +126,7 @@ describe.skipIf(!TEST_URL)("sessionTranscript (integration)", () => {
 
   it("per-record truncation sets the entry + result truncated flags", async () => {
     await ingestBatch(dbh.db, machineId, makeBatch());
-    const { entries, truncated } = await sessionTranscript(dbh.db, "s1", {
+    const { entries, truncated } = await sessionTranscript(dbh.db, orgId, "s1", {
       maxRecords: 200,
       maxCharsPerRecord: 5,
       maxTotalChars: 48000,
@@ -138,7 +138,7 @@ describe.skipIf(!TEST_URL)("sessionTranscript (integration)", () => {
 
   it("global char cap truncates the result", async () => {
     await ingestBatch(dbh.db, machineId, makeBatch());
-    const { entries, totalChars, truncated } = await sessionTranscript(dbh.db, "s1", {
+    const { entries, totalChars, truncated } = await sessionTranscript(dbh.db, orgId, "s1", {
       maxRecords: 200,
       maxCharsPerRecord: 4000,
       maxTotalChars: 10,
@@ -150,7 +150,7 @@ describe.skipIf(!TEST_URL)("sessionTranscript (integration)", () => {
 
   it("returns an empty transcript for an unknown session", async () => {
     await ingestBatch(dbh.db, machineId, makeBatch());
-    const { entries, truncated } = await sessionTranscript(dbh.db, "no-such-session");
+    const { entries, truncated } = await sessionTranscript(dbh.db, orgId, "no-such-session");
     expect(entries).toEqual([]);
     expect(truncated).toBe(false);
   });
