@@ -13,7 +13,6 @@ import {
   AUTH_FAILURE_ALERT,
   CONNECTOR_RATE_ALERT,
   MONITOR_VERSION,
-  emptyMonitorSnapshot,
   type LiveMonitorSnapshot,
 } from "@420ai/shared";
 import {
@@ -27,10 +26,9 @@ import {
   deliverResolvedFirings,
   countPendingCatalogs,
   countRecentAuthFailures,
-  findUserIdByEmail,
   type DbClient,
 } from "@420ai/db";
-import { adminAuthorized } from "../auth.js";
+import { resolvePrincipal } from "../auth.js";
 
 /**
  * The "active now" window: a session whose last event is within this lookback is
@@ -51,6 +49,7 @@ const ACTIVE_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
  */
 async function buildSnapshot(
   db: DbClient,
+  orgId: string,
   userId: string,
   now: Date,
 ): Promise<LiveMonitorSnapshot> {
@@ -102,14 +101,14 @@ async function buildSnapshot(
     ...deriveConnectorFailureRateAlerts(windowedConnectors),
   ]);
   // The new WRITE (D1): reconcile firing state against the derived alerts (route owns `now`).
-  const alertFirings = await reconcileAlertFirings(db, userId, alerts, now);
+  const alertFirings = await reconcileAlertFirings(db, orgId, userId, alerts, now);
   return { ...built, alerts, alertFirings };
 }
 
 /**
  * M12 12.6 / M13 13.5 alert delivery — push any newly-opened firing AND any newly-resolved
  * firing to the injected deliverer, AFTER the snapshot has reconciled firing state. Kept as a
- * route-boundary helper (NOT folded into the load-bearing `buildSnapshot(db,userId,now)`) so the
+ * route-boundary helper (NOT folded into the load-bearing `buildSnapshot(db,orgId,userId,now)`) so the
  * delivery I/O is explicitly best-effort: a webhook/SMTP problem NEVER 500s GET /v1/monitor or
  * breaks the SSE stream. Both deliver calls early-return (no query) when no deliverer is wired.
  * Uses the SAME `now` the snapshot reconciled with.
@@ -138,23 +137,26 @@ async function deliverFirings(app: FastifyInstance, userId: string, now: Date): 
  */
 export default async function monitorRoutes(app: FastifyInstance): Promise<void> {
   app.get("/v1/monitor", async (request, reply) => {
-    if (!adminAuthorized(app, request)) {
+    const principal = await resolvePrincipal(app, request);
+    if (!principal) {
       return reply.code(401).send({ error: "admin authorization required" });
     }
-    const userId = await findUserIdByEmail(app.db, app.adminEmail);
+    const userId = principal.userId;
     const now = new Date();
-    if (!userId) return reply.code(200).send(emptyMonitorSnapshot(now.toISOString()));
-    const snap = await buildSnapshot(app.db, userId, now);
+    // M15 15.2: the "no such user → empty snapshot" branch is gone — a resolved
+    // principal always has a user row, so it was dead code once the gate returned one.
+    const snap = await buildSnapshot(app.db, principal.orgId, userId, now);
     await deliverFirings(app, userId, now); // best-effort; never throws
     return reply.code(200).send(snap);
   });
 
   app.get("/v1/monitor/stream", async (request, reply) => {
     // --- ALL guards BEFORE hijack (D7) ---
-    if (!adminAuthorized(app, request)) {
+    const principal = await resolvePrincipal(app, request);
+    if (!principal) {
       return reply.code(401).send({ error: "admin authorization required" });
     }
-    const userId = await findUserIdByEmail(app.db, app.adminEmail);
+    const userId = principal.userId;
 
     reply.raw.writeHead(200, {
       "content-type": "text/event-stream",
@@ -178,12 +180,14 @@ export default async function monitorRoutes(app: FastifyInstance): Promise<void>
       if (closed) return;
       try {
         const now = new Date();
-        const snap = userId
-          ? await buildSnapshot(app.db, userId, now)
-          : emptyMonitorSnapshot(now.toISOString());
+        // M15 15.2: `userId` comes from the principal resolved ONCE before the stream
+        // started (never re-resolved per tick — that would be a DB round trip per SSE
+        // frame), so the old `userId ? … : empty` fallback is dead. Teardown wiring
+        // above is deliberately untouched.
+        const snap = await buildSnapshot(app.db, principal.orgId, userId, now);
         // Deliver newly-opened firings before writing the frame (best-effort; guarded on
         // still-connected so a deliver query never runs against a dropped client).
-        if (userId && !closed) await deliverFirings(app, userId, now);
+        if (!closed) await deliverFirings(app, userId, now);
         if (!closed) reply.raw.write(`data: ${JSON.stringify(snap)}\n\n`);
       } catch (err) {
         // The error handler is bypassed post-hijack — emit + keep the stream alive.

@@ -1,11 +1,5 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
-import {
-  exportEvents,
-  findUserIdByEmail,
-  getReportArtifact,
-  sessionTranscript,
-  type EventExportRow,
-} from "@420ai/db";
+import { exportEvents, getReportArtifact, sessionTranscript, type EventExportRow } from "@420ai/db";
 import {
   redact,
   redactJson,
@@ -16,7 +10,7 @@ import {
   type ExportManifest,
   type RedactionFinding,
 } from "@420ai/shared";
-import { adminAuthorized, isUuid } from "../auth.js";
+import { resolvePrincipal, isUuid } from "../auth.js";
 import { eventsToParquetBuffer } from "../exports-parquet.js";
 import {
   exportEventsQuerySchema,
@@ -150,7 +144,8 @@ export default async function exportRoutes(app: FastifyInstance): Promise<void> 
     "/v1/exports/events",
     { schema: { querystring: exportEventsQuerySchema } },
     async (request, reply) => {
-      if (!adminAuthorized(app, request)) {
+      const principal = await resolvePrincipal(app, request);
+      if (!principal) {
         return reply.code(401).send({ error: "admin authorization required" });
       }
       const { format, projectId, sessionId, connector } = request.query;
@@ -169,23 +164,16 @@ export default async function exportRoutes(app: FastifyInstance): Promise<void> 
         return reply.code(400).send({ error: "invalid time range" });
       }
 
-      const userId = await findUserIdByEmail(app.db, app.adminEmail);
-      let rows: EventExportRow[] = [];
-      let truncated = false;
-      // A project scope is user-scoped through the workspace join (no userId needed);
-      // the unscoped/owner path needs the resolved owner id. With neither, the export
-      // is empty (no owner exists yet) rather than a 500.
-      if (projectId !== undefined || userId) {
-        const res = await exportEvents(app.db, userId ?? "", {
-          projectId,
-          sessionId,
-          connector,
-          start,
-          end,
-        });
-        rows = res.rows;
-        truncated = res.truncated;
-      }
+      // M15 15.2: a resolved principal ALWAYS has a user and an org, so the old
+      // "if we could resolve an owner" conditional (and its `userId ?? ""` fallback) is
+      // dead — the export is now unconditionally scoped to the caller's org.
+      const { rows, truncated } = await exportEvents(app.db, principal.orgId, principal.userId, {
+        projectId,
+        sessionId,
+        connector,
+        start,
+        end,
+      });
 
       // §18 gate: redact every string in every row before it leaves the archive.
       const { value: redacted, findings } = redactJson(rows);
@@ -230,13 +218,14 @@ export default async function exportRoutes(app: FastifyInstance): Promise<void> 
     "/v1/reports/:id/export",
     { schema: { querystring: exportReportQuerySchema } },
     async (request, reply) => {
-      if (!adminAuthorized(app, request)) {
+      const principal = await resolvePrincipal(app, request);
+      if (!principal) {
         return reply.code(401).send({ error: "admin authorization required" });
       }
       if (!isUuid(request.params.id)) {
         return reply.code(404).send({ error: "report not found" });
       }
-      const row = await getReportArtifact(app.db, request.params.id);
+      const row = await getReportArtifact(app.db, principal.orgId, request.params.id);
       if (!row) return reply.code(404).send({ error: "report not found" });
 
       const { format } = request.query;
@@ -291,13 +280,14 @@ export default async function exportRoutes(app: FastifyInstance): Promise<void> 
     "/v1/sessions/:sessionId/transcript/export",
     { schema: { querystring: exportTranscriptQuerySchema } },
     async (request, reply) => {
-      if (!adminAuthorized(app, request)) {
+      const principal = await resolvePrincipal(app, request);
+      if (!principal) {
         return reply.code(401).send({ error: "admin authorization required" });
       }
       // sessionId is a connector text id (NOT a uuid) — ungated; unknown → empty transcript.
       const { sessionId } = request.params;
       const { format } = request.query;
-      const { entries, truncated } = await sessionTranscript(app.db, sessionId);
+      const { entries, truncated } = await sessionTranscript(app.db, principal.orgId, sessionId);
 
       // §18 gate: redact each DECRYPTED entry before it is serialized (same call M8 uses).
       const findings: RedactionFinding[] = [];

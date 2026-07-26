@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import type { FastifyInstance } from "fastify";
-import { createDb } from "@420ai/db";
+import { createDb, ensureUserByEmail } from "@420ai/db";
 import { buildApp } from "./app.js";
 import {
   AnalysisProviderError,
@@ -27,6 +27,11 @@ describe.skipIf(!TEST_URL)("observability + rate limiting (HTTP e2e via inject)"
 
   beforeAll(async () => {
     dbh = createDb(TEST_URL!);
+    // M15 15.2: the ADMIN_TOKEN service token now resolves to the BOOTSTRAP ADMIN
+    // PRINCIPAL, so `adminEmail`'s user + org must exist or every admin route 401s.
+    // server.ts seeds this on boot; this suite builds the app directly. Idempotent —
+    // and this suite has no TRUNCATE, so a one-time seed in beforeAll is enough.
+    await ensureUserByEmail(dbh.db, "seanrobertwright@gmail.com");
     app = buildApp({
       db: dbh.db,
       adminToken: ADMIN,

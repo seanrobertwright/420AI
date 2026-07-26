@@ -183,7 +183,7 @@ describe.skipIf(!TEST_URL)("workspaces + projects repositories (integration)", (
     const resolved = await resolveWorkspaceId(dbh.db, userId, hash);
     expect(resolved).toEqual({ workspaceId: ws.id, projectId });
 
-    const summary = await projectEventSummary(dbh.db, projectId);
+    const summary = await projectEventSummary(dbh.db, orgId, projectId);
     expect(summary.eventCount).toBe(2);
     expect(summary.lastActivity).toContain("2026-06-14");
   });
@@ -210,7 +210,7 @@ describe.skipIf(!TEST_URL)("workspaces + projects repositories (integration)", (
       projectPath: "/never-mapped",
       ts: "2026-06-14T00:00:00.000Z",
     });
-    const summary = await projectEventSummary(dbh.db, projectId);
+    const summary = await projectEventSummary(dbh.db, orgId, projectId);
     expect(summary.eventCount).toBe(0);
     expect(summary.lastActivity).toBeNull();
   });

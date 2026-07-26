@@ -3,7 +3,7 @@ import type { DiscoverRequest, DiscoverResponse } from "@420ai/shared";
 import { repoNameFromRemote, basenameFromRoot } from "@420ai/shared";
 import {
   getMachineUserId,
-  findUserIdByEmail,
+  getOrgIdForUser,
   upsertWorkspace,
   addWorkspaceKey,
   remapWorkspace,
@@ -13,7 +13,7 @@ import {
   getProjectName,
 } from "@420ai/db";
 import { discoverBodySchema, patchWorkspaceBodySchema } from "../schemas.js";
-import { adminAuthorized, isUuid } from "../auth.js";
+import { resolvePrincipal, isUuid } from "../auth.js";
 
 interface PatchWorkspaceBody {
   projectId: string;
@@ -38,6 +38,9 @@ export default async function workspaceRoutes(app: FastifyInstance): Promise<voi
       if (!userId) {
         return reply.code(401).send({ error: "machine has no owning user" });
       }
+      // M15 15.2: MACHINE-authed — there is no request principal here, so the org comes
+      // from the machine's owning user (the documented surviving seam; D-M15-7 / 15.9).
+      const machineOrgId = await getOrgIdForUser(app.db, userId);
 
       const result = await app.db.transaction(async (tx) => {
         let workspacesUpserted = 0;
@@ -72,7 +75,7 @@ export default async function workspaceRoutes(app: FastifyInstance): Promise<voi
             }
             await remapWorkspace(tx, userId, ws.id, projectId);
           } else {
-            projectName = (await getProjectName(tx, projectId)) ?? "";
+            projectName = (await getProjectName(tx, machineOrgId, projectId)) ?? "";
           }
 
           await addWorkspaceKey(tx, {
@@ -98,11 +101,11 @@ export default async function workspaceRoutes(app: FastifyInstance): Promise<voi
   );
 
   app.get("/v1/workspaces", async (request, reply) => {
-    if (!adminAuthorized(app, request)) {
+    const principal = await resolvePrincipal(app, request);
+    if (!principal) {
       return reply.code(401).send({ error: "admin authorization required" });
     }
-    const userId = await findUserIdByEmail(app.db, app.adminEmail);
-    if (!userId) return reply.code(200).send({ workspaces: [] });
+    const userId = principal.userId;
     const workspaces = await listWorkspaces(app.db, userId);
     return reply.code(200).send({ workspaces });
   });
@@ -111,7 +114,8 @@ export default async function workspaceRoutes(app: FastifyInstance): Promise<voi
     "/v1/workspaces/:id",
     { schema: { body: patchWorkspaceBodySchema } },
     async (request, reply) => {
-      if (!adminAuthorized(app, request)) {
+      const principal = await resolvePrincipal(app, request);
+      if (!principal) {
         return reply.code(401).send({ error: "admin authorization required" });
       }
       const { id } = request.params;
@@ -124,11 +128,10 @@ export default async function workspaceRoutes(app: FastifyInstance): Promise<voi
       }
       // Verify the target project exists, so an unknown id is a clean 404
       // rather than a foreign-key 500.
-      if (!(await getProjectName(app.db, projectId))) {
+      if (!(await getProjectName(app.db, principal.orgId, projectId))) {
         return reply.code(404).send({ error: "project not found" });
       }
-      const userId = await findUserIdByEmail(app.db, app.adminEmail);
-      if (!userId) return reply.code(404).send({ error: "workspace not found" });
+      const userId = principal.userId;
       const row = await remapWorkspace(app.db, userId, id, projectId);
       if (!row) return reply.code(404).send({ error: "workspace not found" });
       return reply.code(200).send({ id: row.id, projectId: row.projectId });

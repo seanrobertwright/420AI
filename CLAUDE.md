@@ -203,6 +203,30 @@ the int test asserting it could never have passed against a real DB, so the laye
   unique index from `(X)` to `(org_id, X)`, audit every `GROUP BY X` and `WHERE X` on the WRITE path
   too** — those are precisely the places that assumed `X` was globally unique, and the index change
   alone does not fix them (the schema then permits two rows the builder can never emit).
+- **A read keyed by a CONNECTOR-SUPPLIED string MUST take `orgId`** (M15 15.2). `session_id`,
+  `project_path` and `fingerprint` are globally scoped — two tenants can hold the same value — so a
+  query keyed on one merges tenants unless it also filters `eq(events.orgId, orgId)`. This was not
+  theoretical: `sessionDetail` returned a single merged projection for two orgs sharing a session id,
+  and the `events.project_path = workspace_keys.project_key` join in the M5/M6/M13 rollups merged two
+  orgs' events, tokens and cost into whichever org owned the `projects` row. **`orgId` is always the
+  SECOND parameter**, right after `db`, so a transposed argument between two adjacent `string` params
+  is visible in review. Two corollaries the 15.2 conversion proved the hard way:
+  - **The org predicate on the FACT table gives isolation, not ownership.** `eq(events.orgId, orgId)`
+    stops org A seeing org B's events, but org B querying org A's `projectId` still gets a non-empty
+    rollup of _its own_ events attributed to a project it does not own. You need
+    `eq(workspaceKeys.orgId, orgId)` on the JOIN as well — and any read/write keyed by an org-owned
+    uuid (`getProjectName`, `renameProject`, `archiveProject`) needs its own org predicate, or one
+    tenant can rename another's project.
+  - **"Replace `getOrgIdForUser` with `principal.orgId`" is only valid when the row belongs to the
+    CALLER.** `createPairingCode` writes a row for a TARGET user who may not be the caller
+    (`POST /v1/pairing-codes` accepts `body.email`), so it must keep resolving the org from that
+    user — stamping the caller's org there would create exactly the cross-org row the schema exists
+    to prevent. Both are `string`; the compiler cannot see the difference.
+- **Deleting an auth helper makes `tsc` a FILE-level checklist, not a CALL-SITE one** (M15 15.2).
+  Removing `adminAuthorized` was expected to raise ~45 errors (one per gate); it raised **16** — one
+  per file, on the failed named `import`. TypeScript binds a failed import as an error type and stops
+  re-reporting at each usage. So `tsc -b` exiting 0 does NOT prove every call site was converted; pair
+  it with a `grep -rn "<deleted symbol>" apps/*/src packages/*/src` assertion.
 - **Repository functions whose rows reach `reply.send()` MUST use explicit column lists** (M15 15.1).
   No `apps/ingest` route declares a Fastify `response` schema, so nothing strips extra properties: a
   bare `select()` / `returning()` turns every future column into an unannounced API addition. Adding

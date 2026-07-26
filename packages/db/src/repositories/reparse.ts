@@ -223,6 +223,10 @@ export async function reparseAll(
       const existing = await db
         .select({ fingerprint: events.fingerprint })
         .from(events)
+        // M15 15.2: DELIBERATELY not org-scoped, like POST /v1/search/reindex and the
+        // /v1/replay/* ops (D-15.2-7) — reparse is a deployment-wide maintenance operation.
+        // It is bounded by `rawRecordId IN (chunk)`, and those ids come from already
+        // org-stamped raw records, so it does not cross tenants despite the session key.
         .where(
           and(
             eq(events.sessionId, t.sessionId),

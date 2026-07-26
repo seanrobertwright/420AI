@@ -1,6 +1,6 @@
 import { config } from "dotenv";
 import { fileURLToPath } from "node:url";
-import { createDb, setUserPassword } from "@420ai/db";
+import { createDb, ensureUserByEmail, setUserPassword } from "@420ai/db";
 import { buildApp } from "./app.js";
 import { hashPassword } from "./password.js";
 import { createAnalysisProvider, type AnalysisProviderConfig } from "./analysis/provider.js";
@@ -116,6 +116,16 @@ const smtpDeliverer = createSmtpDeliverer(
 const alertDeliverer = createFanoutDeliverer([webhookDeliverer, smtpDeliverer]);
 
 const { db } = createDb(databaseUrl);
+
+// M15 15.2: seed the bootstrap admin IDENTITY unconditionally, BEFORE (and independently
+// of) the password seed. `resolvePrincipal` maps the ADMIN_TOKEN service token onto
+// `adminEmail`'s user + org, so that row must exist for the service token to authorize at
+// all — and D-15.2-3 promises the token behaves exactly as it did before this slice.
+// Seeding this only alongside ADMIN_PASSWORD (as the password seed below does) would break
+// every token-only deployment — desktop app, scripts/generate-reports.mjs — with a blanket
+// 401. `ensureUserByEmail` is idempotent and also runs `ensurePersonalOrg`, so an admin
+// without a membership (which would also fail closed) is impossible by construction.
+await ensureUserByEmail(db, adminEmail);
 
 // Seed the single admin's password (scrypt) from env. Idempotent: re-running on every boot
 // re-hashes ADMIN_PASSWORD, so rotating it + restart re-seeds. If unset, login is disabled

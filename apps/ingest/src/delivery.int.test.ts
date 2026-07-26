@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from "vitest";
 import { sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
-import { createDb, recordHeartbeat, recordIngestAuthFailure } from "@420ai/db";
+import { createDb, recordHeartbeat, recordIngestAuthFailure, ensureUserByEmail } from "@420ai/db";
 import type { AlertFiring, LiveMonitorSnapshot } from "@420ai/shared";
 import { buildApp } from "./app.js";
 import {
@@ -58,6 +58,11 @@ describe.skipIf(!TEST_URL)("alert delivery + new §20 conditions (HTTP e2e via i
     await dbh.db.execute(
       sql`TRUNCATE alert_firings, ingest_auth_failures, machine_heartbeats, raw_source_records, events, ingest_tokens, pairing_codes, machines, memberships, organizations, users RESTART IDENTITY CASCADE`,
     );
+    // M15 15.2: the ADMIN_TOKEN service token now resolves to the BOOTSTRAP ADMIN
+    // PRINCIPAL, so `adminEmail`'s user + org must exist or every admin route 401s.
+    // server.ts seeds this on boot; these suites build the app directly, so they seed
+    // it here. Idempotent, and ensureUserByEmail also creates the personal org.
+    await ensureUserByEmail(dbh.db, "seanrobertwright@gmail.com");
     deliverer.deliver.mockClear();
     delivered.length = 0;
   });

@@ -100,7 +100,7 @@ describe.skipIf(!TEST_URL)("git repository (integration)", () => {
 
     await recordGitCommits(dbh.db, machineId, sampleReq());
 
-    const commits = await gitCommitsByProject(dbh.db, projectId);
+    const commits = await gitCommitsByProject(dbh.db, orgId, projectId);
     expect(commits).toHaveLength(1);
     expect(commits[0]!.commitSha).toBe("sha1");
     expect(commits[0]!.authorEmail).toBe("dev@example.com"); // plaintext metadata
@@ -130,7 +130,7 @@ describe.skipIf(!TEST_URL)("git repository (integration)", () => {
     const { id: projectId } = await findOrCreateProjectByRemote(dbh.db, userId, REMOTE, "420AI");
     await recordGitCommits(dbh.db, machineId, sampleReq("orphan"));
     // no workspace_keys row for ROOT → not joined to the project
-    const commits = await gitCommitsByProject(dbh.db, projectId);
+    const commits = await gitCommitsByProject(dbh.db, orgId, projectId);
     expect(commits).toEqual([]);
     // but it IS stored (count > 0)
     const [{ n }] = (await dbh.db.execute(sql`SELECT count(*)::int AS n FROM git_commits`))

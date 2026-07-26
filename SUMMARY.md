@@ -240,7 +240,7 @@ through the deferral-audit + scope conversation that produced M12/M13/M14. Full 
   Org-level tenancy (D-M15-1), RLS as a backstop behind primary application scoping (D-M15-3), four
   fixed roles + per-project grants (D-M15-4), all four identity paths + reset + MFA (D-M15-5),
   `ADMIN_TOKEN` retired to a bootstrap-only seed (D-M15-7). Slices: **15.0** ✅ Truth + RLS spike ·
-  **15.1** ✅ Tenancy schema · **15.2** Request principal · **15.3** RLS enforcement · **15.4** RBAC ·
+  **15.1** ✅ Tenancy schema · **15.2** ✅ Request principal · **15.3** RLS enforcement · **15.4** RBAC ·
   **15.5** Identity core · **15.6** Sessions + revocation · **15.7** SSO (Google + GitHub) ·
   **15.8** MFA · **15.9** API keys + retire `ADMIN_TOKEN` · **15.10** Team surfaces + audit table.
   **15.0 gates 15.3**; 15.5 gates 15.7.
@@ -414,7 +414,22 @@ ROW LEVEL SECURITY` does **not** fix it → a non-owner app role is load-bearing
     D-M15-13 rollback drill ran on a clone of the real 413,765-event archive — up ≈22 s, down ≈8.8 s,
     re-up ≈22.7 s, 0 null `org_id`, 1 personal org — evidence in
     [`.agents/qa/m15-signoff/`](./.agents/qa/m15-signoff/).
-  - [ ] **15.2** Request principal · **15.3** RLS enforcement ·
+  - [x] **15.2** Request principal — DONE `2026-07-26` (PR #NN). `adminAuthorized` (boolean) is
+        DELETED in favour of `resolvePrincipal(app, request) → {userId, email, orgId, role} | null`,
+        backed by a one-query `findPrincipalByEmail` (users ⨝ memberships); all 45 gates across 16 route
+        files converted, and all 20 `app.adminEmail` re-resolutions removed — `GET /v1/auth/me` now
+        returns the CALLER's email. `orgId` threaded into every read the spikes proved spans tenants:
+        `sessionDetail`, `sessionTranscript`, the five M6 rollups, `projectEventSummary`,
+        `searchDocuments`, `getReportArtifact`, the session-keyed attribution reads — PLUS five the plan
+        did not enumerate (`toolStatsByModel`, `failureSeries`, `failedToolBreakdown`,
+        `contextPathSample`, `gitCommitsByProject`) and the project ownership surface
+        (`getProjectName`/`renameProject`/`archiveProject`, which were unscoped **writes**). The
+        `report_artifacts_scope_version` race is fixed by a bounded 12-attempt retry around the whole
+        transaction (8 concurrent generations → 8 contiguous versions, 0 failures). `server.ts` now
+        seeds the bootstrap admin IDENTITY unconditionally, so `ADMIN_TOKEN` keeps working on
+        token-only deployments (it previously existed only when `ADMIN_PASSWORD` was set).
+        Role is resolved but NOT enforced (15.4); RLS backstop is 15.3 and must land next.
+  - [ ] **15.3** RLS enforcement ·
         **15.4** RBAC · **15.5** Identity core · **15.6** Sessions + revocation · **15.7** SSO ·
         **15.8** MFA · **15.9** API keys + retire `ADMIN_TOKEN` · **15.10** Team surfaces + audit
         table.

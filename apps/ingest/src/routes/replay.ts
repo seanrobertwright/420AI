@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { getActiveCatalog, repriceAll, reparseAll } from "@420ai/db";
-import { adminAuthorized } from "../auth.js";
+import { resolvePrincipal } from "../auth.js";
 
 /**
  * M12 12.5a + M13 13.3 archive-replay. Admin-gated.
@@ -19,7 +19,8 @@ import { adminAuthorized } from "../auth.js";
  */
 export default async function replayRoutes(app: FastifyInstance): Promise<void> {
   app.post("/v1/replay/reprice", async (request, reply) => {
-    if (!adminAuthorized(app, request)) {
+    const principal = await resolvePrincipal(app, request);
+    if (!principal) {
       return reply.code(401).send({ error: "admin authorization required" });
     }
     const active = await getActiveCatalog(app.db);
@@ -30,7 +31,8 @@ export default async function replayRoutes(app: FastifyInstance): Promise<void> 
   });
 
   app.post("/v1/replay/reparse", async (request, reply) => {
-    if (!adminAuthorized(app, request)) {
+    const principal = await resolvePrincipal(app, request);
+    if (!principal) {
       return reply.code(401).send({ error: "admin authorization required" });
     }
     // The body is OPTIONAL (a bare POST re-parses everything, mirroring reprice's

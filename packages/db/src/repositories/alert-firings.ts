@@ -10,7 +10,6 @@ import {
 } from "@420ai/shared";
 import type { DbClient } from "../client.js";
 import { alertFirings } from "../schema.js";
-import { getOrgIdForUser } from "./organizations.js";
 
 /**
  * M10 3c persisted Alert-Firing repository (PRD §20). A DIRECT clone of the
@@ -100,16 +99,13 @@ function rank(f: AlertFiring): number {
  */
 export async function reconcileAlertFirings(
   db: DbClient,
+  orgId: string,
   userId: string,
   alerts: OperationalAlert[],
   now: Date,
 ): Promise<AlertFiring[]> {
   const keys = alerts.map(alertKey);
   if (alerts.length > 0) {
-    // M15 15.1: superseded by the 15.2 request principal. Resolved once, and ONLY when
-    // there is something to insert — this reconcile runs on every monitor read, and the
-    // zero-alert path must stay a pure read (no extra query, nothing that can throw).
-    const orgId = await getOrgIdForUser(db, userId);
     for (const a of alerts) {
       await db
         .insert(alertFirings)
@@ -193,6 +189,7 @@ export async function listAlertFirings(
  */
 export async function ackAlertFiring(
   db: DbClient,
+  orgId: string,
   userId: string,
   id: string,
   now: Date,
@@ -200,7 +197,11 @@ export async function ackAlertFiring(
   const [updated] = await db
     .update(alertFirings)
     .set({ ackedAt: now })
-    .where(and(eq(alertFirings.id, id), eq(alertFirings.userId, userId)))
+    // M15 15.2: org AND user, matching setLinkStatus / listReportArtifacts. A miss returns
+    // undefined, which the route already turns into 404 (never 403 — no existence leak).
+    .where(
+      and(eq(alertFirings.id, id), eq(alertFirings.orgId, orgId), eq(alertFirings.userId, userId)),
+    )
     .returning({ id: alertFirings.id });
   if (!updated) return undefined;
   const [row] = await db

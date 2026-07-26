@@ -4,8 +4,6 @@ import {
   createProject,
   renameProject,
   projectEventSummary,
-  findUserIdByEmail,
-  ensureUserByEmail,
   indexProjectDoc,
 } from "@420ai/db";
 import {
@@ -13,7 +11,7 @@ import {
   patchProjectBodySchema,
   listProjectsQuerySchema,
 } from "../schemas.js";
-import { adminAuthorized, isUuid } from "../auth.js";
+import { resolvePrincipal, isUuid } from "../auth.js";
 
 interface CreateProjectBody {
   name: string;
@@ -37,11 +35,11 @@ export default async function projectRoutes(app: FastifyInstance): Promise<void>
     "/v1/projects",
     { schema: { querystring: listProjectsQuerySchema } },
     async (request, reply) => {
-      if (!adminAuthorized(app, request)) {
+      const principal = await resolvePrincipal(app, request);
+      if (!principal) {
         return reply.code(401).send({ error: "admin authorization required" });
       }
-      const userId = await findUserIdByEmail(app.db, app.adminEmail);
-      if (!userId) return reply.code(200).send({ projects: [] });
+      const userId = principal.userId;
       const projects = await listProjects(app.db, userId, {
         limit: request.query.limit,
         offset: request.query.offset,
@@ -54,10 +52,11 @@ export default async function projectRoutes(app: FastifyInstance): Promise<void>
     "/v1/projects",
     { schema: { body: createProjectBodySchema } },
     async (request, reply) => {
-      if (!adminAuthorized(app, request)) {
+      const principal = await resolvePrincipal(app, request);
+      if (!principal) {
         return reply.code(401).send({ error: "admin authorization required" });
       }
-      const userId = await ensureUserByEmail(app.db, app.adminEmail);
+      const userId = principal.userId;
       const { id } = await createProject(app.db, userId, request.body.name, request.body.gitRemote);
       try {
         await indexProjectDoc(app.db, id);
@@ -72,13 +71,19 @@ export default async function projectRoutes(app: FastifyInstance): Promise<void>
     "/v1/projects/:id",
     { schema: { body: patchProjectBodySchema } },
     async (request, reply) => {
-      if (!adminAuthorized(app, request)) {
+      const principal = await resolvePrincipal(app, request);
+      if (!principal) {
         return reply.code(401).send({ error: "admin authorization required" });
       }
       if (!isUuid(request.params.id)) {
         return reply.code(404).send({ error: "project not found" });
       }
-      const row = await renameProject(app.db, request.params.id, request.body.name);
+      const row = await renameProject(
+        app.db,
+        principal.orgId,
+        request.params.id,
+        request.body.name,
+      );
       if (!row) return reply.code(404).send({ error: "project not found" });
       try {
         await indexProjectDoc(app.db, row.id);
@@ -90,13 +95,14 @@ export default async function projectRoutes(app: FastifyInstance): Promise<void>
   );
 
   app.get<{ Params: { id: string } }>("/v1/projects/:id/summary", async (request, reply) => {
-    if (!adminAuthorized(app, request)) {
+    const principal = await resolvePrincipal(app, request);
+    if (!principal) {
       return reply.code(401).send({ error: "admin authorization required" });
     }
     if (!isUuid(request.params.id)) {
       return reply.code(404).send({ error: "project not found" });
     }
-    const summary = await projectEventSummary(app.db, request.params.id);
+    const summary = await projectEventSummary(app.db, principal.orgId, request.params.id);
     return reply.code(200).send(summary);
   });
 }

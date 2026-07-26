@@ -16,7 +16,6 @@ import {
   workspaceKeys,
   workspaces,
 } from "../schema.js";
-import { getOrgIdForUser } from "./organizations.js";
 import { resolveWorkspaceId } from "./workspaces.js";
 
 /**
@@ -67,7 +66,11 @@ function fileOverlapCount(repoRoot: string, sessionPaths: string[], commitFiles:
  * `transcript.ts` precedent — the 2nd such read), `JSON.parse`s, and collects the
  * `.path` field (deduped). Throws on a key/tag error (silent library).
  */
-export async function sessionModifiedPaths(db: DbClient, sessionId: string): Promise<string[]> {
+export async function sessionModifiedPaths(
+  db: DbClient,
+  orgId: string,
+  sessionId: string,
+): Promise<string[]> {
   const rows = await db
     .select({
       ciphertext: events.payloadCiphertext,
@@ -78,6 +81,7 @@ export async function sessionModifiedPaths(db: DbClient, sessionId: string): Pro
     .where(
       and(
         eq(events.sessionId, sessionId),
+        eq(events.orgId, orgId),
         inArray(events.eventType, [...FILE_EVENT_TYPES]),
         isNotNull(events.payloadCiphertext),
       ),
@@ -99,20 +103,28 @@ export async function sessionModifiedPaths(db: DbClient, sessionId: string): Pro
 }
 
 /** The session's last event timestamp (ISO `mode:"string"` — already ISO, no coercion), or null. */
-export async function sessionEndTs(db: DbClient, sessionId: string): Promise<string | null> {
+export async function sessionEndTs(
+  db: DbClient,
+  orgId: string,
+  sessionId: string,
+): Promise<string | null> {
   const [row] = await db
     .select({ endedAt: sql<string | null>`max(${events.ts})` })
     .from(events)
-    .where(eq(events.sessionId, sessionId));
+    .where(and(eq(events.sessionId, sessionId), eq(events.orgId, orgId)));
   return row?.endedAt ?? null;
 }
 
 /** The session's project_path (the repo-root join key). Sessions carry one; max() is sufficient. */
-async function sessionProjectPath(db: DbClient, sessionId: string): Promise<string | null> {
+async function sessionProjectPath(
+  db: DbClient,
+  orgId: string,
+  sessionId: string,
+): Promise<string | null> {
   const [row] = await db
     .select({ projectPath: sql<string | null>`max(${events.projectPath})` })
     .from(events)
-    .where(eq(events.sessionId, sessionId));
+    .where(and(eq(events.sessionId, sessionId), eq(events.orgId, orgId)));
   return row?.projectPath ?? null;
 }
 
@@ -153,6 +165,7 @@ const linkColumns = {
 /** All persisted links for a session (joined to the commit SHA), scoped by userId. */
 async function listSessionLinks(
   db: DbClient,
+  orgId: string,
   userId: string,
   sessionId: string,
 ): Promise<SessionGitLink[]> {
@@ -160,7 +173,13 @@ async function listSessionLinks(
     .select(linkColumns)
     .from(sessionGitLinks)
     .innerJoin(gitCommits, eq(gitCommits.id, sessionGitLinks.commitId))
-    .where(and(eq(sessionGitLinks.userId, userId), eq(sessionGitLinks.sessionId, sessionId)));
+    .where(
+      and(
+        eq(sessionGitLinks.orgId, orgId),
+        eq(sessionGitLinks.userId, userId),
+        eq(sessionGitLinks.sessionId, sessionId),
+      ),
+    );
   return rows.map(toLink);
 }
 
@@ -179,12 +198,13 @@ async function listSessionLinks(
  */
 export async function computeSessionGitSuggestions(
   db: DbClient,
+  orgId: string,
   userId: string,
   sessionId: string,
 ): Promise<SessionGitLink[]> {
-  const end = await sessionEndTs(db, sessionId);
-  const projectPath = await sessionProjectPath(db, sessionId);
-  if (!end || !projectPath) return listSessionLinks(db, userId, sessionId);
+  const end = await sessionEndTs(db, orgId, sessionId);
+  const projectPath = await sessionProjectPath(db, orgId, sessionId);
+  if (!end || !projectPath) return listSessionLinks(db, orgId, userId, sessionId);
 
   const resolved = await resolveWorkspaceId(db, userId, projectPath);
   const projectId = resolved?.projectId ?? null;
@@ -210,13 +230,9 @@ export async function computeSessionGitSuggestions(
       ),
     );
 
-  if (candidates.length === 0) return listSessionLinks(db, userId, sessionId);
+  if (candidates.length === 0) return listSessionLinks(db, orgId, userId, sessionId);
 
-  // M15 15.1: superseded by the 15.2 request principal. Resolved once, AFTER the
-  // early return — the no-candidates path stays a pure read.
-  const orgId = await getOrgIdForUser(db, userId);
-
-  const sessionPaths = await sessionModifiedPaths(db, sessionId);
+  const sessionPaths = await sessionModifiedPaths(db, orgId, sessionId);
 
   // Fetch all candidate commits' files in one query, grouped by commit.
   const fileRows = await db
@@ -273,7 +289,7 @@ export async function computeSessionGitSuggestions(
       );
   }
 
-  return listSessionLinks(db, userId, sessionId);
+  return listSessionLinks(db, orgId, userId, sessionId);
 }
 
 /**
@@ -284,13 +300,12 @@ export async function computeSessionGitSuggestions(
  */
 export async function addManualLink(
   db: DbClient,
+  orgId: string,
   userId: string,
   sessionId: string,
   commitId: string,
   projectId: string | null,
 ): Promise<void> {
-  // M15 15.1: superseded by the 15.2 request principal.
-  const orgId = await getOrgIdForUser(db, userId);
   await db
     .insert(sessionGitLinks)
     .values({
@@ -313,6 +328,7 @@ export async function addManualLink(
 /** Confirm or reject a link (the human decision the suggest path then preserves). */
 export async function setLinkStatus(
   db: DbClient,
+  orgId: string,
   userId: string,
   linkId: string,
   status: "confirmed" | "rejected",
@@ -320,7 +336,13 @@ export async function setLinkStatus(
   const [updated] = await db
     .update(sessionGitLinks)
     .set({ status })
-    .where(and(eq(sessionGitLinks.id, linkId), eq(sessionGitLinks.userId, userId)))
+    .where(
+      and(
+        eq(sessionGitLinks.id, linkId),
+        eq(sessionGitLinks.orgId, orgId),
+        eq(sessionGitLinks.userId, userId),
+      ),
+    )
     .returning({ id: sessionGitLinks.id });
   if (!updated) return undefined;
   const [row] = await db
@@ -339,6 +361,7 @@ export async function setLinkStatus(
  */
 export async function listProjectLinks(
   db: DbClient,
+  orgId: string,
   userId: string,
   projectId: string,
 ): Promise<SessionGitLink[]> {
@@ -348,17 +371,39 @@ export async function listProjectLinks(
     .innerJoin(gitCommits, eq(gitCommits.id, sessionGitLinks.commitId))
     .innerJoin(workspaceKeys, eq(gitCommits.repoRootPath, workspaceKeys.projectKey))
     .innerJoin(workspaces, eq(workspaces.id, workspaceKeys.workspaceId))
-    .where(and(eq(sessionGitLinks.userId, userId), eq(workspaces.projectId, projectId)));
+    .where(
+      and(
+        eq(sessionGitLinks.orgId, orgId),
+        eq(sessionGitLinks.userId, userId),
+        eq(workspaces.projectId, projectId),
+        eq(workspaceKeys.orgId, orgId),
+      ),
+    );
   return rows.map(toLink);
 }
 
-/** Distinct session ids attributed to a project (the suggest route fans out over these). */
-export async function projectSessionIds(db: DbClient, projectId: string): Promise<string[]> {
+/**
+ * Distinct session ids attributed to a project (the suggest route fans out over these).
+ *
+ * M15 15.2: takes `orgId` — it joins on `project_path`, so without the predicate a
+ * suggest run over org A's project would fan out over org B's session ids too.
+ */
+export async function projectSessionIds(
+  db: DbClient,
+  orgId: string,
+  projectId: string,
+): Promise<string[]> {
   const rows = await db
     .selectDistinct({ sessionId: events.sessionId })
     .from(events)
     .innerJoin(workspaceKeys, eq(events.projectPath, workspaceKeys.projectKey))
     .innerJoin(workspaces, eq(workspaces.id, workspaceKeys.workspaceId))
-    .where(eq(workspaces.projectId, projectId));
+    .where(
+      and(
+        eq(workspaces.projectId, projectId),
+        eq(workspaceKeys.orgId, orgId),
+        eq(events.orgId, orgId),
+      ),
+    );
   return rows.map((r) => r.sessionId);
 }

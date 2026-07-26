@@ -41,6 +41,8 @@ export {
   getOrgIdForUser,
   findOrgIdByUserId,
 } from "./repositories/organizations.js";
+export { findPrincipalByEmail } from "./repositories/principal.js";
+export type { Principal } from "./repositories/principal.js";
 export { machineStatuses, activeSessions, recentBacklogSamples } from "./repositories/monitor.js";
 export {
   reconcileAlertFirings,

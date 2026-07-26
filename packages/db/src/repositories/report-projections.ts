@@ -85,6 +85,7 @@ const MODEL_SCOPED_EVENT_TYPES = [
  */
 export async function toolStatsByModel(
   db: DbClient,
+  orgId: string,
   projectId: string,
 ): Promise<ToolModelComparisonRow[]> {
   const rows = await db
@@ -104,6 +105,8 @@ export async function toolStatsByModel(
     .where(
       and(
         eq(workspaces.projectId, projectId),
+        eq(workspaceKeys.orgId, orgId),
+        eq(events.orgId, orgId),
         inArray(events.eventType, [...MODEL_SCOPED_EVENT_TYPES]),
       ),
     )
@@ -132,6 +135,7 @@ export async function toolStatsByModel(
  */
 export async function failureSeries(
   db: DbClient,
+  orgId: string,
   projectId: string,
   bucket: "day" | "week",
 ): Promise<FailureSeriesRow[]> {
@@ -151,6 +155,8 @@ export async function failureSeries(
     .where(
       and(
         eq(workspaces.projectId, projectId),
+        eq(workspaceKeys.orgId, orgId),
+        eq(events.orgId, orgId),
         inArray(events.eventType, ["tool.call.completed", "tool.call.failed"]),
       ),
     )
@@ -187,6 +193,7 @@ interface FailedToolPayload {
  */
 export async function failedToolBreakdown(
   db: DbClient,
+  orgId: string,
   projectId: string,
 ): Promise<FailedToolBreakdown> {
   const rows = await db
@@ -201,6 +208,8 @@ export async function failedToolBreakdown(
     .where(
       and(
         eq(workspaces.projectId, projectId),
+        eq(workspaceKeys.orgId, orgId),
+        eq(events.orgId, orgId),
         eq(events.eventType, "tool.call.failed"),
         isNotNull(events.payloadCiphertext),
       ),
@@ -255,6 +264,7 @@ const TOP_PATHS_PER_CLASS = 10;
  */
 export async function contextPathSample(
   db: DbClient,
+  orgId: string,
   projectId: string,
 ): Promise<ContextWasteSample> {
   const coverageRows = await db
@@ -269,6 +279,8 @@ export async function contextPathSample(
     .where(
       and(
         eq(workspaces.projectId, projectId),
+        eq(workspaceKeys.orgId, orgId),
+        eq(events.orgId, orgId),
         inArray(events.eventType, [...CONTEXT_COVERAGE_EVENT_TYPES]),
       ),
     )
@@ -287,6 +299,8 @@ export async function contextPathSample(
     .where(
       and(
         eq(workspaces.projectId, projectId),
+        eq(workspaceKeys.orgId, orgId),
+        eq(events.orgId, orgId),
         inArray(events.eventType, [...CONTEXT_PATH_EVENT_TYPES]),
         isNotNull(events.payloadCiphertext),
       ),

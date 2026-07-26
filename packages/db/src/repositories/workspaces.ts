@@ -58,7 +58,11 @@ export async function upsertWorkspace(
     projectId?: string;
   },
 ): Promise<WorkspaceRow> {
-  // M15 15.1: superseded by the 15.2 request principal.
+  // M15 15.2: this write is reached ONLY from the MACHINE-authed
+  // POST /v1/workspaces/discover, where there is no request principal to take an
+  // org from — the caller is a collector bearing a machine token. `getOrgIdForUser`
+  // therefore SURVIVES here by design; D-M15-7 (slice 15.9) is where the machine
+  // credential tier gets its own org resolution.
   const orgId = await getOrgIdForUser(db, input.userId);
   const [row] = await db
     .insert(workspaces)
@@ -93,7 +97,11 @@ export async function addWorkspaceKey(
   db: DbClient,
   input: { userId: string; workspaceId: string; sourceConnector: string; projectKey: string },
 ): Promise<void> {
-  // M15 15.1: superseded by the 15.2 request principal.
+  // M15 15.2: this write is reached ONLY from the MACHINE-authed
+  // POST /v1/workspaces/discover, where there is no request principal to take an
+  // org from — the caller is a collector bearing a machine token. `getOrgIdForUser`
+  // therefore SURVIVES here by design; D-M15-7 (slice 15.9) is where the machine
+  // credential tier gets its own org resolution.
   const orgId = await getOrgIdForUser(db, input.userId);
   await db
     .insert(workspaceKeys)
@@ -156,9 +164,13 @@ export async function resolveWorkspaceId(
  * `events.project_path = workspace_keys.project_key` for keys whose workspace is
  * mapped to `projectId`, then counts events + finds the latest activity. M6
  * materializes this at scale; M5 just proves the wiring is correct. Read-only.
+ *
+ * M15 15.2: takes `orgId` for the same reason the M6 rollups do — the join key is
+ * `project_path`, a connector-supplied string two tenants can share.
  */
 export async function projectEventSummary(
   db: DbClient,
+  orgId: string,
   projectId: string,
 ): Promise<{ eventCount: number; lastActivity: string | null }> {
   const [row] = await db
@@ -170,6 +182,12 @@ export async function projectEventSummary(
     .from(events)
     .innerJoin(workspaceKeys, eq(events.projectPath, workspaceKeys.projectKey))
     .innerJoin(workspaces, eq(workspaces.id, workspaceKeys.workspaceId))
-    .where(eq(workspaces.projectId, projectId));
+    .where(
+      and(
+        eq(workspaces.projectId, projectId),
+        eq(workspaceKeys.orgId, orgId),
+        eq(events.orgId, orgId),
+      ),
+    );
   return { eventCount: row?.eventCount ?? 0, lastActivity: row?.lastActivity ?? null };
 }

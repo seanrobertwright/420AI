@@ -63,9 +63,15 @@ function roleOf(eventType: string): "user" | "assistant" {
  * by `rawRecordId` (one line spawns many events — first wins), per-record truncate
  * to `maxCharsPerRecord`, and stop at `maxRecords`/`maxTotalChars`. The result
  * `truncated` flag is set if any cap clipped content.
+ *
+ * M15 15.2: takes `orgId`. Same defect class as `sessionDetail` — keyed by a
+ * connector-supplied, globally-scoped `session_id` two tenants can share — but with a
+ * sharper blast radius: this function DECRYPTS payloads, so a collision leaked
+ * another tenant's message plaintext.
  */
 export async function sessionTranscript(
   db: DbClient,
+  orgId: string,
   sessionId: string,
   caps: TranscriptCaps = DEFAULT_TRANSCRIPT_CAPS,
 ): Promise<{ entries: TranscriptEntry[]; totalChars: number; truncated: boolean }> {
@@ -87,7 +93,13 @@ export async function sessionTranscript(
         eq(rawSourceRecords.sessionId, events.sessionId),
       ),
     )
-    .where(and(eq(events.sessionId, sessionId), inArray(events.eventType, [...MESSAGE_TYPES])))
+    .where(
+      and(
+        eq(events.sessionId, sessionId),
+        eq(events.orgId, orgId),
+        inArray(events.eventType, [...MESSAGE_TYPES]),
+      ),
+    )
     .orderBy(asc(events.ts), asc(events.eventIndex));
 
   const entries: TranscriptEntry[] = [];

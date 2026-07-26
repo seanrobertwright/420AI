@@ -146,7 +146,7 @@ describe.skipIf(!TEST_URL)("search repository (integration)", () => {
 
   it("returns a ranked session hit for a phrase that was encrypted at rest", async () => {
     await rebuildSearchIndex(dbh.db);
-    const { query, hits } = await searchDocuments(dbh.db, { q: "anthropic spend" });
+    const { query, hits } = await searchDocuments(dbh.db, { orgId, q: "anthropic spend" });
     expect(query).toBe("anthropic spend");
     const session = hits.find((h) => h.entityType === "session");
     expect(session).toBeDefined();
@@ -157,7 +157,7 @@ describe.skipIf(!TEST_URL)("search repository (integration)", () => {
 
   it("never leaks the secret into a hit OR the stored row (decrypt→redact→index)", async () => {
     await rebuildSearchIndex(dbh.db);
-    const { hits } = await searchDocuments(dbh.db, { q: "anthropic spend" });
+    const { hits } = await searchDocuments(dbh.db, { orgId, q: "anthropic spend" });
     // Not in any returned hit (title/snippet leave the archive).
     expect(JSON.stringify(hits)).not.toContain(SECRET);
     // Not in the stored body — and the redaction placeholder is present instead.
@@ -182,17 +182,18 @@ describe.skipIf(!TEST_URL)("search repository (integration)", () => {
 
   it("filters by entity type and returns no hits for an unmatched query", async () => {
     await rebuildSearchIndex(dbh.db);
-    const reportOnly = await searchDocuments(dbh.db, { q: "burndown", type: "report" });
+    const reportOnly = await searchDocuments(dbh.db, { orgId, q: "burndown", type: "report" });
     expect(reportOnly.hits.length).toBeGreaterThanOrEqual(1);
     expect(reportOnly.hits.every((h) => h.entityType === "report")).toBe(true);
 
-    const none = await searchDocuments(dbh.db, { q: "zzznonexistentqqq" });
+    const none = await searchDocuments(dbh.db, { orgId, q: "zzznonexistentqqq" });
     expect(none.hits).toEqual([]);
   });
 
   it("returns a per-event hit scoped to its session for a tool-call phrase (14.4 grain)", async () => {
     await rebuildSearchIndex(dbh.db);
     const { hits } = await searchDocuments(dbh.db, {
+      orgId,
       q: "search index configuration",
       type: "event",
     });
@@ -205,7 +206,7 @@ describe.skipIf(!TEST_URL)("search repository (integration)", () => {
 
   it("hybrid: a phrase in a message returns BOTH a session hit and an event hit for the session", async () => {
     await rebuildSearchIndex(dbh.db);
-    const { hits } = await searchDocuments(dbh.db, { q: "anthropic spend" });
+    const { hits } = await searchDocuments(dbh.db, { orgId, q: "anthropic spend" });
     const session = hits.find((h) => h.entityType === "session" && h.entityId === "s1");
     const event = hits.find((h) => h.entityType === "event" && h.entityId === "se-user");
     expect(session).toBeDefined();

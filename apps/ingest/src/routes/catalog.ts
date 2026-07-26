@@ -3,7 +3,7 @@ import type { ModelPricing } from "@420ai/shared";
 import { verifyCatalogSignature } from "@420ai/shared";
 import { insertPendingCatalog, listCatalogs, approveCatalog, rejectCatalog } from "@420ai/db";
 import { catalogUploadBodySchema } from "../schemas.js";
-import { adminAuthorized, isUuid } from "../auth.js";
+import { resolvePrincipal, isUuid } from "../auth.js";
 
 interface CatalogUploadBody {
   version: string;
@@ -16,7 +16,7 @@ interface CatalogUploadBody {
  * (the dashboard reaches them via the server-side proxy that holds the admin token,
  * D9). The catalog is GLOBAL (D6) — the approve/reject routes drop the
  * findUserIdByEmail step the per-user alerts route has, keeping the same
- * adminAuthorized → isUuid(id) else 404 → repo → undefined→404 ladder.
+ * resolvePrincipal → isUuid(id) else 404 → repo → undefined→404 ladder.
  *
  * POST /v1/catalog            — verify the ed25519 signature (bad → 400) then store pending.
  * GET  /v1/catalog            — list all catalog rows (newest first).
@@ -28,7 +28,8 @@ export default async function catalogRoutes(app: FastifyInstance): Promise<void>
     "/v1/catalog",
     { schema: { body: catalogUploadBodySchema } },
     async (request, reply) => {
-      if (!adminAuthorized(app, request)) {
+      const principal = await resolvePrincipal(app, request);
+      if (!principal) {
         return reply.code(401).send({ error: "admin authorization required" });
       }
       const { version, payload, signature } = request.body;
@@ -43,14 +44,16 @@ export default async function catalogRoutes(app: FastifyInstance): Promise<void>
   );
 
   app.get("/v1/catalog", async (request, reply) => {
-    if (!adminAuthorized(app, request)) {
+    const principal = await resolvePrincipal(app, request);
+    if (!principal) {
       return reply.code(401).send({ error: "admin authorization required" });
     }
     return reply.code(200).send(await listCatalogs(app.db));
   });
 
   app.post<{ Params: { id: string } }>("/v1/catalog/:id/approve", async (request, reply) => {
-    if (!adminAuthorized(app, request)) {
+    const principal = await resolvePrincipal(app, request);
+    if (!principal) {
       return reply.code(401).send({ error: "admin authorization required" });
     }
     if (!isUuid(request.params.id)) {
@@ -62,7 +65,8 @@ export default async function catalogRoutes(app: FastifyInstance): Promise<void>
   });
 
   app.post<{ Params: { id: string } }>("/v1/catalog/:id/reject", async (request, reply) => {
-    if (!adminAuthorized(app, request)) {
+    const principal = await resolvePrincipal(app, request);
+    if (!principal) {
       return reply.code(401).send({ error: "admin authorization required" });
     }
     if (!isUuid(request.params.id)) {

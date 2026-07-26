@@ -3,7 +3,7 @@ import { findAdminCredential } from "@420ai/db";
 import { loginBodySchema } from "../schemas.js";
 import { verifyPassword } from "../password.js";
 import { signSession, SESSION_TTL_SECONDS } from "../session.js";
-import { adminAuthorized } from "../auth.js";
+import { resolvePrincipal } from "../auth.js";
 
 interface LoginBody {
   email: string;
@@ -13,7 +13,7 @@ interface LoginBody {
 /**
  * M12 12.3 admin login surface. POST /v1/auth/login is the ONE un-gated admin route
  * (it's the entry point); it issues a stateless HMAC session token the dashboard then
- * carries as a bearer (the hybrid adminAuthorized gate accepts it). GET /v1/auth/me is
+ * carries as a bearer (the hybrid resolvePrincipal gate accepts it). GET /v1/auth/me is
  * a session-gated identity probe for the dashboard's logged-in state.
  *
  * Brute-force rate-limiting was deferred from 12.3 and SHIPPED in 12.4c: the route config
@@ -42,9 +42,13 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
   );
 
   app.get("/v1/auth/me", async (request, reply) => {
-    if (!adminAuthorized(app, request)) {
+    const principal = await resolvePrincipal(app, request);
+    if (!principal) {
       return reply.code(401).send({ error: "admin authorization required" });
     }
-    return reply.code(200).send({ email: app.adminEmail });
+    // M15 15.2 BUG FIX: report the CALLER's email, not the env admin's. Before the
+    // principal existed this returned `app.adminEmail` no matter who logged in, so a
+    // second user saw the admin's address in the dashboard nav. Shape is unchanged.
+    return reply.code(200).send({ email: principal.email });
   });
 }
