@@ -14,7 +14,14 @@ The first release focuses on AI Coding Tools.
 
 ## V2 Scope
 
-The second release expands tracking to General AI Chat sessions.
+The second release is the committed M15–M19 bucket (committed 2026-07-21): multi-user and access
+control, cloud-hosted SaaS, cross-platform collectors, advanced intelligence and automation, and a
+connector ecosystem with local models. **M15 — Multi-user & access control** is the first promoted
+milestone (2026-07-25). Expanding tracking to General AI Chat sessions was the earlier V2 headline and
+**shipped as M14** (signed off 2026-07-22).
+
+M15 makes the **Organization** the tenancy boundary. Its glossary terms (Organization, Membership,
+Role) are defined here in slice 15.1, the slice that names them in schema and code.
 
 ## Tool-Native Session
 
