@@ -917,12 +917,22 @@ Requirements:
 > multi-user/SaaS, or extend cross-platform reach — and the answer was **all three**, so none of
 > M15–M19 is a "maybe" any more.
 >
-> **What is still open is the ORDER.** The numbering below is inherited from the old sketch and is
-> **not** a commitment to sequence. Sequencing is driven by **who the next milestone is for**, not by
-> technical dependency: the archive schema is already multi-user-capable, so M15/M16 are a
-> product-surface build rather than a data migration, and M17 is largely parallelizable with the rest.
-> Where a genuine technical dependency exists it is called out in the entry itself (e.g. M16 needs
-> M15).
+> **What is still open is the ORDER** for M16–M19; **M15 has since been promoted** (2026-07-25, see
+> item 15 below). The numbering below is inherited from the old sketch and is **not** a commitment to
+> sequence. Sequencing is driven by **who the next milestone is for**, not by technical dependency,
+> and M17 is largely parallelizable with the rest. Where a genuine technical dependency exists it is
+> called out in the entry itself (e.g. M16 needs M15).
+>
+> **Corrected 2026-07-25 (M15 slice 15.0).** This paragraph previously read "the archive schema is
+> already multi-user-capable, so M15/M16 are a product-surface build rather than a data migration."
+> That was true for **per-user** isolation — the schema does carry `user_id`. It is **false** under
+> the org-level tenancy settled in **D-M15-1** (2026-07-25 scope conversation): the tenancy boundary
+> is the **organization**, which adds `org_id` across ~15 tables including `events` and
+> `raw_source_records`, plus a backfill and `down/` SQL. **M15 is a data migration**, and sizing it
+> from the old sentence under-scopes it by an entire migration. See
+> [`.agents/plans/m15-multi-user-access-control.md`](../.agents/plans/m15-multi-user-access-control.md).
+> (§1 and §4's statements that **V1** is "single-user in the product experience but multi-user capable
+> in the schema" describe V1 and remain true.)
 >
 > **M14 is DONE (signed off 2026-07-22)**, so the "finish M14 first" gate is cleared and V2 planning is
 > unblocked. **Still do not execute directly from this list.** Each entry is milestone-sized and must
@@ -935,10 +945,16 @@ Listed in their inherited sketch numbering — **this is not the execution order
 14. ~~**General AI Chat capture (V2 flagship).**~~ **PROMOTED → the real M14 above (2026-07-14) and
     now DONE (2026-07-22).** Kept here only to explain the numbering.
 
-15. **Multi-user & access control.** Turn the already-multi-user-capable **schema** into a real
-    multi-user _product_: authentication beyond M12's single-admin login, per-user data isolation,
-    roles/RBAC, and team/org concepts. _Builds directly on M12 §12.3 (auth hardening); the foundation for
-    SaaS._
+15. ~~**Multi-user & access control.**~~ **PROMOTED → the real M15 (2026-07-25) —
+    [`.agents/plans/m15-multi-user-access-control.md`](../.agents/plans/m15-multi-user-access-control.md).**
+    Settled in the deferral audit + scope conversation: the tenancy boundary is the **organization**,
+    not the user (D-M15-1, so `org_id` + a backfill across ~15 tables — this **is** a data migration);
+    isolation is Postgres **RLS as a backstop** behind primary application-level scoping (D-M15-3);
+    **four fixed roles** `owner`/`admin`/`member`/`viewer` plus per-project grants, no user-defined
+    roles (D-M15-4); **all four identity paths** ship — admin-creates, invite, gated self-signup, SSO
+    via Google + GitHub — plus password reset and TOTP MFA (D-M15-5); and **`ADMIN_TOKEN` is retired**
+    as an auth credential, surviving only as an inert first-run bootstrap seed (D-M15-7). Sliced
+    15.0–15.10 in the plan; **15.0 gates 15.3**. Kept here to explain the numbering.
 
 16. **Cloud-hosted SaaS.** Multi-tenant hosted deployment: tenancy isolation, a managed/hosted archive,
     scale hardening (quotas + rate limits beyond M12 §12.4), billing/subscriptions, and hosted onboarding.

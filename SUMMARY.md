@@ -85,14 +85,23 @@ origins deferred; per-origin gate in
 negative), restore-from-backup drill, Cursor `watch → archive → Monitor` round-trip, live SMTP send
 (local Mailpit), scheduled-reports cold run, and 12.3 auth QA (`.agents/qa/m12-slice3/`).
 
-**What's next — V2 (M15–M19) is committed scope, unsequenced.** With M14 signed off, **nothing is in
-flight**. On 2026-07-21 the post-V1 bucket was promoted from a PRD "tentative sketch" to **committed
-scope** — all five milestones are wanted (multi-user, SaaS, cross-platform collectors, advanced
-intelligence, connector ecosystem/local models); the scope conversation asked for one strategic
-direction and the answer was all three. **The order is still open**, and it is decided by _who the next
-milestone is for_, not by technical dependency — the schema is already multi-user-capable, so M15/M16
-are a product-surface build, not a data migration. See §3 for the entries and §6 for the one next
-action: run the deferral-audit + scope conversation that promotes one of them into a sliced plan.
+**What's next — M15 (Multi-user & access control) is IN PROGRESS.** On 2026-07-21 the post-V1 bucket
+was promoted from a PRD "tentative sketch" to **committed scope** — all five milestones are wanted
+(multi-user, SaaS, cross-platform collectors, advanced intelligence, connector ecosystem/local
+models); the scope conversation asked for one strategic direction and the answer was all three. On
+**2026-07-25** the deferral audit + scope conversation promoted **M15** first, on the stated criterion
+(_who the next milestone is for_ — the answer being that this product is going to be a SaaS, so the
+tenancy foundation is built now, with one install and zero customers). M16–M19 remain **committed and
+unsequenced**.
+
+> **Corrected 2026-07-25 (slice 15.0).** This block previously said "the schema is already
+> multi-user-capable, so M15/M16 are a product-surface build, not a data migration." That was true for
+> **per-user** isolation, and is **false** under the org-level tenancy settled in **D-M15-1**: the
+> tenancy boundary is the **organization**, so `org_id` lands across ~15 tables including `events` and
+> `raw_source_records`, with a backfill and `down/` SQL. **M15 is a data migration.** (V1 being
+> "single-user in the product, multi-user-capable in the schema" is a separate, still-true claim.)
+
+See §3 for the entries and §6 for the M15 slice status.
 
 **CI gate:** a `repo-health` GitHub Actions check (repo-root `tsc -b` + NUL/stray scans + the full
 vitest suite **including the Postgres integration layer**) runs on every PR to `main`
@@ -212,17 +221,29 @@ checklist (updater key ceremony, restore drill, auth QA, SMTP, scheduled reports
 fully cleared — evidence under `.agents/qa/m14-signoff/`.** See
 [`.agents/plans/m14-general-ai-chat-capture.md`](./.agents/plans/m14-general-ai-chat-capture.md).
 
-**V2 (M15–M19) — committed scope 2026-07-21, order TBD.** The post-V1 bucket stopped being a sketch:
-the scope conversation asked which single strategic direction to take and the answer was **all
-three** — deepen the single-user product, go multi-user/SaaS, extend cross-platform reach — so all
-five are committed. **The order is not**: the numbering is inherited from the old PRD sketch, and
-sequencing is driven by **who the next milestone is for**, not technical dependency (the schema is
-already multi-user-capable, so M15/M16 are a product-surface build, not a data migration). Nothing
-here is executable until it goes through the deferral-audit + scope conversation that produced
-M12/M13/M14. Full entries in PRD §25.
+**V2 (M15–M19) — committed scope 2026-07-21; M15 promoted 2026-07-25, M16–M19 still unsequenced.**
+The post-V1 bucket stopped being a sketch: the scope conversation asked which single strategic
+direction to take and the answer was **all three** — deepen the single-user product, go
+multi-user/SaaS, extend cross-platform reach — so all five are committed. The remaining numbering is
+inherited from the old PRD sketch and is **not** an execution order; sequencing is driven by **who the
+next milestone is for**, not technical dependency. Nothing below M15 is executable until it goes
+through the deferral-audit + scope conversation that produced M12/M13/M14. Full entries in PRD §25.
 
-- **M15 — Multi-user & access control.** Auth beyond M12's single-admin login, per-user isolation,
-  roles/RBAC, team/org concepts. _Builds on 12.3; the foundation for SaaS._
+> **Corrected 2026-07-25 (slice 15.0).** This paragraph previously justified the ordering with "the
+> schema is already multi-user-capable, so M15/M16 are a product-surface build, not a data migration."
+> True for **per-user** isolation; **false** under **D-M15-1**'s org-level tenancy, which adds `org_id`
+> across ~15 tables (incl. `events`, `raw_source_records`) plus a backfill. **M15 is a data
+> migration** — sizing it from the old sentence under-scopes it.
+
+- **M15 — Multi-user & access control — IN PROGRESS** (promoted 2026-07-25;
+  [`.agents/plans/m15-multi-user-access-control.md`](./.agents/plans/m15-multi-user-access-control.md)).
+  Org-level tenancy (D-M15-1), RLS as a backstop behind primary application scoping (D-M15-3), four
+  fixed roles + per-project grants (D-M15-4), all four identity paths + reset + MFA (D-M15-5),
+  `ADMIN_TOKEN` retired to a bootstrap-only seed (D-M15-7). Slices: **15.0** ✅ Truth + RLS spike ·
+  **15.1** Tenancy schema · **15.2** Request principal · **15.3** RLS enforcement · **15.4** RBAC ·
+  **15.5** Identity core · **15.6** Sessions + revocation · **15.7** SSO (Google + GitHub) ·
+  **15.8** MFA · **15.9** API keys + retire `ADMIN_TOKEN` · **15.10** Team surfaces + audit table.
+  **15.0 gates 15.3**; 15.5 gates 15.7.
 - **M16 — Cloud-hosted SaaS.** Multi-tenancy, managed archive, quotas/rate limits beyond 12.4,
   billing, hosted onboarding. _Genuinely depends on M15. Biggest architectural shift — local-first
   stays a first-class deployment mode._
@@ -368,14 +389,24 @@ original M10 "hardening bundle" (exports, catalog signing, replay metadata, pers
 
 ## 6. Immediate next steps
 
-- [ ] **NEXT — promote one of M15–M19 into a real milestone.** M14 is signed off, so nothing is in
-      flight. V2 (M15–M19) is **committed scope** as of 2026-07-21 but **deliberately unsequenced**
-      (§3, PRD §25) — the open question is _which one first_, and it is answered by **who the next
-      milestone is for**, not by technical dependency. The step that turns a committed direction into
-      executable work is the same one that produced M12/M13/M14: a **deferral audit** (sweep every
-      "deferred"/"V2" marker in the docs, plans, code-reviews, and comments) **+ a scope conversation**,
-      landing in `.agents/plans/m<N>-<name>.md` with settled decisions and dependency-ordered slices.
-      Do that before writing any code.
+- [ ] **NEXT — M15 Multi-user & access control (IN PROGRESS).** Promoted 2026-07-25 by the
+      deferral-audit + scope conversation that produced M12/M13/M14; decisions D-M15-1…13 are settled
+      in [`.agents/plans/m15-multi-user-access-control.md`](./.agents/plans/m15-multi-user-access-control.md).
+      Slices run in dependency order; **15.0 gates 15.3** and 15.5 gates 15.7.
+  - **15.0** ✅ **DONE `2026-07-25` (PR #60)** — Truth + RLS spike. Corrected the false "not a data
+    migration" framing in PRD §25 / SUMMARY §0+§3 and refreshed `docs/CONTEXT.md` V2 scope; wrote
+    [`docs/research/m15-rls-spike.md`](./docs/research/m15-rls-spike.md), which proves the
+    `DATABASE_URL` role is a **superuser with `rolbypassrls`** (RLS inert against it, and `FORCE
+ROW LEVEL SECURITY` does **not** fix it → a non-owner app role is load-bearing), that a plain
+    `SET` leaks tenant context across pooled checkouts, and decides the `withOrg` +
+    `set_config(…, true)` transaction-wrapping pattern 15.3 implements. **No production code.**
+  - [ ] **15.1** Tenancy schema · **15.2** Request principal · **15.3** RLS enforcement ·
+        **15.4** RBAC · **15.5** Identity core · **15.6** Sessions + revocation · **15.7** SSO ·
+        **15.8** MFA · **15.9** API keys + retire `ADMIN_TOKEN` · **15.10** Team surfaces + audit
+        table.
+
+- [ ] **M16–M19 remain committed scope, unsequenced** (§3, PRD §25). Each still needs its own
+      deferral-audit + scope conversation before it is executable.
 
 - [ ] **V1 close-out** (scope confirmed 2026-06-19 — see §4) — completed to **full written scope**.
       Sequenced slices, each run through the build loop (§2). Recommended order is value/dependency-first: 1. **Git Outcomes & Attribution** (§11.3/§11.4, full) — capture commits (hash/author/time/branch +
@@ -643,7 +674,7 @@ original M10 "hardening bundle" (exports, catalog signing, replay metadata, pers
       deferred). Non-goals unchanged (multi-user/SaaS, MSI/signing, Antigravity, semantic search).
 
       **↳ D-M14-4 pre-sign-off checklist — COMPLETE (all seven verified 2026-07-22; evidence under
-      [`.agents/qa/m14-signoff/`](../.agents/qa/m14-signoff/)):**
+      [`.agents/qa/m14-signoff/`](./.agents/qa/m14-signoff/)):**
       - [x] Updater signing-key ceremony run; `tauri.conf.json` carries the real pubkey `274299A5…`
             (was `REPLACE_WITH_TAURI_UPDATER_PUBKEY`); key in `.secrets/tauri-updater.key`
       - [x] Restore-from-backup drill into a scratch DB, verified (exact-match fidelity)
