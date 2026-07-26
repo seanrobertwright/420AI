@@ -31,6 +31,14 @@ npm workspaces, all strict TS, Node ≥ 24:
   changing the delimiter silently breaks dedup across parser versions.
 - **"Raw records sacred / events disposable"** — raw payloads are immutable (insert-once); events are
   re-derivable and upsert by fingerprint.
+- **What may become a COLUMN on `events`** (M15 15.1, D-M15-2): a column belongs on `events` if it is
+  **fixed at capture time and never re-derived**. `org_id` passes (whose data it is, fixed by which
+  machine uploaded it) and is therefore a column as of M15 15.1. `project_id` fails (attribution
+  changes when a workspace is remapped) and stays a JOIN. The **fingerprint is unchanged** — `org_id`
+  is never a fingerprint input, the primary key is still `fingerprint` alone, and a re-ingest never
+  overwrites an existing row's `org_id` — it is deliberately absent from the ingest upsert's
+  `set:` block, so a converging cross-org ingest cannot flip a row's owner (pinned by
+  `packages/db/src/repositories/tenancy.int.test.ts`).
 - The M2 **ingest wire types** and server contract — the collector produces these shapes; M3+ feed
   them through the existing ingest client/API. No new server code or Postgres tables were added in M3.
 
@@ -186,6 +194,21 @@ the int test asserting it could never have passed against a real DB, so the laye
 - A `GROUP BY <col>` over the full event stream collapses rows with a NULL `<col>` into a phantom group;
   restrict the WHERE to the relevant `event_type`s when a null-keyed all-zero row would be noise (e.g.
   `usageByModel` filters to `usage.reported`/`cost.estimated`).
+- **An aggregate over a tenancy/ownership column is a SMELL** (M15 15.1). `min(org_id)` in a query
+  whose `GROUP BY` does not include `org_id` collapses two tenants into one row and silently picks a
+  winner. In 15.1 this shipped into `indexSessions` — grouping by `session_id` alone (a
+  connector-supplied, globally-scoped string two tenants can share) produced ONE search document
+  owned by `min(org_id)` whose body concatenated **both** orgs' decrypted content. If a column is an
+  ownership key it belongs in the `GROUP BY`, never in an aggregate. Corollary: **when you re-scope a
+  unique index from `(X)` to `(org_id, X)`, audit every `GROUP BY X` and `WHERE X` on the WRITE path
+  too** — those are precisely the places that assumed `X` was globally unique, and the index change
+  alone does not fix them (the schema then permits two rows the builder can never emit).
+- **Repository functions whose rows reach `reply.send()` MUST use explicit column lists** (M15 15.1).
+  No `apps/ingest` route declares a Fastify `response` schema, so nothing strips extra properties: a
+  bare `select()` / `returning()` turns every future column into an unannounced API addition. Adding
+  `org_id` silently put it on the wire in six endpoints. Use a `const <name>RowColumns = {...}`
+  constant that mirrors the exported `*Row` interface (see `projects.ts`, `workspaces.ts`,
+  `reports.ts`) — it also stops the interface from lying about the runtime shape.
 - **A guard sufficient for a READ is insufficient for a WRITE that adds an FK.** The M6 projection reads
   return 200-zeros for an unknown project uuid (`isUuid → 404` only screens _malformed_ ids, never
   inserts). An M7-style _write_ whose row carries a FK (`report_artifacts.project_id → projects.id`)

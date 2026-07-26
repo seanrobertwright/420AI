@@ -47,6 +47,52 @@ import type {
  * attribution in M5) — they are NOT secrets.
  */
 
+/**
+ * M15 15.1 — the TENANCY BOUNDARY of the archive (D-M15-1). Every tenant-owned row
+ * carries `org_id`; `users` does NOT (a user is an identity and reaches orgs through
+ * `memberships`). `is_personal` marks the auto-created one-per-user org that the 15.1
+ * backfill seeded from the existing install (D-M15-11) and that `ensurePersonalOrg`
+ * keeps creating for every new user, so "every user has at least one org" holds by
+ * construction. `name` is seeded from the user's email for a personal org (the 0014
+ * backfill joins on it exactly once); no `slug` column — URL/tenant slugs are M16.
+ */
+export const organizations = pgTable("organizations", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: text("name").notNull(),
+  isPersonal: boolean("is_personal").notNull().default(false),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
+ * M15 15.1 — a user's place in an organization (D-M15-1/D-M15-4). Nothing constrains
+ * "≤1 membership per user" ON PURPOSE: 15.10 needs multi-org users, and a constraint
+ * here would have to be dropped again.
+ *
+ * `role` is TEXT, not a pg enum — the repo models every closed set that way
+ * (`report_artifacts.report_type`, `alert_firings.status`) so adding a value is a code
+ * change, not a migration. The four legal values are `owner | admin | member | viewer`
+ * (D-M15-4). There is deliberately NO CHECK constraint, and 15.1 does NOT enforce roles
+ * anywhere — role ENFORCEMENT is 15.4.
+ */
+export const memberships = pgTable(
+  "memberships",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organizations.id),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
+    role: text("role").notNull().default("member"), // owner | admin | member | viewer (D-M15-4)
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("memberships_org_user").on(t.orgId, t.userId),
+    index("memberships_by_user").on(t.userId),
+  ],
+);
+
 export const users = pgTable("users", {
   id: uuid("id").primaryKey().defaultRandom(),
   email: text("email").notNull().unique(),
@@ -57,55 +103,92 @@ export const users = pgTable("users", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
-export const machines = pgTable("machines", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  userId: uuid("user_id")
-    .notNull()
-    .references(() => users.id),
-  name: text("name").notNull(),
-  os: text("os"),
-  hostname: text("hostname"),
-  status: text("status").notNull().default("active"),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
-  // M9 Live Monitor heartbeat (PRD §20, D2). All NULLABLE — pre-M9 machines simply
-  // have nulls and deriveMachineStatus falls back to lastSeenAt (D5). The collector's
-  // heartbeat sets them; we store only the LATEST sample (current depth, not a trend —
-  // backlog-GROWING / heartbeat history is M10, D4). No default-now: a null heartbeat
-  // means "never sent one", which is distinct from "sent one at row-creation time".
-  lastHeartbeatAt: timestamp("last_heartbeat_at", { withTimezone: true }),
-  queuePending: integer("queue_pending"),
-  queueInflight: integer("queue_inflight"),
-  collectorVersion: text("collector_version"),
-  // M12 12.6 archive.unreachable signal — the latest collector-reported count of
-  // consecutive sync failures (nullable; older collectors don't send it → null → 0).
-  consecutiveSyncFailures: integer("consecutive_sync_failures"),
-});
+export const machines = pgTable(
+  "machines",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    // M15 15.1 tenancy (D-M15-1). THE authority for machine-keyed writes: a machine
+    // belongs to exactly one org and cannot change orgs, so every repository that
+    // writes a machine-keyed row DERIVES the org from here (getMachineOrgId) rather
+    // than trusting a caller-supplied value — "caller passed the wrong org" is then
+    // unrepresentable. Set at pairing time from the pairing code's org.
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organizations.id),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
+    name: text("name").notNull(),
+    os: text("os"),
+    hostname: text("hostname"),
+    status: text("status").notNull().default("active"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
+    // M9 Live Monitor heartbeat (PRD §20, D2). All NULLABLE — pre-M9 machines simply
+    // have nulls and deriveMachineStatus falls back to lastSeenAt (D5). The collector's
+    // heartbeat sets them; we store only the LATEST sample (current depth, not a trend —
+    // backlog-GROWING / heartbeat history is M10, D4). No default-now: a null heartbeat
+    // means "never sent one", which is distinct from "sent one at row-creation time".
+    lastHeartbeatAt: timestamp("last_heartbeat_at", { withTimezone: true }),
+    queuePending: integer("queue_pending"),
+    queueInflight: integer("queue_inflight"),
+    collectorVersion: text("collector_version"),
+    // M12 12.6 archive.unreachable signal — the latest collector-reported count of
+    // consecutive sync failures (nullable; older collectors don't send it → null → 0).
+    consecutiveSyncFailures: integer("consecutive_sync_failures"),
+  },
+  (t) => [index("machines_by_org").on(t.orgId)],
+);
 
-export const pairingCodes = pgTable("pairing_codes", {
-  code: text("code").primaryKey(),
-  userId: uuid("user_id")
-    .notNull()
-    .references(() => users.id),
-  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
-  consumedAt: timestamp("consumed_at", { withTimezone: true }),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
+export const pairingCodes = pgTable(
+  "pairing_codes",
+  {
+    code: text("code").primaryKey(),
+    // M15 15.1 tenancy (D-M15-1). Resolved from the issuing user's org so `pair.ts`
+    // can hand it straight to `createMachine` — the machine's org comes from the code,
+    // never from the pairing request body.
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organizations.id),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("pairing_codes_by_org").on(t.orgId)],
+);
 
-export const ingestTokens = pgTable("ingest_tokens", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  machineId: uuid("machine_id")
-    .notNull()
-    .references(() => machines.id),
-  tokenHash: text("token_hash").notNull().unique(),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  revokedAt: timestamp("revoked_at", { withTimezone: true }),
-});
+export const ingestTokens = pgTable(
+  "ingest_tokens",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    // M15 15.1 tenancy (D-M15-1). Derived from `machines.org_id` at issue time.
+    // NOTE for 15.3: `findMachineIdByToken` reads this table BEFORE any org context
+    // exists (it is what establishes the context), so an RLS policy here must permit
+    // the pre-context lookup or the table must be excluded.
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organizations.id),
+    machineId: uuid("machine_id")
+      .notNull()
+      .references(() => machines.id),
+    tokenHash: text("token_hash").notNull().unique(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  },
+  (t) => [index("ingest_tokens_by_org").on(t.orgId)],
+);
 
 export const rawSourceRecords = pgTable(
   "raw_source_records",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    // M15 15.1 tenancy (D-M15-1). Derived from `machines.org_id` inside ingestBatch.
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organizations.id),
     machineId: uuid("machine_id")
       .notNull()
       .references(() => machines.id),
@@ -126,6 +209,7 @@ export const rawSourceRecords = pgTable(
       t.sourceRecordId,
     ),
     index("raw_by_session").on(t.sessionId),
+    index("raw_source_records_by_org").on(t.orgId),
   ],
 );
 
@@ -135,6 +219,15 @@ export const events = pgTable(
     // Machine-INDEPENDENT fingerprint (PRD §12/§23): same logical event from two
     // machines dedups to one row. Do NOT add machine_id to the fingerprint.
     fingerprint: text("fingerprint").primaryKey(),
+    // M15 15.1 tenancy (D-M15-1/D-M15-2). Fixed at capture time and never re-derived —
+    // which is exactly why it is a COLUMN here while project attribution stays a JOIN.
+    // NEVER a fingerprint input (the PK stays `fingerprint` ALONE — compositing it would
+    // change the dedup key and break the CLAUDE.md fingerprint invariant), and NEVER in
+    // the ingest `ON CONFLICT DO UPDATE set:` block: a converging cross-org re-ingest
+    // must not flip an existing row's owner. First writer's org wins.
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organizations.id),
     sourceConnector: text("source_connector").notNull(),
     parserVersion: text("parser_version").notNull(),
     // Pricing-catalog version (PRD §23). NULLABLE — captured before replay-metadata
@@ -164,6 +257,7 @@ export const events = pgTable(
     // workspace_keys.project_key. Indexed so per-project summaries don't seq-scan
     // events. Additive (no column/shape change — the fingerprint is untouched).
     index("events_by_project_path").on(t.projectPath),
+    index("events_by_org").on(t.orgId),
   ],
 );
 
@@ -184,6 +278,10 @@ export const projects = pgTable(
   "projects",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    // M15 15.1 tenancy (D-M15-1). Resolved from the owning user (getOrgIdForUser).
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organizations.id),
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id),
@@ -192,7 +290,10 @@ export const projects = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     archivedAt: timestamp("archived_at", { withTimezone: true }),
   },
-  (t) => [uniqueIndex("projects_user_remote").on(t.userId, t.gitRemote)],
+  (t) => [
+    uniqueIndex("projects_user_remote").on(t.userId, t.gitRemote),
+    index("projects_by_org").on(t.orgId),
+  ],
 );
 
 /**
@@ -204,6 +305,10 @@ export const workspaces = pgTable(
   "workspaces",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    // M15 15.1 tenancy (D-M15-1). Resolved from the owning user (getOrgIdForUser).
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organizations.id),
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id),
@@ -218,6 +323,7 @@ export const workspaces = pgTable(
   (t) => [
     uniqueIndex("workspaces_user_root").on(t.userId, t.rootPath),
     index("workspaces_by_project").on(t.projectId),
+    index("workspaces_by_org").on(t.orgId),
   ],
 );
 
@@ -232,6 +338,10 @@ export const workspaceKeys = pgTable(
   "workspace_keys",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    // M15 15.1 tenancy (D-M15-1). Resolved from the owning user (getOrgIdForUser).
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organizations.id),
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id),
@@ -245,6 +355,7 @@ export const workspaceKeys = pgTable(
   (t) => [
     uniqueIndex("workspace_keys_user_key").on(t.userId, t.projectKey),
     index("workspace_keys_by_workspace").on(t.workspaceId),
+    index("workspace_keys_by_org").on(t.orgId),
   ],
 );
 
@@ -264,6 +375,10 @@ export const reportArtifacts = pgTable(
   "report_artifacts",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    // M15 15.1 tenancy (D-M15-1). Resolved from the owning user (getOrgIdForUser).
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organizations.id),
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id),
@@ -288,6 +403,7 @@ export const reportArtifacts = pgTable(
     // History lookup + the version-bump backstop (one row per (user, type, scope, version)).
     uniqueIndex("report_artifacts_scope_version").on(t.userId, t.reportType, t.scopeId, t.version),
     index("report_artifacts_by_scope").on(t.userId, t.reportType, t.scopeId),
+    index("report_artifacts_by_org").on(t.orgId),
   ],
 );
 
@@ -309,6 +425,10 @@ export const gitCommits = pgTable(
   "git_commits",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    // M15 15.1 tenancy (D-M15-1). Derived from `machines.org_id` inside recordGitCommits.
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organizations.id),
     machineId: uuid("machine_id")
       .notNull()
       .references(() => machines.id),
@@ -336,6 +456,7 @@ export const gitCommits = pgTable(
     uniqueIndex("git_commits_machine_sha").on(t.machineId, t.commitSha),
     // Attribution + project join: resolve commits for a repo root (== project_path).
     index("git_commits_by_root").on(t.repoRootPath),
+    index("git_commits_by_org").on(t.orgId),
   ],
 );
 
@@ -347,6 +468,11 @@ export const gitCommitFiles = pgTable(
   "git_commit_files",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    // M15 15.1 tenancy (D-M15-1). Inherited from the parent commit by construction —
+    // a file row is only ever written immediately after its `git_commits` insert.
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organizations.id),
     commitId: uuid("commit_id")
       .notNull()
       .references(() => gitCommits.id),
@@ -355,7 +481,10 @@ export const gitCommitFiles = pgTable(
     insertions: integer("insertions").notNull(),
     deletions: integer("deletions").notNull(),
   },
-  (t) => [index("git_commit_files_by_commit").on(t.commitId)],
+  (t) => [
+    index("git_commit_files_by_commit").on(t.commitId),
+    index("git_commit_files_by_org").on(t.orgId),
+  ],
 );
 
 /**
@@ -371,6 +500,10 @@ export const sessionGitLinks = pgTable(
   "session_git_links",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    // M15 15.1 tenancy (D-M15-1). Resolved from the owning user (getOrgIdForUser).
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organizations.id),
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id),
@@ -388,6 +521,7 @@ export const sessionGitLinks = pgTable(
   (t) => [
     uniqueIndex("session_git_links_unique").on(t.userId, t.sessionId, t.commitId),
     index("session_git_links_by_commit").on(t.commitId),
+    index("session_git_links_by_org").on(t.orgId),
   ],
 );
 
@@ -401,6 +535,10 @@ export const machineHeartbeats = pgTable(
   "machine_heartbeats",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    // M15 15.1 tenancy (D-M15-1). Derived from `machines.org_id` inside recordHeartbeat.
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organizations.id),
     machineId: uuid("machine_id")
       .notNull()
       .references(() => machines.id),
@@ -408,7 +546,10 @@ export const machineHeartbeats = pgTable(
     queuePending: integer("queue_pending").notNull(),
     queueInflight: integer("queue_inflight").notNull(),
   },
-  (t) => [index("machine_heartbeats_by_machine_ts").on(t.machineId, t.ts)],
+  (t) => [
+    index("machine_heartbeats_by_machine_ts").on(t.machineId, t.ts),
+    index("machine_heartbeats_by_org").on(t.orgId),
+  ],
 );
 
 /**
@@ -437,6 +578,10 @@ export const alertFirings = pgTable(
   "alert_firings",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    // M15 15.1 tenancy (D-M15-1). Resolved from the owning user (getOrgIdForUser).
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organizations.id),
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id),
@@ -466,6 +611,7 @@ export const alertFirings = pgTable(
       .on(t.userId, t.alertKey)
       .where(sql`${t.status} = 'open'`),
     index("alert_firings_by_user_status").on(t.userId, t.status),
+    index("alert_firings_by_org").on(t.orgId),
   ],
 );
 
@@ -544,6 +690,14 @@ export const searchDocuments = pgTable(
   "search_documents",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    // M15 15.1 tenancy (D-M15-1) + audit B.1. LEADS the `search_documents_entity`
+    // unique index: `entity_id` is a connector-supplied session id or an event
+    // fingerprint — a GLOBALLY-scoped string — so a globally-unique
+    // (entity_type, entity_id) would let two orgs collide on the index. No separate
+    // `*_by_org` index: the unique index's leading column already covers org lookups.
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organizations.id),
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id),
@@ -561,8 +715,10 @@ export const searchDocuments = pgTable(
     ),
   },
   (t) => [
-    // One doc per logical entity — the re-reindex idempotency key.
-    uniqueIndex("search_documents_entity").on(t.entityType, t.entityId),
+    // One doc per logical entity PER ORG — the re-reindex idempotency key, re-scoped
+    // by M15 15.1 (audit B.1). `upsertDoc`'s ON CONFLICT target must match this column
+    // list EXACTLY or every search-index write fails at runtime.
+    uniqueIndex("search_documents_entity").on(t.orgId, t.entityType, t.entityId),
     index("search_documents_gin").using("gin", t.searchVector),
     index("search_documents_by_project").on(t.projectId),
     index("search_documents_by_session").on(t.sessionId),

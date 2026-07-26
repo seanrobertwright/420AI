@@ -1,6 +1,8 @@
 // Public surface of the archive data layer (@420ai/db).
 export * as schema from "./schema.js";
 export {
+  organizations,
+  memberships,
   users,
   machines,
   pairingCodes,
@@ -31,8 +33,14 @@ export {
   createMachine,
   touchLastSeen,
   getMachineUserId,
+  getMachineOrgId,
   recordHeartbeat,
 } from "./repositories/machines.js";
+export {
+  ensurePersonalOrg,
+  getOrgIdForUser,
+  findOrgIdByUserId,
+} from "./repositories/organizations.js";
 export { machineStatuses, activeSessions, recentBacklogSamples } from "./repositories/monitor.js";
 export {
   reconcileAlertFirings,

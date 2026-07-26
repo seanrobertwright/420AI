@@ -76,7 +76,7 @@ describe.skipIf(!TEST_URL)("ingest API (HTTP e2e via inject)", () => {
 
   beforeEach(async () => {
     await dbh.db.execute(
-      sql`TRUNCATE report_artifacts, workspace_keys, workspaces, projects, raw_source_records, events, ingest_tokens, pairing_codes, machines, users RESTART IDENTITY CASCADE`,
+      sql`TRUNCATE report_artifacts, workspace_keys, workspaces, projects, raw_source_records, events, ingest_tokens, pairing_codes, machines, memberships, organizations, users RESTART IDENTITY CASCADE`,
     );
   });
 

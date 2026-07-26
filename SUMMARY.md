@@ -240,7 +240,7 @@ through the deferral-audit + scope conversation that produced M12/M13/M14. Full 
   Org-level tenancy (D-M15-1), RLS as a backstop behind primary application scoping (D-M15-3), four
   fixed roles + per-project grants (D-M15-4), all four identity paths + reset + MFA (D-M15-5),
   `ADMIN_TOKEN` retired to a bootstrap-only seed (D-M15-7). Slices: **15.0** ✅ Truth + RLS spike ·
-  **15.1** Tenancy schema · **15.2** Request principal · **15.3** RLS enforcement · **15.4** RBAC ·
+  **15.1** ✅ Tenancy schema · **15.2** Request principal · **15.3** RLS enforcement · **15.4** RBAC ·
   **15.5** Identity core · **15.6** Sessions + revocation · **15.7** SSO (Google + GitHub) ·
   **15.8** MFA · **15.9** API keys + retire `ADMIN_TOKEN` · **15.10** Team surfaces + audit table.
   **15.0 gates 15.3**; 15.5 gates 15.7.
@@ -400,7 +400,21 @@ original M10 "hardening bundle" (exports, catalog signing, replay metadata, pers
 ROW LEVEL SECURITY` does **not** fix it → a non-owner app role is load-bearing), that a plain
     `SET` leaks tenant context across pooled checkouts, and decides the `withOrg` +
     `set_config(…, true)` transaction-wrapping pattern 15.3 implements. **No production code.**
-  - [ ] **15.1** Tenancy schema · **15.2** Request principal · **15.3** RLS enforcement ·
+  - **15.1** ✅ **DONE `2026-07-26` (PR #NN)** — Tenancy schema. Migration `0014_loose_pyro` adds
+    `organizations` + `memberships` and a `NOT NULL org_id` (+ FK, + `*_by_org` index) to the **15**
+    tenant tables, hand-edited into add-nullable → seed one personal org per user → backfill along the
+    ownership chain → `SET NOT NULL` → FK/index (drizzle emits `ADD COLUMN … NOT NULL`, which cannot
+    run on a populated table, and cannot emit a backfill). Re-scopes `search_documents_entity` to
+    `(org_id, entity_type, entity_id)` (audit **B.1**). Every write path fills `org_id` — machine-keyed
+    writes derive it from `machines.org_id`, user-keyed writes via `getOrgIdForUser` — with **no public
+    repository signature changes** except `createMachine`/`redeemPairingCode`. Behavior-neutral: no read
+    gained an org filter, no route/API shape changed. `org_id` is deliberately **absent** from the
+    ingest `ON CONFLICT DO UPDATE set:` block so a converging cross-org re-ingest cannot flip a row's
+    owner (D-M15-2, pinned by `tenancy.int.test.ts`); the `events` PK is still `fingerprint` alone. The
+    D-M15-13 rollback drill ran on a clone of the real 413,765-event archive — up ≈22 s, down ≈8.8 s,
+    re-up ≈22.7 s, 0 null `org_id`, 1 personal org — evidence in
+    [`.agents/qa/m15-signoff/`](./.agents/qa/m15-signoff/).
+  - [ ] **15.2** Request principal · **15.3** RLS enforcement ·
         **15.4** RBAC · **15.5** Identity core · **15.6** Sessions + revocation · **15.7** SSO ·
         **15.8** MFA · **15.9** API keys + retire `ADMIN_TOKEN` · **15.10** Team surfaces + audit
         table.

@@ -15,8 +15,11 @@ export default async function pairRoutes(app: FastifyInstance): Promise<void> {
       const { code, machine } = request.body;
       try {
         const result = await app.db.transaction(async (tx) => {
-          const { userId } = await redeemPairingCode(tx, code);
+          // M15 15.1: the machine's org comes from the redeemed CODE, never from the
+          // request body — a paired machine lands in the issuing user's tenant.
+          const { userId, orgId } = await redeemPairingCode(tx, code);
           const { id: machineId } = await createMachine(tx, {
+            orgId,
             userId,
             name: machine.name,
             os: machine.os,

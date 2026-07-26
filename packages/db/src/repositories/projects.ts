@@ -1,6 +1,7 @@
 import { and, desc, eq, isNull } from "drizzle-orm";
 import type { DbClient } from "../client.js";
 import { projects } from "../schema.js";
+import { getOrgIdForUser } from "./organizations.js";
 
 /**
  * Project repository (M5, PRD §6). A project is a software effort; cross-machine
@@ -18,6 +19,21 @@ export interface ProjectRow {
 }
 
 /**
+ * The columns a ProjectRow is made of. EXPLICIT rather than `select()` so that adding a
+ * column to the table never silently widens the API — the ingest routes send these rows
+ * straight to `reply.send()` with no Fastify response schema to strip extras, so a bare
+ * `select()` put M15's `org_id` on the wire. Keep this list == ProjectRow.
+ */
+const projectRowColumns = {
+  id: projects.id,
+  userId: projects.userId,
+  name: projects.name,
+  gitRemote: projects.gitRemote,
+  createdAt: projects.createdAt,
+  archivedAt: projects.archivedAt,
+};
+
+/**
  * Find-or-create a project by its git remote (the unify-by-remote default, D4).
  * The SAME remote across machines maps to ONE project. Returns `created: false`
  * when the project already existed — so re-discovery is idempotent and a user's
@@ -33,9 +49,11 @@ export async function findOrCreateProjectByRemote(
   gitRemote: string,
   name: string,
 ): Promise<{ id: string; created: boolean }> {
+  // M15 15.1: superseded by the 15.2 request principal.
+  const orgId = await getOrgIdForUser(db, userId);
   const inserted = await db
     .insert(projects)
-    .values({ userId, name, gitRemote })
+    .values({ orgId, userId, name, gitRemote })
     .onConflictDoNothing({ target: [projects.userId, projects.gitRemote] })
     .returning({ id: projects.id });
   if (inserted[0]) return { id: inserted[0].id, created: true };
@@ -55,9 +73,11 @@ export async function createProject(
   name: string,
   gitRemote?: string,
 ): Promise<{ id: string }> {
+  // M15 15.1: superseded by the 15.2 request principal.
+  const orgId = await getOrgIdForUser(db, userId);
   const [row] = await db
     .insert(projects)
-    .values({ userId, name, gitRemote: gitRemote ?? null })
+    .values({ orgId, userId, name, gitRemote: gitRemote ?? null })
     .returning({ id: projects.id });
   return { id: row!.id };
 }
@@ -77,7 +97,7 @@ export async function listProjects(
   page?: { limit?: number; offset?: number },
 ): Promise<ProjectRow[]> {
   const query = db
-    .select()
+    .select(projectRowColumns)
     .from(projects)
     .where(and(eq(projects.userId, userId), isNull(projects.archivedAt)))
     .orderBy(desc(projects.createdAt), desc(projects.id))
@@ -97,7 +117,7 @@ export async function renameProject(
     .update(projects)
     .set({ name })
     .where(eq(projects.id, projectId))
-    .returning();
+    .returning(projectRowColumns);
   return row;
 }
 

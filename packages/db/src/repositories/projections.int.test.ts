@@ -15,6 +15,7 @@ import {
   connectorHealthWindowed,
   projectGitMetadata,
 } from "./projections.js";
+import { ensurePersonalOrg } from "./organizations.js";
 
 const TEST_URL = process.env.DATABASE_URL_TEST;
 const REMOTE = "https://github.com/seanrobertwright/420AI.git";
@@ -39,6 +40,7 @@ function cost(usd: number, confidence: CostResult["confidence"]): CostResult {
 
 describe.skipIf(!TEST_URL)("projections repository (integration)", () => {
   let dbh: ReturnType<typeof createDb>;
+  let orgId: string;
   let userId: string;
   let machineId: string;
   let projectId: string;
@@ -53,16 +55,17 @@ describe.skipIf(!TEST_URL)("projections repository (integration)", () => {
 
   beforeEach(async () => {
     await dbh.db.execute(
-      sql`TRUNCATE workspace_keys, workspaces, projects, raw_source_records, events, ingest_tokens, pairing_codes, machines, users RESTART IDENTITY CASCADE`,
+      sql`TRUNCATE workspace_keys, workspaces, projects, raw_source_records, events, ingest_tokens, pairing_codes, machines, memberships, organizations, users RESTART IDENTITY CASCADE`,
     );
     const [u] = await dbh.db
       .insert(users)
       .values({ email: "test@example.com" })
       .returning({ id: users.id });
     userId = u!.id;
+    orgId = await ensurePersonalOrg(dbh.db, userId, "test@example.com");
     const [m] = await dbh.db
       .insert(machines)
-      .values({ userId, name: "test-machine" })
+      .values({ orgId, userId, name: "test-machine" })
       .returning({ id: machines.id });
     machineId = m!.id;
 
@@ -90,6 +93,7 @@ describe.skipIf(!TEST_URL)("projections repository (integration)", () => {
     await dbh.db.insert(events).values([
       {
         fingerprint: "u1",
+        orgId,
         sourceConnector: "claude-code",
         parserVersion: "2.0.0",
         rawRecordId: "r1",
@@ -105,6 +109,7 @@ describe.skipIf(!TEST_URL)("projections repository (integration)", () => {
       },
       {
         fingerprint: "u2",
+        orgId,
         sourceConnector: "claude-code",
         parserVersion: "2.0.0",
         rawRecordId: "r2",
@@ -120,6 +125,7 @@ describe.skipIf(!TEST_URL)("projections repository (integration)", () => {
       },
       {
         fingerprint: "c1",
+        orgId,
         sourceConnector: "claude-code",
         parserVersion: "2.0.0",
         rawRecordId: "r3",
@@ -134,6 +140,7 @@ describe.skipIf(!TEST_URL)("projections repository (integration)", () => {
       },
       {
         fingerprint: "c2",
+        orgId,
         sourceConnector: "claude-code",
         parserVersion: "2.0.0",
         rawRecordId: "r4",
@@ -157,6 +164,7 @@ describe.skipIf(!TEST_URL)("projections repository (integration)", () => {
         ] as const
       ).map((eventType, i) => ({
         fingerprint: `m${i}`,
+        orgId,
         sourceConnector: "claude-code",
         parserVersion: "2.0.0",
         rawRecordId: `rm${i}`,
@@ -253,6 +261,7 @@ describe.skipIf(!TEST_URL)("projections repository (integration)", () => {
     // an UNATTRIBUTED event (project_path never mapped) — must still appear in health
     await dbh.db.insert(events).values({
       fingerprint: "orphan",
+      orgId,
       sourceConnector: "gemini-cli",
       parserVersion: "1.0.0",
       rawRecordId: "ro",
@@ -268,6 +277,7 @@ describe.skipIf(!TEST_URL)("projections repository (integration)", () => {
     // started event must NOT bump toolCalls past the 2 terminal calls seeded above.
     await dbh.db.insert(events).values({
       fingerprint: "cc-started",
+      orgId,
       sourceConnector: "claude-code",
       parserVersion: "2.0.0",
       rawRecordId: "rstart",
@@ -305,6 +315,7 @@ describe.skipIf(!TEST_URL)("projections repository (integration)", () => {
     await dbh.db.insert(events).values(
       Array.from({ length: 4 }, (_, i) => ({
         fingerprint: `old-f${i}`,
+        orgId,
         sourceConnector: "claude-code",
         parserVersion: "2.0.0",
         rawRecordId: `rold${i}`,
@@ -320,6 +331,7 @@ describe.skipIf(!TEST_URL)("projections repository (integration)", () => {
     await dbh.db.insert(events).values([
       ...Array.from({ length: 3 }, (_, i) => ({
         fingerprint: `new-f${i}`,
+        orgId,
         sourceConnector: "claude-code",
         parserVersion: "2.0.0",
         rawRecordId: `rnf${i}`,
@@ -332,6 +344,7 @@ describe.skipIf(!TEST_URL)("projections repository (integration)", () => {
       })),
       ...Array.from({ length: 2 }, (_, i) => ({
         fingerprint: `new-c${i}`,
+        orgId,
         sourceConnector: "claude-code",
         parserVersion: "2.0.0",
         rawRecordId: `rnc${i}`,

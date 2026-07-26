@@ -10,14 +10,20 @@ import { machineHeartbeats, machines } from "../schema.js";
  */
 const HEARTBEAT_RETENTION_MS = 24 * 60 * 60_000; // 24 hours
 
-/** Register a machine for a user. Returns its generated id. */
+/**
+ * Register a machine for a user. Returns its generated id. M15 15.1: `orgId` is an
+ * EXPLICIT param here (unlike the derive-from-machine pattern below) because this is
+ * where a machine's org is first established — there is nothing to derive it from
+ * yet. `pair.ts` — the only caller — takes it from the redeemed pairing code.
+ */
 export async function createMachine(
   tx: DbClient,
-  input: { userId: string; name: string; os?: string; hostname?: string },
+  input: { orgId: string; userId: string; name: string; os?: string; hostname?: string },
 ): Promise<{ id: string }> {
   const [row] = await tx
     .insert(machines)
     .values({
+      orgId: input.orgId,
       userId: input.userId,
       name: input.name,
       os: input.os,
@@ -54,7 +60,12 @@ export async function recordHeartbeat(
   },
 ): Promise<void> {
   const now = hb.now ?? new Date();
-  await db
+  // M15 15.1: the org is the machine's own (`machines.org_id` is the authority), and it
+  // comes back from the UPDATE this function already runs — no extra round trip on a
+  // ~30 s-cadence path. An empty result IS the unknown-machine guard, and it fires
+  // before any heartbeat row is written. Deriving here (rather than taking a param)
+  // keeps the signature and every call site intact.
+  const [updated] = await db
     .update(machines)
     .set({
       lastHeartbeatAt: now,
@@ -63,9 +74,12 @@ export async function recordHeartbeat(
       collectorVersion: hb.collectorVersion,
       consecutiveSyncFailures: hb.consecutiveSyncFailures ?? null,
     })
-    .where(eq(machines.id, machineId));
+    .where(eq(machines.id, machineId))
+    .returning({ orgId: machines.orgId });
+  if (!updated) throw new Error(`unknown machine ${machineId}`);
   // M10 3c: append the time-series sample (trend source) + prune beyond retention.
   await db.insert(machineHeartbeats).values({
+    orgId: updated.orgId,
     machineId,
     ts: now,
     queuePending: hb.queuePending,
@@ -96,4 +110,23 @@ export async function getMachineUserId(
     .where(eq(machines.id, machineId))
     .limit(1);
   return row?.userId;
+}
+
+/**
+ * Resolve the owning ORG for a machine (M15 15.1). Returns undefined for an unknown
+ * machine id. THE seam for every machine-keyed write: `machines.org_id` is the
+ * authority (a machine belongs to exactly one org and cannot change orgs), so
+ * repositories derive from here instead of trusting a caller-supplied org — which
+ * makes "the caller passed the wrong org" structurally unrepresentable.
+ */
+export async function getMachineOrgId(
+  db: DbClient,
+  machineId: string,
+): Promise<string | undefined> {
+  const [row] = await db
+    .select({ orgId: machines.orgId })
+    .from(machines)
+    .where(eq(machines.id, machineId))
+    .limit(1);
+  return row?.orgId;
 }

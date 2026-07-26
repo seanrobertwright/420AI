@@ -11,12 +11,14 @@ import {
   resolveWorkspaceId,
   projectEventSummary,
 } from "./workspaces.js";
+import { ensurePersonalOrg } from "./organizations.js";
 
 const TEST_URL = process.env.DATABASE_URL_TEST;
 const REMOTE = "https://github.com/seanrobertwright/420AI.git";
 
 describe.skipIf(!TEST_URL)("workspaces + projects repositories (integration)", () => {
   let dbh: ReturnType<typeof createDb>;
+  let orgId: string;
   let userId: string;
   let machineId: string;
 
@@ -30,16 +32,17 @@ describe.skipIf(!TEST_URL)("workspaces + projects repositories (integration)", (
 
   beforeEach(async () => {
     await dbh.db.execute(
-      sql`TRUNCATE workspace_keys, workspaces, projects, raw_source_records, events, ingest_tokens, pairing_codes, machines, users RESTART IDENTITY CASCADE`,
+      sql`TRUNCATE workspace_keys, workspaces, projects, raw_source_records, events, ingest_tokens, pairing_codes, machines, memberships, organizations, users RESTART IDENTITY CASCADE`,
     );
     const [u] = await dbh.db
       .insert(users)
       .values({ email: "test@example.com" })
       .returning({ id: users.id });
     userId = u!.id;
+    orgId = await ensurePersonalOrg(dbh.db, userId, "test@example.com");
     const [m] = await dbh.db
       .insert(machines)
-      .values({ userId, name: "test-machine" })
+      .values({ orgId, userId, name: "test-machine" })
       .returning({ id: machines.id });
     machineId = m!.id;
   });
@@ -153,6 +156,7 @@ describe.skipIf(!TEST_URL)("workspaces + projects repositories (integration)", (
     await dbh.db.insert(events).values([
       {
         fingerprint: "g1",
+        orgId,
         sourceConnector: "gemini-cli",
         parserVersion: "1.0.0",
         rawRecordId: "r1",
@@ -164,6 +168,7 @@ describe.skipIf(!TEST_URL)("workspaces + projects repositories (integration)", (
       },
       {
         fingerprint: "g2",
+        orgId,
         sourceConnector: "gemini-cli",
         parserVersion: "1.0.0",
         rawRecordId: "r2",
@@ -195,6 +200,7 @@ describe.skipIf(!TEST_URL)("workspaces + projects repositories (integration)", (
     const { id: projectId } = await createProject(dbh.db, userId, "lonely");
     await dbh.db.insert(events).values({
       fingerprint: "x1",
+      orgId,
       sourceConnector: "claude-code",
       parserVersion: "2.0.0",
       rawRecordId: "r1",

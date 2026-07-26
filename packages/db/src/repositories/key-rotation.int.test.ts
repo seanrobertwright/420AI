@@ -4,6 +4,7 @@ import { randomBytes } from "node:crypto";
 import { createDb, ingestBatch, reencryptAll, decryptField } from "../index.js";
 import { users, machines, rawSourceRecords } from "../schema.js";
 import type { IngestBatch } from "@420ai/shared";
+import { ensurePersonalOrg } from "./organizations.js";
 
 const TEST_URL = process.env.DATABASE_URL_TEST;
 const K1 = randomBytes(32).toString("base64"); // "legacy" key
@@ -39,6 +40,7 @@ function makeBatch(): IngestBatch {
 
 describe.skipIf(!TEST_URL)("key rotation (reencryptAll, integration)", () => {
   let dbh: ReturnType<typeof createDb>;
+  let orgId: string;
   let machineId: string;
   // Save/restore the crypto env around each case so it can't leak into other suites.
   let saved: { keys?: string; active?: string; single?: string };
@@ -58,15 +60,16 @@ describe.skipIf(!TEST_URL)("key rotation (reencryptAll, integration)", () => {
       single: process.env.ARCHIVE_ENCRYPTION_KEY,
     };
     await dbh.db.execute(
-      sql`TRUNCATE raw_source_records, events, ingest_tokens, pairing_codes, machines, users RESTART IDENTITY CASCADE`,
+      sql`TRUNCATE raw_source_records, events, ingest_tokens, pairing_codes, machines, memberships, organizations, users RESTART IDENTITY CASCADE`,
     );
     const [u] = await dbh.db
       .insert(users)
       .values({ email: "rot@example.com" })
       .returning({ id: users.id });
+    orgId = await ensurePersonalOrg(dbh.db, u!.id, "rot@example.com");
     const [m] = await dbh.db
       .insert(machines)
-      .values({ userId: u!.id, name: "rot-machine" })
+      .values({ orgId, userId: u!.id, name: "rot-machine" })
       .returning({ id: machines.id });
     machineId = m!.id;
   });

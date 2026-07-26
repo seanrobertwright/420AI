@@ -5,6 +5,7 @@ import { createDb } from "../index.js";
 import { users, machines, events, machineHeartbeats } from "../schema.js";
 import { recordHeartbeat } from "./machines.js";
 import { machineStatuses, activeSessions, recentBacklogSamples } from "./monitor.js";
+import { ensurePersonalOrg } from "./organizations.js";
 
 const TEST_URL = process.env.DATABASE_URL_TEST;
 const SESSION = "sess-monitor-1";
@@ -14,6 +15,7 @@ const LAST_EVENT = "2026-06-14T12:00:00.000Z";
 
 describe.skipIf(!TEST_URL)("monitor repository (integration)", () => {
   let dbh: ReturnType<typeof createDb>;
+  let orgId: string;
   let userId: string;
   let machineId: string;
 
@@ -27,16 +29,17 @@ describe.skipIf(!TEST_URL)("monitor repository (integration)", () => {
 
   beforeEach(async () => {
     await dbh.db.execute(
-      sql`TRUNCATE machine_heartbeats, workspace_keys, workspaces, projects, raw_source_records, events, ingest_tokens, pairing_codes, machines, users RESTART IDENTITY CASCADE`,
+      sql`TRUNCATE machine_heartbeats, workspace_keys, workspaces, projects, raw_source_records, events, ingest_tokens, pairing_codes, machines, memberships, organizations, users RESTART IDENTITY CASCADE`,
     );
     const [u] = await dbh.db
       .insert(users)
       .values({ email: "test@example.com" })
       .returning({ id: users.id });
     userId = u!.id;
+    orgId = await ensurePersonalOrg(dbh.db, userId, "test@example.com");
     const [m] = await dbh.db
       .insert(machines)
-      .values({ userId, name: "laptop", os: "win32", hostname: "host-1" })
+      .values({ orgId, userId, name: "laptop", os: "win32", hostname: "host-1" })
       .returning({ id: machines.id });
     machineId = m!.id;
   });
@@ -46,6 +49,7 @@ describe.skipIf(!TEST_URL)("monitor repository (integration)", () => {
     await dbh.db.insert(events).values([
       {
         fingerprint: "mon-u1",
+        orgId,
         sourceConnector: "claude-code",
         parserVersion: "2.0.0",
         rawRecordId: "r1",
@@ -60,6 +64,7 @@ describe.skipIf(!TEST_URL)("monitor repository (integration)", () => {
       },
       {
         fingerprint: "mon-m1",
+        orgId,
         sourceConnector: "claude-code",
         parserVersion: "2.0.0",
         rawRecordId: "r2",
@@ -140,6 +145,7 @@ describe.skipIf(!TEST_URL)("monitor repository (integration)", () => {
       .insert(users)
       .values({ email: "other@example.com" })
       .returning({ id: users.id });
+    await ensurePersonalOrg(dbh.db, u2!.id, "other@example.com");
     const other = await activeSessions(dbh.db, u2!.id, "2026-06-14T11:45:00.000Z");
     expect(other).toEqual([]);
   });
@@ -210,6 +216,7 @@ describe.skipIf(!TEST_URL)("monitor repository (integration)", () => {
       .insert(users)
       .values({ email: "other@example.com" })
       .returning({ id: users.id });
+    await ensurePersonalOrg(dbh.db, u2!.id, "other@example.com");
     const other = await recentBacklogSamples(dbh.db, u2!.id, since);
     expect(other.get(machineId)).toBeUndefined();
   });
@@ -218,6 +225,7 @@ describe.skipIf(!TEST_URL)("monitor repository (integration)", () => {
     // Insert an OLD sample directly (well beyond the 24h retention window).
     const old = new Date(NOW.getTime() - 48 * 60 * 60_000);
     await dbh.db.insert(machineHeartbeats).values({
+      orgId,
       machineId,
       ts: old,
       queuePending: 1,
