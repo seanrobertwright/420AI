@@ -56,6 +56,8 @@ const SESSION_BODY_MAX_CHARS = 48000;
 
 /** A doc to (re-)materialize. `title`/`body` are ALREADY redacted by the caller. */
 interface DocInput {
+  /** M15 15.1 tenancy — LEADS the `search_documents_entity` unique index (audit B.1). */
+  orgId: string;
   userId: string;
   entityType: SearchEntityType;
   entityId: string;
@@ -67,15 +69,22 @@ interface DocInput {
 }
 
 /**
- * Upsert one document on the `(entity_type, entity_id)` unique index. After the
- * wholesale delete a plain insert would suffice, but the upsert keeps the rebuild
+ * Upsert one document on the `(org_id, entity_type, entity_id)` unique index. After
+ * the wholesale delete a plain insert would suffice, but the upsert keeps the rebuild
  * idempotent even if an entity somehow appears twice — and NEVER touches
  * `search_vector` (GENERATED; an explicit write errors).
+ *
+ * M15 15.1: the conflict target MUST match `search_documents_entity`'s column list
+ * exactly — a mismatch makes Postgres raise "there is no unique or exclusion
+ * constraint matching the ON CONFLICT specification" on EVERY index write. `orgId` is
+ * absent from `set:` for the same D-M15-2 reason as in `ingest.ts`: it is part of the
+ * key, so a conflicting row is already the same org and rewriting it is meaningless.
  */
 async function upsertDoc(db: DbClient, doc: DocInput): Promise<void> {
   await db
     .insert(searchDocumentsTbl)
     .values({
+      orgId: doc.orgId,
       userId: doc.userId,
       entityType: doc.entityType,
       entityId: doc.entityId,
@@ -86,7 +95,11 @@ async function upsertDoc(db: DbClient, doc: DocInput): Promise<void> {
       redactionVersion: REDACTION_VERSION,
     })
     .onConflictDoUpdate({
-      target: [searchDocumentsTbl.entityType, searchDocumentsTbl.entityId],
+      target: [
+        searchDocumentsTbl.orgId,
+        searchDocumentsTbl.entityType,
+        searchDocumentsTbl.entityId,
+      ],
       set: {
         userId: doc.userId,
         projectId: doc.projectId,
@@ -106,12 +119,14 @@ async function upsertDoc(db: DbClient, doc: DocInput): Promise<void> {
  */
 function reportDoc(r: {
   id: string;
+  orgId: string;
   userId: string;
   projectId: string | null;
   reportType: string;
   markdown: string;
 }): DocInput {
   return {
+    orgId: r.orgId,
     userId: r.userId,
     entityType: "report",
     entityId: r.id,
@@ -127,11 +142,12 @@ function reportDoc(r: {
  * leak home-dir usernames → redact). entityId = projectId = the project uuid.
  */
 function projectDoc(
-  p: { id: string; userId: string; name: string; gitRemote: string | null },
+  p: { id: string; orgId: string; userId: string; name: string; gitRemote: string | null },
   rootPaths: string[],
 ): DocInput {
   const parts = [p.name, p.gitRemote, ...rootPaths].filter((s): s is string => Boolean(s));
   return {
+    orgId: p.orgId,
     userId: p.userId,
     entityType: "project",
     entityId: p.id,
@@ -142,11 +158,16 @@ function projectDoc(
   };
 }
 
-/** Session meta: the identity row the doc build needs, one per distinct sessionId. */
+/**
+ * Session meta: the identity row the doc build needs, one per distinct
+ * (org, sessionId) — M15 15.1 made the ORG part of that identity.
+ */
 interface SessionMetaRow {
   sessionId: string;
   sourceConnector: string;
   userId: string;
+  /** M15 15.1 — a GROUP BY key, not an aggregate. Scopes every content read below. */
+  orgId: string;
 }
 
 /**
@@ -179,9 +200,13 @@ const INDEXED_EVENT_TYPES = [
  * 14.4). Text comes from the SAME `events ⋈ raw_source_records` join as
  * `transcript.ts` (`events.payload` is NULL for `message.*`), decrypted then
  * `redact()`-ed PER EVENT — the §18 gate applies here exactly as it does for the
- * session doc. `entityId` = the event's fingerprint (globally unique — the
- * `(entity_type, entity_id)` upsert target needs no change). Returns the number of
- * event docs upserted.
+ * session doc. `entityId` = the event's fingerprint. Returns the number of event docs
+ * upserted.
+ *
+ * M15 15.1: scoped by `s.orgId`. A session id is connector-supplied and therefore
+ * GLOBALLY scoped — two tenants can hold the same one — so an unscoped
+ * `where sessionId = …` would pull another org's rows into this org's documents.
+ * This is an index-BUILDER predicate (a write path), not a user-facing read filter.
  */
 async function indexSessionEvents(
   db: DbClient,
@@ -201,10 +226,15 @@ async function indexSessionEvents(
       and(
         eq(rawSourceRecords.sourceRecordId, events.rawRecordId),
         eq(rawSourceRecords.sessionId, events.sessionId),
+        eq(rawSourceRecords.orgId, s.orgId),
       ),
     )
     .where(
-      and(eq(events.sessionId, s.sessionId), inArray(events.eventType, [...INDEXED_EVENT_TYPES])),
+      and(
+        eq(events.orgId, s.orgId),
+        eq(events.sessionId, s.sessionId),
+        inArray(events.eventType, [...INDEXED_EVENT_TYPES]),
+      ),
     )
     .orderBy(asc(events.ts))
     .limit(MAX_EVENT_DOCS_PER_SESSION);
@@ -216,6 +246,7 @@ async function indexSessionEvents(
     const body = plaintext.slice(0, EVENT_BODY_MAX_CHARS);
     // §18 gate: redact the decrypted event body BEFORE storing it.
     await upsertDoc(db, {
+      orgId: s.orgId,
       userId: s.userId,
       entityType: "event",
       entityId: row.fingerprint,
@@ -241,9 +272,15 @@ async function indexOneSession(db: DbClient, s: SessionMetaRow): Promise<number>
   const [attr] = await db
     .select({ projectId: workspaces.projectId })
     .from(events)
-    .innerJoin(workspaceKeys, eq(events.projectPath, workspaceKeys.projectKey))
+    .innerJoin(
+      workspaceKeys,
+      and(
+        eq(events.projectPath, workspaceKeys.projectKey),
+        eq(workspaceKeys.orgId, s.orgId), // M15 15.1: never attribute across tenants
+      ),
+    )
     .innerJoin(workspaces, eq(workspaces.id, workspaceKeys.workspaceId))
-    .where(eq(events.sessionId, s.sessionId))
+    .where(and(eq(events.orgId, s.orgId), eq(events.sessionId, s.sessionId)))
     .limit(1);
   const projectId = attr?.projectId ?? null;
 
@@ -255,7 +292,7 @@ async function indexOneSession(db: DbClient, s: SessionMetaRow): Promise<number>
       tag: rawSourceRecords.payloadTag,
     })
     .from(rawSourceRecords)
-    .where(eq(rawSourceRecords.sessionId, s.sessionId))
+    .where(and(eq(rawSourceRecords.orgId, s.orgId), eq(rawSourceRecords.sessionId, s.sessionId)))
     .orderBy(asc(rawSourceRecords.ingestedAt));
 
   let combined = "";
@@ -271,6 +308,7 @@ async function indexOneSession(db: DbClient, s: SessionMetaRow): Promise<number>
 
   // §18 gate: redact the decrypted concatenation BEFORE storing it.
   await upsertDoc(db, {
+    orgId: s.orgId,
     userId: s.userId,
     entityType: "session",
     entityId: s.sessionId,
@@ -292,11 +330,16 @@ const INDEX_SESSIONS_CHUNK = 500;
 
 /**
  * Incrementally (re-)index the given sessions (M13 13.4; M14 14.4 adds per-event
- * docs). One session doc per distinct sessionId — `min()` aggregates pick a
- * representative connector/user so the result is EXACTLY one row per session (the
- * (entity_type, entity_id) unique index forbids two). Unknown session ids (no raw
- * records yet) are skipped. Returns the number of session docs and event docs
- * upserted.
+ * docs). One session doc per distinct (ORG, sessionId) — `min()` picks a
+ * representative connector/user within that group. Unknown session ids (no raw records
+ * yet) are skipped. Returns the number of session docs and event docs upserted.
+ *
+ * M15 15.1: the group key is `(org_id, session_id)`, NOT `session_id` alone. A session
+ * id is connector-supplied and globally scoped, so two tenants can legitimately hold
+ * the same one; grouping by it alone collapsed them into a single document owned by
+ * `min(org_id)` whose body concatenated BOTH orgs' decrypted content. Grouping by org
+ * is what makes the org-scoped `search_documents_entity` index (audit B.1) actually
+ * reachable — the schema permitted two rows, but this builder could never emit them.
  */
 export async function indexSessions(
   db: DbClient,
@@ -310,13 +353,16 @@ export async function indexSessions(
     const sessionMeta = await db
       .select({
         sessionId: rawSourceRecords.sessionId,
+        // A real GROUP BY column, not an aggregate — the org IS part of the identity of
+        // a session document, so it must never be collapsed away by min().
+        orgId: rawSourceRecords.orgId,
         sourceConnector: sql<string>`min(${rawSourceRecords.sourceConnector})`,
         userId: sql<string>`min(${machines.userId}::text)`,
       })
       .from(rawSourceRecords)
       .innerJoin(machines, eq(machines.id, rawSourceRecords.machineId))
       .where(inArray(rawSourceRecords.sessionId, ids.slice(i, i + INDEX_SESSIONS_CHUNK)))
-      .groupBy(rawSourceRecords.sessionId);
+      .groupBy(rawSourceRecords.orgId, rawSourceRecords.sessionId);
 
     for (const s of sessionMeta) {
       eventsIndexed += await indexOneSession(db, s);
@@ -334,6 +380,7 @@ export async function indexProjectDoc(db: DbClient, projectId: string): Promise<
   const [p] = await db
     .select({
       id: projects.id,
+      orgId: projects.orgId,
       userId: projects.userId,
       name: projects.name,
       gitRemote: projects.gitRemote,
@@ -363,6 +410,7 @@ export async function indexReportDoc(db: DbClient, reportId: string): Promise<vo
   const [r] = await db
     .select({
       id: reportArtifacts.id,
+      orgId: reportArtifacts.orgId,
       userId: reportArtifacts.userId,
       projectId: reportArtifacts.projectId,
       reportType: reportArtifacts.reportType,
@@ -396,6 +444,7 @@ export async function rebuildSearchIndex(db: DbClient): Promise<ReindexCounts> {
     const reportRows = await tx
       .select({
         id: reportArtifacts.id,
+        orgId: reportArtifacts.orgId,
         userId: reportArtifacts.userId,
         projectId: reportArtifacts.projectId,
         reportType: reportArtifacts.reportType,
@@ -411,6 +460,7 @@ export async function rebuildSearchIndex(db: DbClient): Promise<ReindexCounts> {
     const projectRows = await tx
       .select({
         id: projects.id,
+        orgId: projects.orgId,
         userId: projects.userId,
         name: projects.name,
         gitRemote: projects.gitRemote,

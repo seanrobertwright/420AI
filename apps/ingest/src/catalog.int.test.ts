@@ -106,7 +106,7 @@ describe.skipIf(!TEST_URL)("catalog API (HTTP e2e via inject) — M10 3d", () =>
 
   beforeEach(async () => {
     await dbh.db.execute(
-      sql`TRUNCATE pricing_catalogs, alert_firings, machine_heartbeats, workspace_keys, workspaces, projects, raw_source_records, events, ingest_tokens, pairing_codes, machines, users RESTART IDENTITY CASCADE`,
+      sql`TRUNCATE pricing_catalogs, alert_firings, machine_heartbeats, workspace_keys, workspaces, projects, raw_source_records, events, ingest_tokens, pairing_codes, machines, memberships, organizations, users RESTART IDENTITY CASCADE`,
     );
   });
 

@@ -7,6 +7,7 @@ import { createDb, createPairingCode } from "@420ai/db";
 import { users } from "@420ai/db";
 import { buildApp } from "../../ingest/src/app.js";
 import { runPair, runPush } from "./cli.js";
+import { ensurePersonalOrg } from "@420ai/db";
 
 const TEST_URL = process.env.DATABASE_URL_TEST;
 const FIXTURE = fileURLToPath(new URL("./fixtures/sample-session.jsonl", import.meta.url));
@@ -36,7 +37,7 @@ describe.skipIf(!TEST_URL)("collector push (real-socket e2e)", () => {
 
   beforeEach(async () => {
     await dbh.db.execute(
-      sql`TRUNCATE raw_source_records, events, ingest_tokens, pairing_codes, machines, users RESTART IDENTITY CASCADE`,
+      sql`TRUNCATE raw_source_records, events, ingest_tokens, pairing_codes, machines, memberships, organizations, users RESTART IDENTITY CASCADE`,
     );
   });
 
@@ -45,6 +46,7 @@ describe.skipIf(!TEST_URL)("collector push (real-socket e2e)", () => {
       .insert(users)
       .values({ email: "test@example.com" })
       .returning({ id: users.id });
+    await ensurePersonalOrg(dbh.db, u!.id, "test@example.com");
     const { code } = await createPairingCode(dbh.db, u!.id);
 
     const { token } = await runPair({ url: baseUrl, code, name: "win-test", persist: false });

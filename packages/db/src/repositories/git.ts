@@ -3,6 +3,7 @@ import type { GitCaptureRequest, GitCommitRow, GitFileChange } from "@420ai/shar
 import type { Db, DbClient } from "../client.js";
 import { encryptField } from "../crypto.js";
 import { gitCommitFiles, gitCommits, machines, workspaceKeys, workspaces } from "../schema.js";
+import { getMachineOrgId } from "./machines.js";
 
 /**
  * Git-outcome repository (M10, PRD §11.3 / §18.1 / §23). Mirrors `ingest.ts`:
@@ -29,6 +30,11 @@ export async function recordGitCommits(
   req: GitCaptureRequest,
 ): Promise<{ commitsInserted: number }> {
   return db.transaction(async (tx) => {
+    // M15 15.1: derived once from `machines.org_id`; the file rows below reuse it —
+    // a file row's org IS its parent commit's org by construction.
+    const orgId = await getMachineOrgId(tx, machineId);
+    if (!orgId) throw new Error(`unknown machine ${machineId}`);
+
     let commitsInserted = 0;
     for (const c of req.commits) {
       // Empty body is normal (a commit with no `%b`) → store NULL, not an encrypted "".
@@ -36,6 +42,7 @@ export async function recordGitCommits(
       const inserted = await tx
         .insert(gitCommits)
         .values({
+          orgId,
           machineId,
           commitSha: c.commitSha,
           repoRootPath: c.repoRootPath,
@@ -61,6 +68,7 @@ export async function recordGitCommits(
       if (c.files.length > 0) {
         await tx.insert(gitCommitFiles).values(
           c.files.map((f) => ({
+            orgId,
             commitId,
             filePath: f.path,
             status: f.status,

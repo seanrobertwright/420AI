@@ -16,6 +16,7 @@ import {
   workspaceKeys,
   workspaces,
 } from "../schema.js";
+import { getOrgIdForUser } from "./organizations.js";
 import { resolveWorkspaceId } from "./workspaces.js";
 
 /**
@@ -211,6 +212,10 @@ export async function computeSessionGitSuggestions(
 
   if (candidates.length === 0) return listSessionLinks(db, userId, sessionId);
 
+  // M15 15.1: superseded by the 15.2 request principal. Resolved once, AFTER the
+  // early return — the no-candidates path stays a pure read.
+  const orgId = await getOrgIdForUser(db, userId);
+
   const sessionPaths = await sessionModifiedPaths(db, sessionId);
 
   // Fetch all candidate commits' files in one query, grouped by commit.
@@ -241,6 +246,7 @@ export async function computeSessionGitSuggestions(
     await db
       .insert(sessionGitLinks)
       .values({
+        orgId,
         userId,
         sessionId,
         commitId: c.id,
@@ -283,9 +289,12 @@ export async function addManualLink(
   commitId: string,
   projectId: string | null,
 ): Promise<void> {
+  // M15 15.1: superseded by the 15.2 request principal.
+  const orgId = await getOrgIdForUser(db, userId);
   await db
     .insert(sessionGitLinks)
     .values({
+      orgId,
       userId,
       sessionId,
       commitId,

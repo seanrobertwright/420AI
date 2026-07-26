@@ -6,6 +6,7 @@ import { users, machines } from "../schema.js";
 import { findOrCreateProjectByRemote } from "./projects.js";
 import { upsertWorkspace, addWorkspaceKey, remapWorkspace } from "./workspaces.js";
 import { recordGitCommits, gitCommitsByProject, gitCommitDetail } from "./git.js";
+import { ensurePersonalOrg } from "./organizations.js";
 
 const TEST_URL = process.env.DATABASE_URL_TEST;
 const REMOTE = "https://github.com/seanrobertwright/420AI.git";
@@ -39,6 +40,7 @@ function sampleReq(sha = "sha1"): GitCaptureRequest {
 
 describe.skipIf(!TEST_URL)("git repository (integration)", () => {
   let dbh: ReturnType<typeof createDb>;
+  let orgId: string;
   let userId: string;
   let machineId: string;
 
@@ -52,16 +54,17 @@ describe.skipIf(!TEST_URL)("git repository (integration)", () => {
 
   beforeEach(async () => {
     await dbh.db.execute(
-      sql`TRUNCATE session_git_links, git_commit_files, git_commits, workspace_keys, workspaces, projects, raw_source_records, events, ingest_tokens, pairing_codes, machines, users RESTART IDENTITY CASCADE`,
+      sql`TRUNCATE session_git_links, git_commit_files, git_commits, workspace_keys, workspaces, projects, raw_source_records, events, ingest_tokens, pairing_codes, machines, memberships, organizations, users RESTART IDENTITY CASCADE`,
     );
     const [u] = await dbh.db
       .insert(users)
       .values({ email: "test@example.com" })
       .returning({ id: users.id });
     userId = u!.id;
+    orgId = await ensurePersonalOrg(dbh.db, userId, "test@example.com");
     const [m] = await dbh.db
       .insert(machines)
-      .values({ userId, name: "test-machine" })
+      .values({ orgId, userId, name: "test-machine" })
       .returning({ id: machines.id });
     machineId = m!.id;
   });
@@ -118,6 +121,7 @@ describe.skipIf(!TEST_URL)("git repository (integration)", () => {
       .insert(users)
       .values({ email: "other@example.com" })
       .returning({ id: users.id });
+    await ensurePersonalOrg(dbh.db, other!.id, "other@example.com");
     const miss = await gitCommitDetail(dbh.db, other!.id, "detailsha");
     expect(miss).toBeUndefined();
   });

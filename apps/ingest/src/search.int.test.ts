@@ -71,7 +71,7 @@ describe.skipIf(!TEST_URL)("incremental search + list pagination (M13 13.4, HTTP
 
   beforeEach(async () => {
     await dbh.db.execute(
-      sql`TRUNCATE search_documents, report_artifacts, workspace_keys, workspaces, projects, raw_source_records, events, ingest_tokens, pairing_codes, machines, users RESTART IDENTITY CASCADE`,
+      sql`TRUNCATE search_documents, report_artifacts, workspace_keys, workspaces, projects, raw_source_records, events, ingest_tokens, pairing_codes, machines, memberships, organizations, users RESTART IDENTITY CASCADE`,
     );
   });
 

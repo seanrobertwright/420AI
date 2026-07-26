@@ -99,6 +99,13 @@
       "when": 1784494007863,
       "tag": "0013_married_tarot",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1785083375026,
+      "tag": "0014_loose_pyro",
+      "breakpoints": true
     }
   ]
 }

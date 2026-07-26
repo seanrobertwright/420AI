@@ -14,6 +14,7 @@ import {
   searchDocuments as searchDocumentsTbl,
 } from "../schema.js";
 import type { IngestBatch } from "@420ai/shared";
+import { ensurePersonalOrg } from "./organizations.js";
 
 const TEST_URL = process.env.DATABASE_URL_TEST;
 
@@ -85,6 +86,7 @@ function makeBatch(): IngestBatch {
 
 describe.skipIf(!TEST_URL)("search repository (integration)", () => {
   let dbh: ReturnType<typeof createDb>;
+  let orgId: string;
   let userId: string;
   let machineId: string;
   let projectId: string;
@@ -99,16 +101,17 @@ describe.skipIf(!TEST_URL)("search repository (integration)", () => {
 
   beforeEach(async () => {
     await dbh.db.execute(
-      sql`TRUNCATE search_documents, workspace_keys, workspaces, projects, report_artifacts, raw_source_records, events, ingest_tokens, pairing_codes, machines, users RESTART IDENTITY CASCADE`,
+      sql`TRUNCATE search_documents, workspace_keys, workspaces, projects, report_artifacts, raw_source_records, events, ingest_tokens, pairing_codes, machines, memberships, organizations, users RESTART IDENTITY CASCADE`,
     );
     const [u] = await dbh.db
       .insert(users)
       .values({ email: "test@example.com" })
       .returning({ id: users.id });
     userId = u!.id;
+    orgId = await ensurePersonalOrg(dbh.db, userId, "test@example.com");
     const [m] = await dbh.db
       .insert(machines)
-      .values({ userId, name: "test-machine" })
+      .values({ orgId, userId, name: "test-machine" })
       .returning({ id: machines.id });
     machineId = m!.id;
 
@@ -117,6 +120,7 @@ describe.skipIf(!TEST_URL)("search repository (integration)", () => {
     const proj = await findOrCreateProjectByRemote(dbh.db, userId, REMOTE, PROJECT_NAME);
     projectId = proj.id;
     await dbh.db.insert(reportArtifacts).values({
+      orgId,
       userId,
       projectId,
       reportType: "project.cost_over_time",

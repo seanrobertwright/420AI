@@ -10,6 +10,7 @@ import {
 } from "@420ai/shared";
 import type { DbClient } from "../client.js";
 import { alertFirings } from "../schema.js";
+import { getOrgIdForUser } from "./organizations.js";
 
 /**
  * M10 3c persisted Alert-Firing repository (PRD §20). A DIRECT clone of the
@@ -104,28 +105,37 @@ export async function reconcileAlertFirings(
   now: Date,
 ): Promise<AlertFiring[]> {
   const keys = alerts.map(alertKey);
-  for (const a of alerts) {
-    await db
-      .insert(alertFirings)
-      .values({
-        userId,
-        alertKey: alertKey(a),
-        code: a.code,
-        severity: a.severity,
-        message: a.message,
-        machineId: a.machineId ?? null,
-        machineName: a.machineName ?? null,
-        connector: a.connector ?? null,
-        since: a.since,
-        status: "open",
-        firstFiredAt: now,
-        lastSeenAt: now,
-      })
-      .onConflictDoUpdate({
-        target: [alertFirings.userId, alertFirings.alertKey],
-        targetWhere: sql`${alertFirings.status} = 'open'`,
-        set: { lastSeenAt: now, message: a.message, severity: a.severity, since: a.since },
-      });
+  if (alerts.length > 0) {
+    // M15 15.1: superseded by the 15.2 request principal. Resolved once, and ONLY when
+    // there is something to insert — this reconcile runs on every monitor read, and the
+    // zero-alert path must stay a pure read (no extra query, nothing that can throw).
+    const orgId = await getOrgIdForUser(db, userId);
+    for (const a of alerts) {
+      await db
+        .insert(alertFirings)
+        .values({
+          orgId,
+          userId,
+          alertKey: alertKey(a),
+          code: a.code,
+          severity: a.severity,
+          message: a.message,
+          machineId: a.machineId ?? null,
+          machineName: a.machineName ?? null,
+          connector: a.connector ?? null,
+          since: a.since,
+          status: "open",
+          firstFiredAt: now,
+          lastSeenAt: now,
+        })
+        .onConflictDoUpdate({
+          target: [alertFirings.userId, alertFirings.alertKey],
+          targetWhere: sql`${alertFirings.status} = 'open'`,
+          // M15 15.1: `orgId` is absent here for the same reason as in ingest.ts —
+          // an existing open firing keeps the org it was opened under.
+          set: { lastSeenAt: now, message: a.message, severity: a.severity, since: a.since },
+        });
+    }
   }
   // Resolve open firings whose condition is no longer derived (zero alerts → resolve all, D5).
   await db

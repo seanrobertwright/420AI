@@ -3,6 +3,7 @@ import { computeCost } from "@420ai/shared";
 import type { Db } from "../client.js";
 import { encryptField } from "../crypto.js";
 import { events, rawSourceRecords } from "../schema.js";
+import { getMachineOrgId } from "./machines.js";
 
 /**
  * Persist a batch idempotently, encrypting sensitive payloads at the write
@@ -14,6 +15,10 @@ import { events, rawSourceRecords } from "../schema.js";
  *   fingerprint dedups the same logical event across machines.
  *
  * Wrapped in one transaction so a partial batch never lands.
+ *
+ * M15 15.1 tenancy: the org is DERIVED from `machines.org_id` inside the transaction
+ * (D-M15-1), never passed in — the signature is unchanged for all 25 call sites and
+ * an incorrect org is unrepresentable. See the D-M15-2 note on the conflict block.
  */
 export async function ingestBatch(
   db: Db,
@@ -28,12 +33,17 @@ export async function ingestBatch(
   repricing?: { version: string; rates: Record<string, ModelPricing> },
 ): Promise<IngestResponse> {
   return db.transaction(async (tx) => {
+    // M15 15.1: `machines.org_id` is the authority for every row this batch writes.
+    const orgId = await getMachineOrgId(tx, machineId);
+    if (!orgId) throw new Error(`unknown machine ${machineId}`);
+
     let recordsInserted = 0;
     for (const r of batch.records) {
       const enc = encryptField(r.payload);
       const inserted = await tx
         .insert(rawSourceRecords)
         .values({
+          orgId,
           machineId,
           sourceConnector: r.sourceConnector,
           sessionId: r.sessionId,
@@ -70,6 +80,7 @@ export async function ingestBatch(
         .insert(events)
         .values({
           fingerprint: e.fingerprint,
+          orgId,
           sourceConnector: e.sourceConnector,
           parserVersion: e.parserVersion,
           catalogVersion,
@@ -91,6 +102,13 @@ export async function ingestBatch(
         .onConflictDoUpdate({
           target: events.fingerprint,
           set: {
+            // M15 15.1 / D-M15-2: `orgId` is DELIBERATELY ABSENT from this set block.
+            // The fingerprint is machine-independent, so the same logical event
+            // ingested from two machines converges to ONE row — and if those machines
+            // belonged to different orgs, including orgId here would silently flip an
+            // existing row's owner, i.e. a cross-tenant write. Omitting it means the
+            // FIRST writer's org wins and later ingests update only payload/parser/cost.
+            // Pinned by `tenancy.int.test.ts`.
             parserVersion: e.parserVersion,
             // §23 replay re-stamp: a re-ingest updates catalog_version alongside
             // parser_version (omit this and a replay silently leaves it stale). The

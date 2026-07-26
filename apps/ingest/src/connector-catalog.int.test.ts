@@ -79,7 +79,7 @@ describe.skipIf(!TEST_URL)("connector-catalog API (HTTP e2e via inject) — M12 
 
   beforeEach(async () => {
     await dbh.db.execute(
-      sql`TRUNCATE connector_catalogs, raw_source_records, events, ingest_tokens, pairing_codes, machines, users RESTART IDENTITY CASCADE`,
+      sql`TRUNCATE connector_catalogs, raw_source_records, events, ingest_tokens, pairing_codes, machines, memberships, organizations, users RESTART IDENTITY CASCADE`,
     );
   });
 

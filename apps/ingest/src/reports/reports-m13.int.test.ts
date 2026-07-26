@@ -256,7 +256,7 @@ describe.skipIf(!TEST_URL)("M13 13.2 project report types (HTTP e2e via inject)"
 
   beforeEach(async () => {
     await dbh.db.execute(
-      sql`TRUNCATE session_git_links, git_commit_files, git_commits, report_artifacts, workspace_keys, workspaces, projects, raw_source_records, events, ingest_tokens, pairing_codes, machines, users RESTART IDENTITY CASCADE`,
+      sql`TRUNCATE session_git_links, git_commit_files, git_commits, report_artifacts, workspace_keys, workspaces, projects, raw_source_records, events, ingest_tokens, pairing_codes, machines, memberships, organizations, users RESTART IDENTITY CASCADE`,
     );
   });
 

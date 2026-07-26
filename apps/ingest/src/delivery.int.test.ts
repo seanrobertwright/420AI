@@ -56,7 +56,7 @@ describe.skipIf(!TEST_URL)("alert delivery + new §20 conditions (HTTP e2e via i
   beforeEach(async () => {
     // ingest_auth_failures has NO FK, so the users-CASCADE won't clear it — TRUNCATE it explicitly.
     await dbh.db.execute(
-      sql`TRUNCATE alert_firings, ingest_auth_failures, machine_heartbeats, raw_source_records, events, ingest_tokens, pairing_codes, machines, users RESTART IDENTITY CASCADE`,
+      sql`TRUNCATE alert_firings, ingest_auth_failures, machine_heartbeats, raw_source_records, events, ingest_tokens, pairing_codes, machines, memberships, organizations, users RESTART IDENTITY CASCADE`,
     );
     deliverer.deliver.mockClear();
     delivered.length = 0;

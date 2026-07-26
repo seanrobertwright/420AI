@@ -1,6 +1,7 @@
 import { and, desc, eq, sql } from "drizzle-orm";
 import type { DbClient } from "../client.js";
 import { reportArtifacts } from "../schema.js";
+import { getOrgIdForUser } from "./organizations.js";
 
 /**
  * Report-artifact repository (M7, PRD §15/§23). Durable, VERSIONED report storage:
@@ -29,6 +30,29 @@ export interface ReportArtifactRow {
 }
 
 /**
+ * The columns a ReportArtifactRow is made of. EXPLICIT rather than `select()`/bare
+ * `returning()` so a new table column never silently widens the API — `GET /v1/reports`
+ * and `GET /v1/reports/:id` send these rows verbatim with no response schema to strip
+ * extras, so a bare select put M15's `org_id` on the wire. Keep == ReportArtifactRow.
+ */
+const reportArtifactRowColumns = {
+  id: reportArtifacts.id,
+  userId: reportArtifacts.userId,
+  projectId: reportArtifacts.projectId,
+  reportType: reportArtifacts.reportType,
+  scopeKind: reportArtifacts.scopeKind,
+  scopeId: reportArtifacts.scopeId,
+  version: reportArtifacts.version,
+  reportVersion: reportArtifacts.reportVersion,
+  catalogVersion: reportArtifacts.catalogVersion,
+  analysisVersion: reportArtifacts.analysisVersion,
+  params: reportArtifacts.params,
+  metrics: reportArtifacts.metrics,
+  markdown: reportArtifacts.markdown,
+  generatedAt: reportArtifacts.generatedAt,
+};
+
+/**
  * Insert a new artifact, bumping `version` per (userId, reportType, scopeId). The
  * max-version read and the insert run in ONE transaction; the
  * `report_artifacts_scope_version` unique index is the backstop if two generations
@@ -51,10 +75,12 @@ export async function insertReportArtifact(
         ),
       );
     const version = (prev?.v ?? 0) + 1;
+    // M15 15.1: superseded by the 15.2 request principal.
+    const orgId = await getOrgIdForUser(tx, a.userId);
     const [row] = await tx
       .insert(reportArtifacts)
-      .values({ ...a, version })
-      .returning();
+      .values({ ...a, orgId, version })
+      .returning(reportArtifactRowColumns);
     return row as ReportArtifactRow;
   });
 }
@@ -64,7 +90,11 @@ export async function getReportArtifact(
   db: DbClient,
   id: string,
 ): Promise<ReportArtifactRow | undefined> {
-  const [row] = await db.select().from(reportArtifacts).where(eq(reportArtifacts.id, id)).limit(1);
+  const [row] = await db
+    .select(reportArtifactRowColumns)
+    .from(reportArtifacts)
+    .where(eq(reportArtifacts.id, id))
+    .limit(1);
   return row as ReportArtifactRow | undefined;
 }
 
@@ -86,7 +116,7 @@ export async function listReportArtifacts(
   if (filter?.reportType) conditions.push(eq(reportArtifacts.reportType, filter.reportType));
   if (filter?.scopeId) conditions.push(eq(reportArtifacts.scopeId, filter.scopeId));
   const query = db
-    .select()
+    .select(reportArtifactRowColumns)
     .from(reportArtifacts)
     .where(and(...conditions))
     .orderBy(

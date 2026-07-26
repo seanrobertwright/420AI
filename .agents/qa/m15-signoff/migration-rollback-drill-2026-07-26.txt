@@ -1,0 +1,115 @@
+=== M15 15.1 migration + rollback drill (D-M15-13) — 2026-07-26T16:38:04Z ===
+
+--- 0. source archive size ---
+ events |  raw   | search_docs | users | machines 
+--------+--------+-------------+-------+----------
+ 413765 | 256085 |       30361 |     1 |        5
+(1 row)
+
+--- 1. CREATE DATABASE 420ai_drill TEMPLATE 420ai ---
+CREATE DATABASE
+
+real	0m19.485s
+user	0m0.030s
+sys	0m0.544s
+
+--- 2. UP: npm run db:migrate against the drill clone ---
+
+> 420ai@0.0.0 db:migrate
+> npm run -w @420ai/db db:migrate
+
+
+> @420ai/db@0.0.0 db:migrate
+> tsx src/migrate-cli.ts
+
+◇ injected env (8) from ..\..\.env // tip: ⌘ override existing { override: true }
+
+real	0m22.076s
+user	0m0.091s
+sys	0m0.637s
+
+--- 3. assertions after UP ---
+ ev_null | raw_null | sd_null | m_null | orgs | events 
+---------+----------+---------+--------+------+--------
+       0 |        0 |       0 |      0 |    1 | 413765
+(1 row)
+
+            name            | is_personal | role  | events 
+----------------------------+-------------+-------+--------
+ seanrobertwright@gmail.com | t           | owner | 413765
+(1 row)
+
+                                                      indexdef                                                       
+---------------------------------------------------------------------------------------------------------------------
+ CREATE UNIQUE INDEX search_documents_entity ON public.search_documents USING btree (org_id, entity_type, entity_id)
+(1 row)
+
+
+--- 4. DOWN: npm run db:rollback ---
+
+> 420ai@0.0.0 db:rollback
+> npm run -w @420ai/db db:rollback
+
+
+> @420ai/db@0.0.0 db:rollback
+> tsx src/rollback-cli.ts
+
+◇ injected env (8) from ..\..\.env // tip: ⌘ multiple files { path: ['.env.local', '.env'] }
+rolled back: 0014_loose_pyro
+
+real	0m8.779s
+user	0m0.215s
+sys	0m0.745s
+
+--- 5. assertions after DOWN (data intact, schema reverted) ---
+ events |  raw   | orgs_tbl | memberships_tbl 
+--------+--------+----------+-----------------
+ 413765 | 256085 |          | 
+(1 row)
+
+                                                  indexdef                                                   
+-------------------------------------------------------------------------------------------------------------
+ CREATE UNIQUE INDEX search_documents_entity ON public.search_documents USING btree (entity_type, entity_id)
+(1 row)
+
+ org_id_columns_remaining 
+--------------------------
+                        0
+(1 row)
+
+
+--- 6. RE-UP: npm run db:migrate again (cycle proven) ---
+
+> 420ai@0.0.0 db:migrate
+> npm run -w @420ai/db db:migrate
+
+
+> @420ai/db@0.0.0 db:migrate
+> tsx src/migrate-cli.ts
+
+◇ injected env (8) from ..\..\.env // tip: ⌁ auth for agents [www.vestauth.com]
+
+real	0m22.654s
+user	0m0.181s
+sys	0m0.120s
+ ev_null | orgs | events 
+---------+------+--------
+       0 |    1 | 413765
+(1 row)
+
+
+--- 7. teardown: DROP DATABASE 420ai_drill ---
+DROP DATABASE
+ dropped | drill_dbs 
+---------+-----------
+ t       |         0
+(1 row)
+
+
+=== RESULT: PASS ===
+up   ~22.1 s | down ~8.8 s | re-up ~22.7 s  (413,765 events / 256,085 raw / 30,361 search docs)
+after up:   ev_null=0 raw_null=0 sd_null=0 m_null=0 orgs=1 (personal, owner) events=413765
+            search_documents_entity = UNIQUE (org_id, entity_type, entity_id)
+after down: events=413765 raw=256085 intact; organizations/memberships gone;
+            0 org_id columns remain; index back to (entity_type, entity_id)
+after re-up: ev_null=0 orgs=1 events=413765

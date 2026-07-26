@@ -32,26 +32,43 @@ describe.skipIf(!TEST_URL)("migration rollback (rollbackLast, integration)", () 
     return Number(r.rows[0]!.n);
   }
 
-  /** Does search_documents carry the M14 14.4 `session_id` column (added by 0013)? */
-  async function sessionIdColumnExists(): Promise<boolean> {
+  /** Does `events` carry the M15 15.1 `org_id` column (added by 0014)? */
+  async function orgIdColumnExists(): Promise<boolean> {
     const r = await pool.query(
-      "select 1 from information_schema.columns where table_name = 'search_documents' and column_name = 'session_id'",
+      "select 1 from information_schema.columns where table_name = 'events' and column_name = 'org_id'",
     );
     return r.rowCount === 1;
   }
 
-  it("rolls back the latest migration (0013) and a re-migrate restores it", async () => {
-    expect(await trackedCount()).toBe(14);
-    expect(await sessionIdColumnExists()).toBe(true);
+  /** The column list of `search_documents_entity` — 0014 re-scopes it by org (audit B.1). */
+  async function searchEntityIndexColumns(): Promise<string> {
+    const r = await pool.query<{ indexdef: string }>(
+      "select indexdef from pg_indexes where indexname = 'search_documents_entity'",
+    );
+    return r.rows[0]?.indexdef ?? "";
+  }
+
+  it("rolls back the latest migration (0014) and a re-migrate restores it", async () => {
+    expect(await trackedCount()).toBe(15);
+    expect(await orgIdColumnExists()).toBe(true);
+    expect(await searchEntityIndexColumns()).toContain("(org_id, entity_type, entity_id)");
 
     const result = await rollbackLast(TEST_URL!, { downDir, journalPath });
-    expect(result).toEqual({ rolledBack: "0013_married_tarot" });
-    expect(await trackedCount()).toBe(13);
-    expect(await sessionIdColumnExists()).toBe(false); // down SQL dropped the column
-
-    // Re-apply: an idempotent re-migrate brings 0013 back + restores the tracking row.
-    await runMigrations(TEST_URL!);
+    expect(result).toEqual({ rolledBack: "0014_loose_pyro" });
     expect(await trackedCount()).toBe(14);
-    expect(await sessionIdColumnExists()).toBe(true);
+    // The down SQL dropped every org_id column and both new tables…
+    expect(await orgIdColumnExists()).toBe(false);
+    const orgTables = await pool.query(
+      "select 1 from information_schema.tables where table_name in ('organizations','memberships')",
+    );
+    expect(orgTables.rowCount).toBe(0);
+    // …and restored the globally-unique search index.
+    expect(await searchEntityIndexColumns()).toContain("(entity_type, entity_id)");
+
+    // Re-apply: an idempotent re-migrate brings 0014 back + restores the tracking row.
+    await runMigrations(TEST_URL!);
+    expect(await trackedCount()).toBe(15);
+    expect(await orgIdColumnExists()).toBe(true);
+    expect(await searchEntityIndexColumns()).toContain("(org_id, entity_type, entity_id)");
   });
 });

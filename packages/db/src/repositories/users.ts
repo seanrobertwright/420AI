@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import type { DbClient } from "../client.js";
 import { users } from "../schema.js";
+import { ensurePersonalOrg } from "./organizations.js";
 
 /**
  * User lookups for the single-user admin surface (M2/M5). The pairing flow
@@ -18,14 +19,21 @@ export async function findUserIdByEmail(db: DbClient, email: string): Promise<st
   return row?.id;
 }
 
-/** Find-or-create a user by email and return its id (idempotent). */
+/**
+ * Find-or-create a user by email and return its id (idempotent). M15 15.1: also
+ * ensures the user's personal organization exists, so the invariant "every user has
+ * at least one org" holds by construction for new users exactly as the 0014 backfill
+ * made it hold for history. `ensurePersonalOrg` is itself idempotent.
+ */
 export async function ensureUserByEmail(db: DbClient, email: string): Promise<string> {
   const [row] = await db
     .insert(users)
     .values({ email })
     .onConflictDoUpdate({ target: users.email, set: { email } })
     .returning({ id: users.id });
-  return row!.id;
+  const id = row!.id;
+  await ensurePersonalOrg(db, id, email);
+  return id;
 }
 
 /**
@@ -49,6 +57,10 @@ export async function findAdminCredential(
  * Find-or-create a user by email AND set its password hash, returning the id
  * (idempotent). The env-seed (server.ts) calls this on every boot so rotating
  * ADMIN_PASSWORD + restart re-seeds the hash. Mirrors ensureUserByEmail.
+ *
+ * M15 15.1: also ensures the personal org. Because this runs on EVERY boot,
+ * `ensurePersonalOrg`'s return-existing-first behavior is what stops a restart from
+ * minting a second org.
  */
 export async function setUserPassword(
   db: DbClient,
@@ -60,5 +72,7 @@ export async function setUserPassword(
     .values({ email, passwordHash })
     .onConflictDoUpdate({ target: users.email, set: { passwordHash } })
     .returning({ id: users.id });
-  return row!.id;
+  const id = row!.id;
+  await ensurePersonalOrg(db, id, email);
+  return id;
 }

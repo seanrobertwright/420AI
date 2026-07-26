@@ -18,6 +18,7 @@ import {
   type AnalysisProvider,
   type AnalysisRequest,
 } from "./analysis/provider.js";
+import { ensurePersonalOrg } from "@420ai/db";
 
 const TEST_URL = process.env.DATABASE_URL_TEST;
 const ADMIN = "test-admin";
@@ -142,6 +143,7 @@ function simulatedV1Batch(): IngestBatch {
 
 describe.skipIf(!TEST_URL)("POST /v1/replay/reparse (integration) — M13 13.3 / 12.5b", () => {
   let dbh: ReturnType<typeof createDb>;
+  let orgId: string;
   let app: FastifyInstance;
   let machineId: string;
 
@@ -163,15 +165,16 @@ describe.skipIf(!TEST_URL)("POST /v1/replay/reparse (integration) — M13 13.3 /
 
   beforeEach(async () => {
     await dbh.db.execute(
-      sql`TRUNCATE pricing_catalogs, raw_source_records, events, ingest_tokens, pairing_codes, machines, users RESTART IDENTITY CASCADE`,
+      sql`TRUNCATE pricing_catalogs, raw_source_records, events, ingest_tokens, pairing_codes, machines, memberships, organizations, users RESTART IDENTITY CASCADE`,
     );
     const [u] = await dbh.db
       .insert(users)
       .values({ email: "test@example.com" })
       .returning({ id: users.id });
+    orgId = await ensurePersonalOrg(dbh.db, u!.id, "test@example.com");
     const [m] = await dbh.db
       .insert(machines)
-      .values({ userId: u!.id, name: "test-machine" })
+      .values({ orgId, userId: u!.id, name: "test-machine" })
       .returning({ id: machines.id });
     machineId = m!.id;
   });

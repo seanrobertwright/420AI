@@ -13,6 +13,7 @@ import {
 import { users, machines } from "../schema.js";
 import type { ModelPricing } from "@420ai/shared";
 import type { IngestBatch } from "@420ai/shared";
+import { ensurePersonalOrg } from "./organizations.js";
 
 const TEST_URL = process.env.DATABASE_URL_TEST;
 
@@ -86,6 +87,7 @@ function costBatch(): IngestBatch {
 
 describe.skipIf(!TEST_URL)("pricing-catalogs repository (integration) — M10 3d", () => {
   let dbh: ReturnType<typeof createDb>;
+  let orgId: string;
   let machineId: string;
 
   beforeAll(() => {
@@ -98,15 +100,16 @@ describe.skipIf(!TEST_URL)("pricing-catalogs repository (integration) — M10 3d
 
   beforeEach(async () => {
     await dbh.db.execute(
-      sql`TRUNCATE pricing_catalogs, raw_source_records, events, ingest_tokens, pairing_codes, machines, users RESTART IDENTITY CASCADE`,
+      sql`TRUNCATE pricing_catalogs, raw_source_records, events, ingest_tokens, pairing_codes, machines, memberships, organizations, users RESTART IDENTITY CASCADE`,
     );
     const [u] = await dbh.db
       .insert(users)
       .values({ email: "test@example.com" })
       .returning({ id: users.id });
+    orgId = await ensurePersonalOrg(dbh.db, u!.id, "test@example.com");
     const [m] = await dbh.db
       .insert(machines)
-      .values({ userId: u!.id, name: "test-machine" })
+      .values({ orgId, userId: u!.id, name: "test-machine" })
       .returning({ id: machines.id });
     machineId = m!.id;
   });

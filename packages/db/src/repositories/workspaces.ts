@@ -1,6 +1,7 @@
 import { and, eq, sql } from "drizzle-orm";
 import type { DbClient } from "../client.js";
 import { events, workspaceKeys, workspaces } from "../schema.js";
+import { getOrgIdForUser } from "./organizations.js";
 
 /**
  * Workspace + attribution repository (M5, PRD §6/§19). A workspace is a local dev
@@ -24,6 +25,23 @@ export interface WorkspaceRow {
 }
 
 /**
+ * The columns a WorkspaceRow is made of. EXPLICIT rather than `select()`/bare
+ * `returning()` so a new table column never silently widens the API — these rows go
+ * straight to `reply.send()` and no route declares a response schema. Keep == WorkspaceRow.
+ */
+const workspaceRowColumns = {
+  id: workspaces.id,
+  userId: workspaces.userId,
+  projectId: workspaces.projectId,
+  machineId: workspaces.machineId,
+  rootPath: workspaces.rootPath,
+  gitRemote: workspaces.gitRemote,
+  gitBranch: workspaces.gitBranch,
+  createdAt: workspaces.createdAt,
+  lastSeenAt: workspaces.lastSeenAt,
+};
+
+/**
  * Upsert a workspace on `(user_id, root_path)`. On re-discovery, refreshes the
  * git metadata + last-seen but PRESERVES `project_id` (so a user's remap survives
  * — `project_id` is only changed via `remapWorkspace`). Returns the full row so
@@ -40,9 +58,12 @@ export async function upsertWorkspace(
     projectId?: string;
   },
 ): Promise<WorkspaceRow> {
+  // M15 15.1: superseded by the 15.2 request principal.
+  const orgId = await getOrgIdForUser(db, input.userId);
   const [row] = await db
     .insert(workspaces)
     .values({
+      orgId,
       userId: input.userId,
       machineId: input.machineId ?? null,
       rootPath: input.rootPath,
@@ -59,7 +80,7 @@ export async function upsertWorkspace(
         lastSeenAt: new Date(),
       },
     })
-    .returning();
+    .returning(workspaceRowColumns);
   return row!;
 }
 
@@ -72,9 +93,12 @@ export async function addWorkspaceKey(
   db: DbClient,
   input: { userId: string; workspaceId: string; sourceConnector: string; projectKey: string },
 ): Promise<void> {
+  // M15 15.1: superseded by the 15.2 request principal.
+  const orgId = await getOrgIdForUser(db, input.userId);
   await db
     .insert(workspaceKeys)
     .values({
+      orgId,
       userId: input.userId,
       workspaceId: input.workspaceId,
       sourceConnector: input.sourceConnector,
@@ -99,13 +123,13 @@ export async function remapWorkspace(
     .update(workspaces)
     .set({ projectId })
     .where(and(eq(workspaces.id, workspaceId), eq(workspaces.userId, userId)))
-    .returning();
+    .returning(workspaceRowColumns);
   return row;
 }
 
 /** List a user's workspaces. */
 export async function listWorkspaces(db: DbClient, userId: string): Promise<WorkspaceRow[]> {
-  return db.select().from(workspaces).where(eq(workspaces.userId, userId));
+  return db.select(workspaceRowColumns).from(workspaces).where(eq(workspaces.userId, userId));
 }
 
 /**

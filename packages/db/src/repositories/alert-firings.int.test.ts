@@ -10,6 +10,7 @@ import {
   deliverPendingFirings,
   deliverResolvedFirings,
 } from "./alert-firings.js";
+import { ensurePersonalOrg } from "./organizations.js";
 
 const TEST_URL = process.env.DATABASE_URL_TEST;
 
@@ -22,6 +23,7 @@ const t4 = new Date("2026-06-15T12:04:00.000Z");
 
 describe.skipIf(!TEST_URL)("alert-firings repository (integration)", () => {
   let dbh: ReturnType<typeof createDb>;
+  let orgId: string;
   let userId: string;
   let machineId: string;
 
@@ -35,16 +37,17 @@ describe.skipIf(!TEST_URL)("alert-firings repository (integration)", () => {
 
   beforeEach(async () => {
     await dbh.db.execute(
-      sql`TRUNCATE alert_firings, machine_heartbeats, workspace_keys, workspaces, projects, raw_source_records, events, ingest_tokens, pairing_codes, machines, users RESTART IDENTITY CASCADE`,
+      sql`TRUNCATE alert_firings, machine_heartbeats, workspace_keys, workspaces, projects, raw_source_records, events, ingest_tokens, pairing_codes, machines, memberships, organizations, users RESTART IDENTITY CASCADE`,
     );
     const [u] = await dbh.db
       .insert(users)
       .values({ email: "test@example.com" })
       .returning({ id: users.id });
     userId = u!.id;
+    orgId = await ensurePersonalOrg(dbh.db, userId, "test@example.com");
     const [m] = await dbh.db
       .insert(machines)
-      .values({ userId, name: "laptop", os: "win32", hostname: "host-1" })
+      .values({ orgId, userId, name: "laptop", os: "win32", hostname: "host-1" })
       .returning({ id: machines.id });
     machineId = m!.id;
   });
@@ -139,6 +142,7 @@ describe.skipIf(!TEST_URL)("alert-firings repository (integration)", () => {
       .insert(users)
       .values({ email: "other@example.com" })
       .returning({ id: users.id });
+    await ensurePersonalOrg(dbh.db, u2!.id, "other@example.com");
     expect(await ackAlertFiring(dbh.db, u2!.id, opened!.id, t4)).toBeUndefined();
   });
 
