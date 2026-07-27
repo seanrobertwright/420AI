@@ -1,5 +1,6 @@
 import type { Db } from "@420ai/db";
 import {
+  withOrg,
   usageTotals,
   usageByModel,
   usageOverTime,
@@ -22,6 +23,20 @@ import {
  * `generatedAt` (an ISO string) in (so the Markdown and the stored row agree).
  * Silent library (CLAUDE.md): throws on error, never logs. Never decrypts (D3) —
  * it reads only the plaintext projections.
+ *
+ * M15 15.3 — SPLIT WRAPPING, and the split is the whole point (D-15.3-6). The READS run
+ * inside one `withOrg`; `insertReportArtifact` stays OUTSIDE it and opens its own, once per
+ * retry attempt. That is not tidiness: `insertReportArtifact` retries on a version-conflict
+ * unique violation, and a failed statement ABORTS its surrounding transaction — so a retry
+ * nested inside an outer transaction would hit `current transaction is aborted` on attempt 2
+ * and never recover. Each attempt therefore needs a FRESH transaction, which is exactly what
+ * an unwrapped `Db` parameter gives it. Do not "simplify" these functions to take `DbClient`.
+ *
+ * The reads share ONE transaction and therefore ONE connection, so they are awaited in
+ * sequence rather than through `Promise.all`. That is not a style choice: node-postgres queues
+ * concurrent queries on a single client and warns that doing so is deprecated (removed in
+ * pg@9), so the "parallel" form never actually overlapped. One connection held briefly still
+ * beats N connections plus N `set_config` round-trips.
  */
 
 /**
@@ -37,12 +52,15 @@ export async function generateProjectCostReport(
   bucket: "day" | "week",
   generatedAt: string,
 ): Promise<ReportArtifactRow> {
-  const [totals, byModel, overTime, projectName] = await Promise.all([
-    usageTotals(db, orgId, projectId),
-    usageByModel(db, orgId, projectId),
-    usageOverTime(db, orgId, projectId, bucket),
-    getProjectName(db, orgId, projectId),
-  ]);
+  // Sequential inside the RLS transaction: a transaction is ONE connection, so `Promise.all`
+  // here never overlapped — node-postgres queues the queries and warns that concurrent
+  // client.query() is deprecated (removed in pg@9). See routes/monitor.ts for the full note.
+  const { totals, byModel, overTime, projectName } = await withOrg(db, orgId, async (tx) => ({
+    totals: await usageTotals(tx, orgId, projectId),
+    byModel: await usageByModel(tx, orgId, projectId),
+    overTime: await usageOverTime(tx, orgId, projectId, bucket),
+    projectName: await getProjectName(tx, orgId, projectId),
+  }));
   const metrics = { totals, byModel, overTime };
   const markdown = renderCostOverTimeReport({
     projectName: projectName ?? "(unknown)",
@@ -78,7 +96,7 @@ export async function generateSessionAutopsyReport(
   sessionId: string,
   generatedAt: string,
 ): Promise<ReportArtifactRow> {
-  const session = await sessionDetail(db, orgId, sessionId);
+  const session = await withOrg(db, orgId, (tx) => sessionDetail(tx, orgId, sessionId));
   const markdown = renderSessionAutopsyReport({ generatedAt, session });
   return insertReportArtifact(db, {
     orgId,

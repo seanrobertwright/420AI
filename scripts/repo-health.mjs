@@ -9,6 +9,11 @@
  *                                             # layer self-skipped (system review M4-6, root
  *                                             # cause: a green gate with int tests skipped is
  *                                             # NOT green — that hid the M5 lastActivity bug).
+ *                                             # M15 15.3 adds the sibling rule: it also FAILS
+ *                                             # if the RLS suites would run as a BYPASSING
+ *                                             # role — "ran" and "actually enforced" are two
+ *                                             # different claims (skipped ≠ passed, and
+ *                                             # bypassed ≠ enforced).
  *
  * Exits non-zero if ANY check fails, so it can block a commit / CI step. Each
  * check prints a clear PASS/FAIL line; failures explain what to fix.
@@ -43,6 +48,65 @@ function hasTestDbConfigured() {
   const envPath = join(root, ".env");
   if (!existsSync(envPath)) return false;
   return /^\s*DATABASE_URL_TEST\s*=\s*\S/m.test(readFileSync(envPath, "utf8"));
+}
+
+/** Read a var the way the test run resolves it: process.env first, then the gitignored .env. */
+function envValue(name) {
+  if (process.env[name]) return process.env[name];
+  const envPath = join(root, ".env");
+  if (!existsSync(envPath)) return undefined;
+  const m = new RegExp(`^\\s*${name}\\s*=\\s*(\\S+)\\s*$`, "m").exec(readFileSync(envPath, "utf8"));
+  return m?.[1];
+}
+
+/**
+ * M15 15.3 — assert the RLS test role is NOT a bypassing role.
+ *
+ * `--require-db` proves the integration tests RAN. It cannot prove they ran as a role the
+ * policies actually apply to, and that distinction is the whole slice: RLS is INERT against a
+ * superuser or any role with `rolbypassrls` (15.0 Finding 1 / Input 4). Point
+ * DATABASE_URL_TEST_APP at the owner URL by mistake and every isolation test still passes —
+ * green gate, zero enforcement, and the failure mode in production is silent cross-tenant
+ * disclosure. So the gate checks the role's identity itself.
+ *
+ * Deliberately NOT in `--fast`: it needs a live database.
+ */
+async function checkAppRoleIdentity() {
+  const url = envValue("DATABASE_URL_TEST_APP");
+  if (!url) {
+    fail(
+      "DATABASE_URL_TEST_APP unset (--require-db)",
+      "the M15 15.3 two-role RLS suites would self-skip, leaving every policy untested.\n" +
+        "Provision the app role and point this at the TEST database:\n" +
+        "  npm run db:provision-app-role\n" +
+        "  DATABASE_URL_TEST_APP=postgres://420ai_app:<password>@localhost:5433/420ai_test",
+    );
+    return;
+  }
+  const { Pool } = await import("pg");
+  const pool = new Pool({ connectionString: url });
+  try {
+    const { rows } = await pool.query(
+      `select current_user as who,
+              current_setting('is_superuser') as superuser,
+              (select rolbypassrls from pg_roles where rolname = current_user) as bypassrls`,
+    );
+    const { who, superuser, bypassrls } = rows[0];
+    if (superuser !== "off" || bypassrls === true) {
+      fail(
+        `DATABASE_URL_TEST_APP connects as a BYPASSING role (${who})`,
+        `is_superuser=${superuser}, rolbypassrls=${bypassrls}. RLS is inert against this role,\n` +
+          "so the two-role suites would pass while enforcing nothing. Point it at the\n" +
+          "non-owner app role: npm run db:provision-app-role",
+      );
+    } else {
+      ok(`RLS test role '${who}' is non-superuser with rolbypassrls=false`);
+    }
+  } catch (err) {
+    fail("could not verify the RLS test role (--require-db)", String(err.message ?? err));
+  } finally {
+    await pool.end();
+  }
 }
 
 // --- Check 1: NUL-byte scan over tracked text sources ---------------------
@@ -196,6 +260,9 @@ if (fast) {
   // integration tests actually RAN (ran > 0, skipped === 0), not merely that
   // the suite was green with the int files quietly skipped (skipped ≠ passed).
   console.log("\n[7/7] Test suite (vitest run, --require-db)");
+  // BEFORE vitest: prove the RLS suites will run as a NON-BYPASSING role (M15 15.3). Running
+  // them first and asking afterwards would be too late — they would already have reported green.
+  await checkAppRoleIdentity();
   const out = join(tmpdir(), `repo-health-vitest-${process.pid}.json`);
   let suitePassed = true;
   try {

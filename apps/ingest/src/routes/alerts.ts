@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { ackAlertFiring } from "@420ai/db";
+import { withOrg, ackAlertFiring } from "@420ai/db";
 import { resolvePrincipal, isUuid } from "../auth.js";
 
 /**
@@ -19,12 +19,8 @@ export default async function alertRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(404).send({ error: "alert firing not found" });
     }
     const userId = principal.userId;
-    const firing = await ackAlertFiring(
-      app.db,
-      principal.orgId,
-      userId,
-      request.params.id,
-      new Date(),
+    const firing = await withOrg(app.db, principal.orgId, (tx) =>
+      ackAlertFiring(tx, principal.orgId, userId, request.params.id, new Date()),
     );
     if (!firing) return reply.code(404).send({ error: "alert firing not found" });
     return reply.code(200).send(firing);

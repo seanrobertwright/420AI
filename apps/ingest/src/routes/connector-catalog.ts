@@ -30,6 +30,11 @@ interface ConnectorCatalogUploadBody {
  * POST /v1/connector-catalog/:id/approve — activate a pending catalog, superseding the prior active.
  * POST /v1/connector-catalog/:id/reject  — reject a pending catalog.
  * GET  /v1/connector-catalog/active      — MACHINE-authed: the active catalog ({version,payload}) or 204.
+ *
+ * M15 15.3 — NO `withOrg` in this file, deliberately. All five routes touch only
+ * `connector_catalogs`, a deployment-GLOBAL table (D-M15-9) with no `org_id` and no policy
+ * (D-15.3-4). That includes the machine-authed `/active`: it resolves NOTHING and wraps
+ * NOTHING, because there is no tenant data on this path to scope.
  */
 export default async function connectorCatalogRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Body: ConnectorCatalogUploadBody }>(

@@ -18,6 +18,11 @@ interface LoginBody {
  *
  * Brute-force rate-limiting was deferred from 12.3 and SHIPPED in 12.4c: the route config
  * below applies app.rateLimitLogin (strict per-route limit, on by default via server.ts).
+ *
+ * M15 15.3 — NO `withOrg` here, deliberately, and this file is the clearest case of why the
+ * identity tables carry no RLS (D-15.3-4). `findAdminCredential` reads `users` in order to
+ * ESTABLISH who the caller is; a policy keyed on an org context would be circular — login is
+ * precisely the moment before any org is known.
  */
 export default async function authRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Body: LoginBody }>(

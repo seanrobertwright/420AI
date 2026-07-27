@@ -1,5 +1,11 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
-import { exportEvents, getReportArtifact, sessionTranscript, type EventExportRow } from "@420ai/db";
+import {
+  withOrg,
+  exportEvents,
+  getReportArtifact,
+  sessionTranscript,
+  type EventExportRow,
+} from "@420ai/db";
 import {
   redact,
   redactJson,
@@ -167,13 +173,18 @@ export default async function exportRoutes(app: FastifyInstance): Promise<void> 
       // M15 15.2: a resolved principal ALWAYS has a user and an org, so the old
       // "if we could resolve an owner" conditional (and its `userId ?? ""` fallback) is
       // dead — the export is now unconditionally scoped to the caller's org.
-      const { rows, truncated } = await exportEvents(app.db, principal.orgId, principal.userId, {
-        projectId,
-        sessionId,
-        connector,
-        start,
-        end,
-      });
+      // M15 15.3: the RLS context wraps ONLY the DB read — redaction, serialization and the
+      // Parquet encode stay outside it. Holding a transaction open across a CPU-bound encode
+      // of up to EXPORT_MAX_ROWS would pin a pooled connection for the whole export.
+      const { rows, truncated } = await withOrg(app.db, principal.orgId, (tx) =>
+        exportEvents(tx, principal.orgId, principal.userId, {
+          projectId,
+          sessionId,
+          connector,
+          start,
+          end,
+        }),
+      );
 
       // §18 gate: redact every string in every row before it leaves the archive.
       const { value: redacted, findings } = redactJson(rows);
@@ -225,7 +236,9 @@ export default async function exportRoutes(app: FastifyInstance): Promise<void> 
       if (!isUuid(request.params.id)) {
         return reply.code(404).send({ error: "report not found" });
       }
-      const row = await getReportArtifact(app.db, principal.orgId, request.params.id);
+      const row = await withOrg(app.db, principal.orgId, (tx) =>
+        getReportArtifact(tx, principal.orgId, request.params.id),
+      );
       if (!row) return reply.code(404).send({ error: "report not found" });
 
       const { format } = request.query;
@@ -287,7 +300,10 @@ export default async function exportRoutes(app: FastifyInstance): Promise<void> 
       // sessionId is a connector text id (NOT a uuid) — ungated; unknown → empty transcript.
       const { sessionId } = request.params;
       const { format } = request.query;
-      const { entries, truncated } = await sessionTranscript(app.db, principal.orgId, sessionId);
+      // Decrypt-and-fetch inside the RLS context; redaction + serialization stay outside.
+      const { entries, truncated } = await withOrg(app.db, principal.orgId, (tx) =>
+        sessionTranscript(tx, principal.orgId, sessionId),
+      );
 
       // §18 gate: redact each DECRYPTED entry before it is serialized (same call M8 uses).
       const findings: RedactionFinding[] = [];

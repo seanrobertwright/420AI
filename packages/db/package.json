@@ -28,6 +28,7 @@
     "db:rotate-key": "tsx src/rotate-key-cli.ts",
     "db:reprice": "tsx src/reprice-cli.ts",
     "db:reparse": "tsx src/reparse-cli.ts",
-    "db:rollback": "tsx src/rollback-cli.ts"
+    "db:rollback": "tsx src/rollback-cli.ts",
+    "db:provision-app-role": "tsx src/provision-app-role-cli.ts"
   }
 }

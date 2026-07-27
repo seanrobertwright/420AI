@@ -11,6 +11,14 @@ interface PairingCodeBody {
 /**
  * POST /v1/pairing-codes — admin-gated issuance of a short-lived pairing code.
  * Temporary M2 affordance; the dashboard issues codes in a later milestone (§19).
+ *
+ * M15 15.3 — DELIBERATELY NOT wrapped in `withOrg`, and NOT an oversight. This route writes a
+ * row for a TARGET user who may not be the caller (`body.email` / `body.userId`, D-15.2-5), so
+ * the new `pairing_codes` row carries the TARGET's org — which under `withOrg(principal.orgId)`
+ * the policy's implicit WITH CHECK would correctly REJECT as a cross-tenant insert. The
+ * bootstrap-permissive policy (D-15.3-3) is what lets this legitimate case through. The
+ * remaining writes touch `users` / `organizations` / `memberships`, which carry no RLS at all
+ * (D-15.3-4 — they are the identity tables org resolution itself reads).
  */
 export default async function pairingCodeRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Body: PairingCodeBody }>(

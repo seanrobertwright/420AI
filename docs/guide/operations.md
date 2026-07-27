@@ -446,3 +446,121 @@ backups (12.4d):
   `"C:\Program Files\Git\bin\sh.exe" -lc "cd /c/Users/seanr/OneDrive/Documents/420AI && INGEST_URL=http://localhost:8420 ADMIN_TOKEN=<token> npm run reports:generate"`.
 - **cron (Linux/macOS):**
   `0 6 * * 1 cd /path/to/420AI && INGEST_URL=http://localhost:8420 ADMIN_TOKEN=<token> npm run reports:generate >> reports.log 2>&1`
+
+## 15.3 — Application role & Row-Level Security
+
+M15 15.3 adds a **database-enforced** tenant-isolation backstop. Two things changed operationally:
+there is now a **second Postgres role**, and the ingest server **refuses to start** without a
+connection string for it.
+
+### Why a second role exists (this is not optional hardening)
+
+Postgres RLS is **inert** against a superuser or any role with `rolbypassrls` — and that is exactly
+what `DATABASE_URL` connects as, because it owns the tables. Adding policies alone changes nothing.
+`ALTER TABLE … FORCE ROW LEVEL SECURITY` does **not** help either: FORCE removes the _table-owner_
+exemption, which is a **different exemption from the superuser one**, with a different switch.
+
+So the isolation only becomes real when the server connects as a **non-owner role without
+`rolbypassrls`**. That role is `420ai_app`.
+
+| Variable                | Role                    | Used by                                                                                       |
+| ----------------------- | ----------------------- | --------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`          | `420ai` (owner)         | every `db:*` CLI — migrate, rollback, reprice, reparse, rotate-key — and the break-glass path |
+| `DATABASE_URL_APP`      | `420ai_app` (non-owner) | **the ingest server**, and nothing else                                                       |
+| `DATABASE_URL_TEST`     | owner                   | integration-test setup (`TRUNCATE` needs ownership)                                           |
+| `DATABASE_URL_TEST_APP` | non-owner               | the two-role RLS suites — the only tests that exercise the policies                           |
+
+Both `DATABASE_URL` and `DATABASE_URL_APP` are required. Do **not** repoint the CLIs at the app
+role: migrations create and own objects, which a non-owner cannot do.
+
+### Provisioning
+
+Migration `0015` creates the role `NOLOGIN` and grants it table privileges — the _schema_ half. It
+deliberately does **not** set a password (a migration file is committed to git; a secret in one is a
+secret in the repo forever). The _credential_ half is a separate command:
+
+```sh
+npm run db:migrate              # creates the role NOLOGIN + grants + the 15 policies
+npm run db:provision-app-role   # grants LOGIN and sets the password from APP_DB_PASSWORD
+```
+
+`npm run setup` generates `APP_DB_PASSWORD` and substitutes it into both app-role URLs, so a fresh
+clone only needs the two commands above. Verify:
+
+```sh
+docker exec 420ai-archive psql -U 420ai -d 420ai -t -c \
+  "select rolcanlogin, rolbypassrls, rolsuper from pg_roles where rolname='420ai_app';"
+# → t | f | f     (can log in; CANNOT bypass RLS; not a superuser)
+```
+
+`t | f | f` is the only acceptable result. A `t` in either of the last two columns means every
+policy is decorative.
+
+### Password rotation
+
+`provisionAppRole` is idempotent, so rotation is a re-run:
+
+1. Set a new `APP_DB_PASSWORD` in `.env`.
+2. `npm run db:provision-app-role`.
+3. Update `DATABASE_URL_APP` (and `DATABASE_URL_TEST_APP`) to match — `npm run setup` keeps them in
+   sync on a fresh clone, but an edited `.env` must be updated by hand.
+4. Restart ingest.
+
+The password is never logged: the CLI prints only `provisioned app role: 420ai_app (LOGIN enabled)`.
+
+### Migrating an EXISTING database
+
+The role is per-cluster but the **grants are per-database**, so every database needs the migration
+applied — including the test database, which `npm run db:migrate` does not touch:
+
+```sh
+npm run db:migrate
+DATABASE_URL=$DATABASE_URL_TEST npm run db:migrate
+npm run db:provision-app-role
+```
+
+### What the policies do
+
+Fifteen tables carry a policy keyed on a transaction-local setting, `app.current_org`, which the
+server sets via `withOrg` at the start of every request's DB work:
+
+- **12 STRICT tables** (`events`, `raw_source_records`, `projects`, `workspaces`, `workspace_keys`,
+  `report_artifacts`, `git_commits`, `git_commit_files`, `session_git_links`, `machine_heartbeats`,
+  `alert_firings`, `search_documents`) — with no context set, a read returns **zero rows**. Not an
+  error: a backstop must fail closed and quiet.
+- **3 BOOTSTRAP-PERMISSIVE tables** (`machines`, `ingest_tokens`, `pairing_codes`) — enforced when a
+  context is set, permissive when it is not. These are the credential tables, and the lookups that
+  read them are _circular_: `POST /v1/pair` reads a pairing code **in order to discover** the org,
+  so there is no org to set beforehand. A strict policy here would 401 every collector.
+- **No policy** on `users` / `organizations` / `memberships` (the identity tables org resolution
+  itself reads) or `pricing_catalogs` / `connector_catalogs` / `ingest_auth_failures`
+  (deployment-global, no `org_id` column).
+
+RLS **backstops** application scoping; it does not replace it. Every query still carries its
+explicit `org_id` predicate, and that is load-bearing for performance as well as correctness: with
+the explicit predicate the planner collapses the policy to a one-time filter rather than evaluating
+it per row (measured: +10–20 % on a ~16 ms aggregate over 413 k events, index usage unchanged).
+Removing the predicate "because RLS handles it now" is both a correctness and a performance
+regression.
+
+### Break-glass (D-M15-7)
+
+There is **no HTTP god-token** and no privileged connection anywhere in the server — deliberately.
+Cross-org access requires **direct database access with the owner URL**:
+
+```sh
+docker exec -it 420ai-archive psql -U 420ai -d 420ai
+```
+
+The owner bypasses RLS, so this sees everything. Treat it as the audited emergency path it is: take
+a backup first (12.4d), and prefer a read-only query over a mutation.
+
+### Troubleshooting
+
+| Symptom                                                    | Cause                                                                                                                                                                                                |
+| ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Ingest exits at startup with `DATABASE_URL_APP is not set` | The var is missing. This is intentional (D-15.3-2) — booting on the owner role would leave RLS inert while every health check stayed green.                                                          |
+| Every endpoint returns empty/zeroed data                   | The org context is not being set — a handler is missing its `withOrg`, or the app role is connecting without one. `apps/ingest/src/routes/org-scoping.test.ts` catches the first case.               |
+| `password authentication failed for user "420ai_app"`      | `DATABASE_URL_APP` and `APP_DB_PASSWORD` disagree. Re-run `npm run db:provision-app-role` after aligning them.                                                                                       |
+| `permission denied for table <x>`                          | The migration was applied to a different database than the one being connected to, or a new table was created by a role other than `420ai` (the `ALTER DEFAULT PRIVILEGES` grant follows the owner). |
+| A maintenance op reports `{repriced: 0}`                   | The deployment-wide ops iterate per org (D-15.3-5). A zero here means `listOrganizations` returned nothing, not that RLS blocked the pass.                                                           |

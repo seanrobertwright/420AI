@@ -1,5 +1,11 @@
 import type { FastifyInstance } from "fastify";
-import { getReportArtifact, listReportArtifacts, getProjectName, indexReportDoc } from "@420ai/db";
+import {
+  withOrg,
+  getReportArtifact,
+  listReportArtifacts,
+  getProjectName,
+  indexReportDoc,
+} from "@420ai/db";
 import {
   generateProjectCostReport,
   generateSessionAutopsyReport,
@@ -42,6 +48,12 @@ interface GenerateSessionReportBody {
  * The route owns the clock (`generatedAt`); the orchestrator/renderer are clock-free.
  * The single-user owner is resolved via ensureUserByEmail/findUserIdByEmail (D2
  * precedence rule — artifacts are user-owned, so resolving the id is required).
+ *
+ * M15 15.3: the guard reads and the search-index refresh get their own `withOrg`; the
+ * `generate*` orchestrators are passed `app.db` UNWRAPPED on purpose (D-15.3-6) — they wrap
+ * their own reads and let `insertReportArtifact` own a fresh transaction per retry attempt.
+ * Passing a `Tx` here would be a compile error, and forcing it through would break the
+ * version-conflict retry. Do not "fix" that by wrapping this handler.
  */
 export default async function reportRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Params: { id: string }; Body: GenerateProjectReportBody }>(
@@ -60,7 +72,10 @@ export default async function reportRoutes(app: FastifyInstance): Promise<void> 
       // missing project would raise an FK-violation 500 instead of a clean 404.
       // getProjectName returns undefined only when the project does not exist (an
       // existing-but-empty project still returns its name → D7 all-zero report).
-      if (!(await getProjectName(app.db, principal.orgId, request.params.id))) {
+      const exists = await withOrg(app.db, principal.orgId, (tx) =>
+        getProjectName(tx, principal.orgId, request.params.id),
+      );
+      if (!exists) {
         return reply.code(404).send({ error: "project not found" });
       }
       const userId = principal.userId;
@@ -125,7 +140,7 @@ export default async function reportRoutes(app: FastifyInstance): Promise<void> 
       // 13.4: refresh the artifact's search doc best-effort (awaited-with-swallow,
       // the deliverFirings pattern — never fails the response).
       try {
-        await indexReportDoc(app.db, row.id);
+        await withOrg(app.db, principal.orgId, (tx) => indexReportDoc(tx, row.id));
       } catch (err) {
         request.log.warn({ err }, "report search indexing failed");
       }
@@ -154,7 +169,7 @@ export default async function reportRoutes(app: FastifyInstance): Promise<void> 
       // 13.4: refresh the artifact's search doc best-effort (awaited-with-swallow,
       // the deliverFirings pattern — never fails the response).
       try {
-        await indexReportDoc(app.db, row.id);
+        await withOrg(app.db, principal.orgId, (tx) => indexReportDoc(tx, row.id));
       } catch (err) {
         request.log.warn({ err }, "report search indexing failed");
       }
@@ -170,7 +185,9 @@ export default async function reportRoutes(app: FastifyInstance): Promise<void> 
     if (!isUuid(request.params.id)) {
       return reply.code(404).send({ error: "report not found" });
     }
-    const row = await getReportArtifact(app.db, principal.orgId, request.params.id);
+    const row = await withOrg(app.db, principal.orgId, (tx) =>
+      getReportArtifact(tx, principal.orgId, request.params.id),
+    );
     if (!row) return reply.code(404).send({ error: "report not found" });
     return reply.code(200).send(row);
   });
@@ -184,12 +201,14 @@ export default async function reportRoutes(app: FastifyInstance): Promise<void> 
         return reply.code(401).send({ error: "admin authorization required" });
       }
       const userId = principal.userId;
-      const rows = await listReportArtifacts(app.db, principal.orgId, userId, {
-        reportType: request.query.type,
-        scopeId: request.query.scopeId,
-        limit: request.query.limit,
-        offset: request.query.offset,
-      });
+      const rows = await withOrg(app.db, principal.orgId, (tx) =>
+        listReportArtifacts(tx, principal.orgId, userId, {
+          reportType: request.query.type,
+          scopeId: request.query.scopeId,
+          limit: request.query.limit,
+          offset: request.query.offset,
+        }),
+      );
       return reply.code(200).send(rows);
     },
   );

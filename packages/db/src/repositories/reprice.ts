@@ -1,6 +1,6 @@
 import { and, asc, eq, isNotNull, sql } from "drizzle-orm";
 import { computeCost, type ModelPricing } from "@420ai/shared";
-import type { Db } from "../client.js";
+import type { DbClient } from "../client.js";
 import { events } from "../schema.js";
 
 /** Batch size for the select→update sweep (mirrors key-rotation.ts BATCH). */
@@ -25,7 +25,8 @@ export interface RepriceResult {
  * captured before replay-metadata existed — are INCLUDED. Spike-proven (see plan NOTES).
  */
 export async function repriceAll(
-  db: Db,
+  db: DbClient,
+  orgId: string,
   catalog: { version: string; rates: Record<string, ModelPricing> },
 ): Promise<RepriceResult> {
   const repriced = await db.transaction(async (tx) => {
@@ -36,6 +37,13 @@ export async function repriceAll(
         .from(events)
         .where(
           and(
+            // M15 15.3: EXPLICIT org scoping, not just the RLS policy. `/v1/replay/reprice` is
+            // deployment-wide by looping one org at a time (D-15.3-5), and relying on RLS alone
+            // to make each pass distinct would violate D-M15-3's "keep both layers" rule with a
+            // measurable consequence: any OWNER-role caller (every other int suite, plus the
+            // `db:reprice` CLI) bypasses RLS, so each pass would see EVERY org's events and the
+            // summed count would be N_orgs times too large. Caught by reparse.int.test.ts.
+            eq(events.orgId, orgId),
             isNotNull(events.cost),
             isNotNull(events.tokens),
             isNotNull(events.model),

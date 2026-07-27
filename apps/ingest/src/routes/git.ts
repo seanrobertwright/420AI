@@ -1,6 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import type { GitCaptureRequest } from "@420ai/shared";
 import {
+  withOrg,
+  getMachineOrgId,
   getMachineUserId,
   getProjectName,
   resolveWorkspaceId,
@@ -40,7 +42,15 @@ export default async function gitRoutes(app: FastifyInstance): Promise<void> {
       if (!userId) {
         return reply.code(401).send({ error: "machine has no owning user" });
       }
-      const result = await recordGitCommits(app.db, request.machineId, request.body);
+      // M15 15.3: machine-authed — resolve the org from `machines` (bootstrap-permissive)
+      // before the RLS-scoped transaction; `recordGitCommits` nests its own as a savepoint.
+      const orgId = await getMachineOrgId(app.db, request.machineId);
+      if (!orgId) {
+        return reply.code(401).send({ error: "machine has no organization" });
+      }
+      const result = await withOrg(app.db, orgId, (tx) =>
+        recordGitCommits(tx, request.machineId, request.body),
+      );
       return reply.code(200).send(result);
     },
   );
@@ -54,9 +64,10 @@ export default async function gitRoutes(app: FastifyInstance): Promise<void> {
     if (!isUuid(request.params.id)) {
       return reply.code(404).send({ error: "project not found" });
     }
-    return reply
-      .code(200)
-      .send(await gitCommitsByProject(app.db, principal.orgId, request.params.id));
+    const commits = await withOrg(app.db, principal.orgId, (tx) =>
+      gitCommitsByProject(tx, principal.orgId, request.params.id),
+    );
+    return reply.code(200).send(commits);
   });
 
   // Admin: persisted session→commit links for a project.
@@ -69,9 +80,10 @@ export default async function gitRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(404).send({ error: "project not found" });
     }
     const userId = principal.userId;
-    return reply
-      .code(200)
-      .send(await listProjectLinks(app.db, principal.orgId, userId, request.params.id));
+    const links = await withOrg(app.db, principal.orgId, (tx) =>
+      listProjectLinks(tx, principal.orgId, userId, request.params.id),
+    );
+    return reply.code(200).send(links);
   });
 
   // Admin: run the §11.4 heuristic for the project's sessions (or one via {sessionId}).
@@ -88,18 +100,25 @@ export default async function gitRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(404).send({ error: "project not found" });
       }
       // Existence-check the project so an unknown (well-formed) id is a 404, not a 500.
-      if (!(await getProjectName(app.db, principal.orgId, id))) {
+      const exists = await withOrg(app.db, principal.orgId, (tx) =>
+        getProjectName(tx, principal.orgId, id),
+      );
+      if (!exists) {
         return reply.code(404).send({ error: "project not found" });
       }
       const userId = principal.userId;
       const scoped = request.body?.sessionId;
-      const sessionIds = scoped ? [scoped] : await projectSessionIds(app.db, principal.orgId, id);
-      const links = [];
-      for (const sessionId of sessionIds) {
-        links.push(
-          ...(await computeSessionGitSuggestions(app.db, principal.orgId, userId, sessionId)),
-        );
-      }
+      // One transaction for the whole suggest pass: the session list and every per-session
+      // heuristic read/write share it, so a mid-loop failure rolls the batch back rather than
+      // leaving half the sessions with suggestions and half without.
+      const links = await withOrg(app.db, principal.orgId, async (tx) => {
+        const sessionIds = scoped ? [scoped] : await projectSessionIds(tx, principal.orgId, id);
+        const acc = [];
+        for (const sessionId of sessionIds) {
+          acc.push(...(await computeSessionGitSuggestions(tx, principal.orgId, userId, sessionId)));
+        }
+        return acc;
+      });
       return reply.code(200).send(links);
     },
   );
@@ -114,18 +133,16 @@ export default async function gitRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(401).send({ error: "admin authorization required" });
       }
       const userId = principal.userId;
-      const detail = await gitCommitDetail(app.db, userId, request.body.commitSha);
-      if (!detail) return reply.code(404).send({ error: "commit not found" });
-      const resolved = await resolveWorkspaceId(app.db, userId, detail.commit.repoRootPath);
-      const projectId = resolved?.projectId ?? null;
-      await addManualLink(
-        app.db,
-        principal.orgId,
-        userId,
-        request.params.sessionId,
-        detail.id,
-        projectId,
+      const detail = await withOrg(app.db, principal.orgId, (tx) =>
+        gitCommitDetail(tx, userId, request.body.commitSha),
       );
+      if (!detail) return reply.code(404).send({ error: "commit not found" });
+      const projectId = await withOrg(app.db, principal.orgId, async (tx) => {
+        const resolved = await resolveWorkspaceId(tx, userId, detail.commit.repoRootPath);
+        const pid = resolved?.projectId ?? null;
+        await addManualLink(tx, principal.orgId, userId, request.params.sessionId, detail.id, pid);
+        return pid;
+      });
       return reply.code(200).send({
         sessionId: request.params.sessionId,
         commitSha: detail.commit.commitSha,
@@ -149,12 +166,8 @@ export default async function gitRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(404).send({ error: "link not found" });
       }
       const userId = principal.userId;
-      const link = await setLinkStatus(
-        app.db,
-        principal.orgId,
-        userId,
-        request.params.id,
-        request.body.status,
+      const link = await withOrg(app.db, principal.orgId, (tx) =>
+        setLinkStatus(tx, principal.orgId, userId, request.params.id, request.body.status),
       );
       if (!link) return reply.code(404).send({ error: "link not found" });
       return reply.code(200).send(link);

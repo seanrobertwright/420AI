@@ -10,10 +10,26 @@ import { createSmtpDeliverer, createFanoutDeliverer } from "./delivery/smtp-deli
 // Load the repo-root .env (this runs from apps/ingest/ via npm -w).
 config({ path: fileURLToPath(new URL("../../../.env", import.meta.url)) });
 
+// DATABASE_URL is the OWNER role. It is still read and still required — every db:* CLI
+// (migrate, rollback, reprice, reparse, rotate-key) and the break-glass path use it. It is
+// NOT what the server connects as.
 const databaseUrl = process.env.DATABASE_URL;
 const adminToken = process.env.ADMIN_TOKEN;
 if (!databaseUrl) throw new Error("DATABASE_URL is not set (copy .env.example to .env)");
 if (!adminToken) throw new Error("ADMIN_TOKEN is not set (copy .env.example to .env)");
+
+// M15 15.3 (D-15.3-2) — HARD-FAIL without the app-role URL. RLS is inert against the owner
+// role (`rolbypassrls`), so booting on DATABASE_URL would leave all 15 policies decorative
+// while every health check stayed green. The failure mode of getting this wrong is SILENT
+// cross-tenant over-disclosure — the repo's "skipped ≠ passed" shape — so it must be a
+// startup throw, not a warning. Mirrors the DATABASE_URL / SESSION_SECRET throws above.
+const appDatabaseUrl = process.env.DATABASE_URL_APP;
+if (!appDatabaseUrl) {
+  throw new Error(
+    "DATABASE_URL_APP is not set — run `npm run db:provision-app-role` and set it. " +
+      "Booting on the owner role leaves RLS inert (M15 15.3).",
+  );
+}
 
 // M12 12.3 admin login config. ADMIN_EMAIL defaults to the legacy single-user address
 // (back-compat with every legacy-default-seeded row). SESSION_SECRET is required — it signs
@@ -115,7 +131,9 @@ const smtpDeliverer = createSmtpDeliverer(
 );
 const alertDeliverer = createFanoutDeliverer([webhookDeliverer, smtpDeliverer]);
 
-const { db } = createDb(databaseUrl);
+// The server's ONLY connection is the non-owner app role — there is no privileged handle
+// anywhere in the request path (D-15.3-5: "the ingest server can never see across orgs").
+const { db } = createDb(appDatabaseUrl);
 
 // M15 15.2: seed the bootstrap admin IDENTITY unconditionally, BEFORE (and independently
 // of) the password seed. `resolvePrincipal` maps the ADMIN_TOKEN service token onto

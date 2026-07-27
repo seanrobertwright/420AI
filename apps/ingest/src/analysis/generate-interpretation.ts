@@ -1,5 +1,6 @@
 import type { Db, ReportArtifactRow } from "@420ai/db";
 import {
+  withOrg,
   sessionDetail,
   sessionTranscript,
   usageTotals,
@@ -56,8 +57,14 @@ export async function generateSessionInterpretation(
   generatedAt: string,
   maxOutputTokens: number,
 ): Promise<ReportArtifactRow> {
-  const metrics = await sessionDetail(db, orgId, sessionId);
-  const raw = await sessionTranscript(db, orgId, sessionId); // DECRYPTED plaintext (transient)
+  // M15 15.3: the reads share one RLS-scoped transaction, which CLOSES before the provider
+  // call below. That ordering is deliberate — an external LLM round-trip can take tens of
+  // seconds, and holding a pooled connection open across it would starve the pool under any
+  // concurrency. (`insertReportArtifact` opens its own afterwards; see D-15.3-6.)
+  const { metrics, raw } = await withOrg(db, orgId, async (tx) => ({
+    metrics: await sessionDetail(tx, orgId, sessionId),
+    raw: await sessionTranscript(tx, orgId, sessionId), // DECRYPTED plaintext (transient)
+  }));
 
   // §18: redact each decrypted entry BEFORE it enters the bundle.
   const transcriptFindings: RedactionFinding[] = [];
@@ -120,13 +127,19 @@ export async function generateProjectInterpretation(
 ): Promise<ReportArtifactRow> {
   // Project interpretation is metrics-only — NO transcript/decrypt (D4: cross-session
   // content is unbounded). The route already guaranteed the project exists + has events.
-  const [totals, byModel, overTime, sessions, projectName] = await Promise.all([
-    usageTotals(db, orgId, projectId),
-    usageByModel(db, orgId, projectId),
-    usageOverTime(db, orgId, projectId, "day"),
-    sessionProjections(db, orgId, projectId),
-    getProjectName(db, orgId, projectId),
-  ]);
+  // The RLS-scoped read transaction closes before the (slow, external) provider call — see
+  // the note in generateSessionInterpretation.
+  const { totals, byModel, overTime, sessions, projectName } = await withOrg(
+    db,
+    orgId,
+    async (tx) => ({
+      totals: await usageTotals(tx, orgId, projectId),
+      byModel: await usageByModel(tx, orgId, projectId),
+      overTime: await usageOverTime(tx, orgId, projectId, "day"),
+      sessions: await sessionProjections(tx, orgId, projectId),
+      projectName: await getProjectName(tx, orgId, projectId),
+    }),
+  );
 
   const bundle: ProjectBundle = {
     kind: "project",

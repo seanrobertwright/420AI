@@ -240,7 +240,7 @@ through the deferral-audit + scope conversation that produced M12/M13/M14. Full 
   Org-level tenancy (D-M15-1), RLS as a backstop behind primary application scoping (D-M15-3), four
   fixed roles + per-project grants (D-M15-4), all four identity paths + reset + MFA (D-M15-5),
   `ADMIN_TOKEN` retired to a bootstrap-only seed (D-M15-7). Slices: **15.0** ✅ Truth + RLS spike ·
-  **15.1** ✅ Tenancy schema · **15.2** ✅ Request principal · **15.3** RLS enforcement · **15.4** RBAC ·
+  **15.1** ✅ Tenancy schema · **15.2** ✅ Request principal · **15.3** ✅ RLS enforcement · **15.4** RBAC ·
   **15.5** Identity core · **15.6** Sessions + revocation · **15.7** SSO (Google + GitHub) ·
   **15.8** MFA · **15.9** API keys + retire `ADMIN_TOKEN` · **15.10** Team surfaces + audit table.
   **15.0 gates 15.3**; 15.5 gates 15.7.
@@ -429,8 +429,23 @@ ROW LEVEL SECURITY` does **not** fix it → a non-owner app role is load-bearing
         seeds the bootstrap admin IDENTITY unconditionally, so `ADMIN_TOKEN` keeps working on
         token-only deployments (it previously existed only when `ADMIN_PASSWORD` was set).
         Role is resolved but NOT enforced (15.4); RLS backstop is 15.3 and must land next.
-  - [ ] **15.3** RLS enforcement ·
-        **15.4** RBAC · **15.5** Identity core · **15.6** Sessions + revocation · **15.7** SSO ·
+  - [x] **15.3** RLS enforcement — DONE `2026-07-26` (PR #NN). The **backstop** behind 15.2's
+        application scoping (D-M15-3). A non-owner role `420ai_app` (`rolsuper=f`,
+        `rolbypassrls=f`) is what the ingest server now connects as — without it RLS is INERT and
+        every policy decorative, so `server.ts` **hard-fails without `DATABASE_URL_APP`**
+        (D-15.3-2). Migration `0015` puts 15 tables behind a policy keyed on a transaction-local
+        `app.current_org`: **12 STRICT** (unset context ⇒ 0 rows, not a 500 — the `nullif(…,'')`
+        guard) and **3 BOOTSTRAP-PERMISSIVE** (`machines`/`ingest_tokens`/`pairing_codes`, because
+        the credential lookup that DISCOVERS the org must itself run, D-15.3-3). `withOrg`
+        (`set_config(…, true)`, never `SET LOCAL` — Postgres rejects a bind param there) wraps every
+        principal- and machine-authed handler; the three deployment-wide ops iterate **per org**
+        rather than taking a privileged connection, so the server has **zero** cross-org seams
+        (D-15.3-5). Proven by a **two-role** suite: dropping one policy fails 7 of 9 tests.
+        `repo-health --require-db` now also asserts the RLS role is non-bypassing — `bypassed ≠
+enforced`, the sibling of `skipped ≠ passed`. Closes the Spike-6 hole: a cross-org
+        converging ingest used to silently overwrite the other tenant's row and is now rejected.
+        Audit B.4 (alert-reconcile throttle) moved to 15.4 (D-15.3-7).
+  - [ ] **15.4** RBAC · **15.5** Identity core · **15.6** Sessions + revocation · **15.7** SSO ·
         **15.8** MFA · **15.9** API keys + retire `ADMIN_TOKEN` · **15.10** Team surfaces + audit
         table.
 

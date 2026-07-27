@@ -51,8 +51,19 @@ pub struct ServerConfig {
     pub ingest_url: String,
     /// SECRET — admin bearer for `/v1/monitor`, injected as `ADMIN_TOKEN`.
     pub admin_token: String,
-    /// SECRET — Postgres DSN, injected as `DATABASE_URL`.
+    /// SECRET — Postgres DSN for the OWNER role, injected as `DATABASE_URL`.
     pub database_url: String,
+    /// SECRET — Postgres DSN for the NON-OWNER app role (M15 15.3), injected as
+    /// `DATABASE_URL_APP`. The ingest server connects as this and REFUSES TO START without
+    /// it (D-15.3-2): RLS is inert against the owner role, so booting on `database_url`
+    /// would leave every policy decorative. Create it with `npm run db:provision-app-role`.
+    ///
+    /// `serde(default)` is REQUIRED, not stylistic: without it this field's addition makes
+    /// every previously-stored keychain blob fail to deserialize, and `load()` maps a parse
+    /// failure to `None` — silently presenting a configured user as UNPAIRED. Defaulting to
+    /// empty instead surfaces as `ingest_env`'s clear "not configured" error.
+    #[serde(default)]
+    pub database_url_app: String,
     /// SECRET — field-encryption key, injected as `ARCHIVE_ENCRYPTION_KEY`.
     pub archive_encryption_key: String,
     #[serde(default)]
@@ -158,6 +169,7 @@ mod tests {
             ingest_url: "http://localhost:8420".to_string(),
             admin_token: "admin_secret".to_string(),
             database_url: "postgres://420ai:420ai@localhost:5433/420ai".to_string(),
+            database_url_app: "postgres://420ai_app:apppw@localhost:5433/420ai".to_string(),
             archive_encryption_key: "base64key==".to_string(),
             ingest_port: Some(8420),
             analysis_provider: Some("anthropic".to_string()),

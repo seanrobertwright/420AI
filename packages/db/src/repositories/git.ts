@@ -1,6 +1,6 @@
 import { and, desc, eq } from "drizzle-orm";
 import type { GitCaptureRequest, GitCommitRow, GitFileChange } from "@420ai/shared";
-import type { Db, DbClient } from "../client.js";
+import type { DbClient } from "../client.js";
 import { encryptField } from "../crypto.js";
 import { gitCommitFiles, gitCommits, machines, workspaceKeys, workspaces } from "../schema.js";
 import { getMachineOrgId } from "./machines.js";
@@ -25,7 +25,7 @@ import { getMachineOrgId } from "./machines.js";
  * `commitsInserted` counts only NEW commits (dedup-aware, like `ingestBatch`).
  */
 export async function recordGitCommits(
-  db: Db,
+  db: DbClient,
   machineId: string,
   req: GitCaptureRequest,
 ): Promise<{ commitsInserted: number }> {

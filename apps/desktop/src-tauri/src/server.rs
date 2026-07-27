@@ -48,6 +48,7 @@ pub struct ServerConfigView {
     pub ingest_url: String,
     pub has_admin_token: bool,
     pub has_database_url: bool,
+    pub has_database_url_app: bool,
     pub has_archive_encryption_key: bool,
     pub has_analysis_api_key: bool,
     pub ingest_port: Option<u16>,
@@ -68,6 +69,8 @@ pub struct ServerConfigInput {
     pub admin_token: Option<String>,
     #[serde(default)]
     pub database_url: Option<String>,
+    #[serde(default)]
+    pub database_url_app: Option<String>,
     #[serde(default)]
     pub archive_encryption_key: Option<String>,
     #[serde(default)]
@@ -132,12 +135,22 @@ fn parse_archive_health(ps_json_lines: &str) -> String {
     "stopped".into()
 }
 
-/// Build the env the supervised ingest needs. The required trio MUST be present
+/// Build the env the supervised ingest needs. The required QUARTET MUST be present
 /// (`set_server_config` + the keychain guarantee it once configured). Optionals are
 /// added only when set. NEVER log the result — it carries the live secrets.
+///
+/// M15 15.3 made this a quartet: the ingest server hard-fails without `DATABASE_URL_APP`
+/// (D-15.3-2), so catching it here turns "the child process exits immediately with a throw"
+/// into a clear message in Settings before anything is spawned.
 fn ingest_env(cfg: &ServerConfig) -> Result<Vec<(String, String)>, String> {
     if cfg.database_url.trim().is_empty() {
         return Err("DATABASE_URL not configured".into());
+    }
+    if cfg.database_url_app.trim().is_empty() {
+        return Err(
+            "DATABASE_URL_APP not configured — run `npm run db:provision-app-role` (M15 15.3)"
+                .into(),
+        );
     }
     if cfg.admin_token.trim().is_empty() {
         return Err("ADMIN_TOKEN not configured".into());
@@ -147,6 +160,10 @@ fn ingest_env(cfg: &ServerConfig) -> Result<Vec<(String, String)>, String> {
     }
     let mut env = vec![
         ("DATABASE_URL".to_string(), cfg.database_url.clone()),
+        (
+            "DATABASE_URL_APP".to_string(),
+            cfg.database_url_app.clone(),
+        ),
         ("ADMIN_TOKEN".to_string(), cfg.admin_token.clone()),
         (
             "ARCHIVE_ENCRYPTION_KEY".to_string(),
@@ -174,6 +191,7 @@ fn to_view(c: ServerConfig) -> ServerConfigView {
     ServerConfigView {
         has_admin_token: present(&c.admin_token),
         has_database_url: present(&c.database_url),
+        has_database_url_app: present(&c.database_url_app),
         has_archive_encryption_key: present(&c.archive_encryption_key),
         has_analysis_api_key: c.analysis_api_key.as_deref().is_some_and(present),
         server_dir: c.server_dir,
@@ -299,6 +317,7 @@ pub fn set_server_config(cfg: ServerConfigInput) -> Result<(), String> {
         ingest_url,
         admin_token: merge_secret(cfg.admin_token, existing.admin_token),
         database_url: merge_secret(cfg.database_url, existing.database_url),
+        database_url_app: merge_secret(cfg.database_url_app, existing.database_url_app),
         archive_encryption_key: merge_secret(
             cfg.archive_encryption_key,
             existing.archive_encryption_key,
@@ -586,6 +605,8 @@ mod tests {
             ingest_url: "http://localhost:8420".to_string(),
             admin_token: "ADMIN_SECRET_VALUE".to_string(),
             database_url: "postgres://420ai:420ai@localhost:5433/420ai".to_string(),
+            database_url_app: "postgres://420ai_app:APP_SECRET_VALUE@localhost:5433/420ai"
+                .to_string(),
             archive_encryption_key: "ENC_SECRET_VALUE".to_string(),
             ingest_port: Some(8420),
             analysis_provider: Some("anthropic".to_string()),
@@ -596,10 +617,15 @@ mod tests {
     }
 
     #[test]
-    fn ingest_env_includes_required_trio_and_set_optionals() {
-        let env = ingest_env(&sample_config()).expect("required trio present");
+    fn ingest_env_includes_required_quartet_and_set_optionals() {
+        let env = ingest_env(&sample_config()).expect("required quartet present");
         let get = |k: &str| env.iter().find(|(key, _)| key == k).map(|(_, v)| v.as_str());
         assert_eq!(get("DATABASE_URL"), Some("postgres://420ai:420ai@localhost:5433/420ai"));
+        // M15 15.3: the ingest server hard-fails without this, so it MUST be injected.
+        assert_eq!(
+            get("DATABASE_URL_APP"),
+            Some("postgres://420ai_app:APP_SECRET_VALUE@localhost:5433/420ai")
+        );
         assert_eq!(get("ADMIN_TOKEN"), Some("ADMIN_SECRET_VALUE"));
         assert_eq!(get("ARCHIVE_ENCRYPTION_KEY"), Some("ENC_SECRET_VALUE"));
         assert_eq!(get("INGEST_PORT"), Some("8420"));
@@ -620,9 +646,18 @@ mod tests {
             analysis_base_url: None,
             ..sample_config()
         };
-        let env = ingest_env(&cfg).expect("required trio present");
+        let env = ingest_env(&cfg).expect("required quartet present");
         let keys: Vec<&str> = env.iter().map(|(k, _)| k.as_str()).collect();
-        assert_eq!(keys, vec!["DATABASE_URL", "ADMIN_TOKEN", "ARCHIVE_ENCRYPTION_KEY"]);
+        // Order matters: this asserts the exact vec the function pushes, in push order.
+        assert_eq!(
+            keys,
+            vec![
+                "DATABASE_URL",
+                "DATABASE_URL_APP",
+                "ADMIN_TOKEN",
+                "ARCHIVE_ENCRYPTION_KEY"
+            ]
+        );
     }
 
     #[test]
@@ -635,18 +670,33 @@ mod tests {
     }
 
     #[test]
+    fn ingest_env_errors_without_the_app_role_url() {
+        // M15 15.3 D-15.3-2: refusing here is the whole point — booting the ingest server on
+        // the owner role would leave every RLS policy inert while everything LOOKED healthy.
+        let cfg = ServerConfig {
+            database_url_app: "".to_string(),
+            ..sample_config()
+        };
+        let err = ingest_env(&cfg).expect_err("must refuse without DATABASE_URL_APP");
+        assert!(err.contains("DATABASE_URL_APP"));
+    }
+
+    #[test]
     fn masked_view_hides_secrets_even_from_debug() {
         let cfg = sample_config();
         let view = to_view(cfg);
         // Presence booleans are correct…
         assert!(view.has_admin_token);
         assert!(view.has_database_url);
+        assert!(view.has_database_url_app);
         assert!(view.has_archive_encryption_key);
         assert!(view.has_analysis_api_key);
         // …and NO secret string is reachable, even via a Debug/log path.
         let debug = format!("{view:?}");
         assert!(!debug.contains("ADMIN_SECRET_VALUE"));
         assert!(!debug.contains("ENC_SECRET_VALUE"));
+        // M15 15.3: the app-role DSN embeds a password — it must never reach the view.
+        assert!(!debug.contains("APP_SECRET_VALUE"));
         assert!(!debug.contains("ANALYSIS_SECRET_VALUE"));
         assert!(!debug.contains("420ai@localhost"));
         // Non-secret fields ARE present.
@@ -658,6 +708,7 @@ mod tests {
         let view = to_view(ServerConfig::default());
         assert!(!view.has_admin_token);
         assert!(!view.has_database_url);
+        assert!(!view.has_database_url_app);
         assert!(!view.has_archive_encryption_key);
         assert!(!view.has_analysis_api_key);
     }

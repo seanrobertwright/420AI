@@ -1,5 +1,6 @@
 import { and, desc, eq, sql } from "drizzle-orm";
 import type { Db, DbClient } from "../client.js";
+import { withOrg } from "../org-context.js";
 import { reportArtifacts } from "../schema.js";
 
 /**
@@ -87,6 +88,13 @@ export function isVersionConflict(e: unknown): boolean {
  * `orgId` now comes in on `a` from the request principal instead of a
  * `getOrgIdForUser` lookup inside the transaction — one less query per generation,
  * and it retires one of 15.1's temporary seams.
+ *
+ * M15 15.3 (D-15.3-6) — this function calls `withOrg` INTERNALLY, once per retry attempt, and
+ * its ROUTE deliberately does not wrap it. The paragraph above is exactly why: `withOrg` opens
+ * the transaction, so each attempt gets a fresh transaction AND a fresh `set_config`. Move the
+ * retry inside `withOrg` and attempt 2 dies on `current transaction is aborted`; wrap the route
+ * instead and this receives a `Tx` where it needs a `Db` (a compile error — and forcing past it
+ * reintroduces the same abort). The `Db` parameter is load-bearing. Do not "fix" it.
  */
 export async function insertReportArtifact(
   db: Db,
@@ -94,7 +102,7 @@ export async function insertReportArtifact(
 ): Promise<ReportArtifactRow> {
   for (let attempt = 1; attempt <= MAX_VERSION_ATTEMPTS; attempt++) {
     try {
-      return await db.transaction(async (tx) => {
+      return await withOrg(db, a.orgId, async (tx) => {
         const [prev] = await tx
           .select({ v: sql<number>`coalesce(max(${reportArtifacts.version}), 0)::int` })
           .from(reportArtifacts)

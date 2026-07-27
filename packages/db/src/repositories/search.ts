@@ -344,6 +344,15 @@ const INDEX_SESSIONS_CHUNK = 500;
 export async function indexSessions(
   db: DbClient,
   sessionIds: string[],
+  /**
+   * M15 15.3 — optional explicit org scope. `session_id` is a connector-supplied, GLOBALLY
+   * scoped string, so a given id can belong to two tenants; the GROUP BY below already keeps
+   * their documents separate (15.1's fix), but an unscoped call still WRITES both orgs' docs.
+   * That is correct for the ingest path (one org's sessions, one org's docs) and wrong for the
+   * per-org reindex loop (D-15.3-5), where it would rebuild every org on every pass and inflate
+   * the summed counts N_orgs-fold for any owner-role caller. Callers that know their org pass it.
+   */
+  orgId?: string,
 ): Promise<{ sessions: number; events: number }> {
   const ids = [...new Set(sessionIds)];
   let sessions = 0;
@@ -361,7 +370,12 @@ export async function indexSessions(
       })
       .from(rawSourceRecords)
       .innerJoin(machines, eq(machines.id, rawSourceRecords.machineId))
-      .where(inArray(rawSourceRecords.sessionId, ids.slice(i, i + INDEX_SESSIONS_CHUNK)))
+      .where(
+        and(
+          inArray(rawSourceRecords.sessionId, ids.slice(i, i + INDEX_SESSIONS_CHUNK)),
+          orgId ? eq(rawSourceRecords.orgId, orgId) : undefined,
+        ),
+      )
       .groupBy(rawSourceRecords.orgId, rawSourceRecords.sessionId);
 
     for (const s of sessionMeta) {
@@ -432,10 +446,21 @@ export async function indexReportDoc(db: DbClient, reportId: string): Promise<vo
  * ingest.ts/reports.ts), so a mid-rebuild failure (e.g. a decrypt/key error in the
  * session loop) rolls back and leaves the PREVIOUS index fully intact — a partial
  * index is never observable. `DbClient` supports `.transaction` (nested → savepoint).
+ *
+ * M15 15.3 — MUST BE CALLED INSIDE `withOrg`. This function opens with an UNQUALIFIED
+ * `delete(searchDocuments)`. Inside a `withOrg` block the RLS policy scopes that delete to the
+ * current org, which is exactly right and is why the route now loops one org at a time
+ * (D-15.3-5). Called UNWRAPPED it is no longer safe: as the app role it would delete nothing
+ * (0 rows visible), and as the OWNER it would delete every org's index.
  */
-export async function rebuildSearchIndex(db: DbClient): Promise<ReindexCounts> {
+export async function rebuildSearchIndex(db: DbClient, orgId: string): Promise<ReindexCounts> {
   return db.transaction(async (tx) => {
-    await tx.delete(searchDocumentsTbl);
+    // M15 15.3: EXPLICIT org scoping on every statement below, not just the RLS policy — the
+    // same "keep both layers" rule (D-M15-3) the rest of the slice follows. It matters most
+    // HERE: under the per-org loop an unscoped delete-then-rebuild would, for any owner-role
+    // caller (which bypasses RLS), wipe every org's index on each pass and rebuild every org's
+    // documents, inflating the summed counts N_orgs-fold.
+    await tx.delete(searchDocumentsTbl).where(eq(searchDocumentsTbl.orgId, orgId));
 
     let reports = 0;
     let projectCount = 0;
@@ -450,7 +475,8 @@ export async function rebuildSearchIndex(db: DbClient): Promise<ReindexCounts> {
         reportType: reportArtifacts.reportType,
         markdown: reportArtifacts.markdown,
       })
-      .from(reportArtifacts);
+      .from(reportArtifacts)
+      .where(eq(reportArtifacts.orgId, orgId));
     for (const r of reportRows) {
       await upsertDoc(tx, reportDoc(r));
       reports++;
@@ -465,12 +491,13 @@ export async function rebuildSearchIndex(db: DbClient): Promise<ReindexCounts> {
         name: projects.name,
         gitRemote: projects.gitRemote,
       })
-      .from(projects);
+      .from(projects)
+      .where(eq(projects.orgId, orgId));
     for (const p of projectRows) {
       const wsRows = await tx
         .select({ rootPath: workspaces.rootPath })
         .from(workspaces)
-        .where(eq(workspaces.projectId, p.id));
+        .where(and(eq(workspaces.orgId, orgId), eq(workspaces.projectId, p.id)));
       await upsertDoc(
         tx,
         projectDoc(
@@ -486,10 +513,14 @@ export async function rebuildSearchIndex(db: DbClient): Promise<ReindexCounts> {
     // per-event docs).
     const idRows = await tx
       .selectDistinct({ sessionId: rawSourceRecords.sessionId })
-      .from(rawSourceRecords);
+      .from(rawSourceRecords)
+      .where(eq(rawSourceRecords.orgId, orgId));
     const { sessions, events: eventCount } = await indexSessions(
       tx,
       idRows.map((r) => r.sessionId),
+      // Pass the org through: a session id shared with another tenant would otherwise have
+      // BOTH orgs' documents rebuilt (and counted) on this org's pass.
+      orgId,
     );
 
     return {

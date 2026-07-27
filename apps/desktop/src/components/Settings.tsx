@@ -64,6 +64,7 @@ export function Settings() {
   const [ingestPort, setIngestPort] = useState("");
   const [adminToken, setAdminToken] = useState("");
   const [databaseUrl, setDatabaseUrl] = useState("");
+  const [databaseUrlApp, setDatabaseUrlApp] = useState("");
   const [archiveEncryptionKey, setArchiveEncryptionKey] = useState("");
   const [analysisProvider, setAnalysisProvider] = useState("");
   const [analysisApiKey, setAnalysisApiKey] = useState("");
@@ -177,6 +178,7 @@ export function Settings() {
       ...(port !== undefined ? { ingestPort: port } : {}),
       ...(adminToken.trim() !== "" ? { adminToken: adminToken.trim() } : {}),
       ...(databaseUrl.trim() !== "" ? { databaseUrl: databaseUrl.trim() } : {}),
+      ...(databaseUrlApp.trim() !== "" ? { databaseUrlApp: databaseUrlApp.trim() } : {}),
       ...(archiveEncryptionKey.trim() !== ""
         ? { archiveEncryptionKey: archiveEncryptionKey.trim() }
         : {}),
@@ -308,6 +310,18 @@ export function Settings() {
                 placeholder={secretPlaceholder(
                   config?.hasDatabaseUrl,
                   "postgres://420ai:420ai@localhost:5433/420ai",
+                )}
+                className={cn(inputClass, "font-mono")}
+              />
+            </Field>
+            <Field label="Database URL (app role)">
+              <input
+                type="password"
+                value={databaseUrlApp}
+                onChange={(e) => setDatabaseUrlApp(e.target.value)}
+                placeholder={secretPlaceholder(
+                  config?.hasDatabaseUrlApp,
+                  "postgres://420ai_app:…@localhost:5433/420ai (npm run db:provision-app-role)",
                 )}
                 className={cn(inputClass, "font-mono")}
               />

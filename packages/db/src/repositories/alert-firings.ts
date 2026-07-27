@@ -8,7 +8,8 @@ import {
   type AlertSeverity,
   type OperationalAlert,
 } from "@420ai/shared";
-import type { DbClient } from "../client.js";
+import type { Db, DbClient } from "../client.js";
+import { withOrg } from "../org-context.js";
 import { alertFirings } from "../schema.js";
 
 /**
@@ -220,25 +221,46 @@ export async function ackAlertFiring(
  * snapshot path can't 500. Early-returns (no query) when no deliverer is wired — the default
  * no-webhook case stays cheap on the 3 s SSE tick. `now` is route-owned (CLAUDE.md). The
  * deliverer is an INLINE structural type so @420ai/db gains no dep on @420ai/shared/apps-ingest.
+ *
+ * M15 15.3 — takes `Db` + `orgId` and owns its RLS context INTERNALLY, in short transactions
+ * around each statement, with `deliver()` running BETWEEN them and no transaction open.
+ *
+ * Both halves of that shape are load-bearing:
+ *
+ *   - It MUST be scoped. `alert_firings` carries a STRICT policy, so called with no org
+ *     context this reads ZERO rows as the app role — silently, since RLS filters rather than
+ *     errors and the deliverer's own try/catch would swallow an error anyway. The route
+ *     originally called this on the unwrapped `app.db` handle and outbound alert delivery was
+ *     simply dead in production while every owner-connected test stayed green.
+ *   - It must NOT be one long transaction. `deliver()` is a webhook/SMTP round-trip to a third
+ *     party; holding a pooled connection across it — on a path that runs every SSE tick — is
+ *     how connection pools die. Hence `withOrg` per statement rather than one around the loop.
+ *
+ * The explicit `org_id` predicate is kept on every statement alongside the policy (D-M15-3:
+ * RLS backstops application scoping, it does not replace it).
  */
 export async function deliverPendingFirings(
-  db: DbClient,
+  db: Db,
+  orgId: string,
   userId: string,
   deliverer: { deliver(firing: AlertFiring): Promise<void> } | null,
   now: Date,
   log?: (err: unknown) => void,
 ): Promise<void> {
   if (!deliverer) return; // delivery disabled — no query
-  const rows = await db
-    .select(firingColumns)
-    .from(alertFirings)
-    .where(
-      and(
-        eq(alertFirings.userId, userId),
-        eq(alertFirings.status, "open"),
-        isNull(alertFirings.deliveryAttemptedAt),
+  const rows = await withOrg(db, orgId, (tx) =>
+    tx
+      .select(firingColumns)
+      .from(alertFirings)
+      .where(
+        and(
+          eq(alertFirings.orgId, orgId),
+          eq(alertFirings.userId, userId),
+          eq(alertFirings.status, "open"),
+          isNull(alertFirings.deliveryAttemptedAt),
+        ),
       ),
-    );
+  );
   for (const r of rows) {
     const firing = toFiring(r);
     try {
@@ -247,10 +269,12 @@ export async function deliverPendingFirings(
       log?.(err);
     }
     // Stamp regardless of outcome — at-most-once attempt, no 3-second retry spam.
-    await db
-      .update(alertFirings)
-      .set({ deliveryAttemptedAt: now })
-      .where(eq(alertFirings.id, r.id));
+    await withOrg(db, orgId, (tx) =>
+      tx
+        .update(alertFirings)
+        .set({ deliveryAttemptedAt: now })
+        .where(and(eq(alertFirings.orgId, orgId), eq(alertFirings.id, r.id))),
+    );
   }
 }
 
@@ -263,27 +287,35 @@ export async function deliverPendingFirings(
  * mirroring deliverPendingFirings). The firing row carries `status:"resolved"`, so the deliverer
  * derives an `alert.resolved` envelope. Best-effort: a per-firing throw is caught + logged,
  * never propagated. Early-returns (no query) when no deliverer is wired. `now` is route-owned.
+ *
+ * M15 15.3: same `Db` + `orgId` + per-statement `withOrg` shape as `deliverPendingFirings` —
+ * see that function's note for why the scoping is mandatory and why it is NOT one long
+ * transaction around the deliverer call.
  */
 export async function deliverResolvedFirings(
-  db: DbClient,
+  db: Db,
+  orgId: string,
   userId: string,
   deliverer: { deliver(firing: AlertFiring): Promise<void> } | null,
   now: Date,
   log?: (err: unknown) => void,
 ): Promise<void> {
   if (!deliverer) return; // delivery disabled — no query
-  const rows = await db
-    .select(firingColumns)
-    .from(alertFirings)
-    .where(
-      and(
-        eq(alertFirings.userId, userId),
-        eq(alertFirings.status, "resolved"),
-        isNotNull(alertFirings.resolvedAt),
-        isNotNull(alertFirings.deliveryAttemptedAt),
-        isNull(alertFirings.resolveDeliveredAt),
+  const rows = await withOrg(db, orgId, (tx) =>
+    tx
+      .select(firingColumns)
+      .from(alertFirings)
+      .where(
+        and(
+          eq(alertFirings.orgId, orgId),
+          eq(alertFirings.userId, userId),
+          eq(alertFirings.status, "resolved"),
+          isNotNull(alertFirings.resolvedAt),
+          isNotNull(alertFirings.deliveryAttemptedAt),
+          isNull(alertFirings.resolveDeliveredAt),
+        ),
       ),
-    );
+  );
   for (const r of rows) {
     const firing = toFiring(r);
     try {
@@ -292,6 +324,11 @@ export async function deliverResolvedFirings(
       log?.(err);
     }
     // Stamp regardless of outcome — at-most-once resolve notice.
-    await db.update(alertFirings).set({ resolveDeliveredAt: now }).where(eq(alertFirings.id, r.id));
+    await withOrg(db, orgId, (tx) =>
+      tx
+        .update(alertFirings)
+        .set({ resolveDeliveredAt: now })
+        .where(and(eq(alertFirings.orgId, orgId), eq(alertFirings.id, r.id))),
+    );
   }
 }

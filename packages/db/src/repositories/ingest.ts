@@ -1,6 +1,6 @@
 import type { IngestBatch, IngestResponse, ModelPricing } from "@420ai/shared";
 import { computeCost } from "@420ai/shared";
-import type { Db } from "../client.js";
+import type { DbClient } from "../client.js";
 import { encryptField } from "../crypto.js";
 import { events, rawSourceRecords } from "../schema.js";
 import { getMachineOrgId } from "./machines.js";
@@ -19,9 +19,21 @@ import { getMachineOrgId } from "./machines.js";
  * M15 15.1 tenancy: the org is DERIVED from `machines.org_id` inside the transaction
  * (D-M15-1), never passed in — the signature is unchanged for all 25 call sites and
  * an incorrect org is unrepresentable. See the D-M15-2 note on the conflict block.
+ *
+ * M15 15.3: the first parameter widened `Db` → `DbClient` so the route can call this INSIDE
+ * `withOrg`. The `db.transaction()` below then nests as a SAVEPOINT and inherits the outer
+ * transaction's `app.current_org`. The internal org derivation stays exactly as it is — it is
+ * the D-M15-2 seam that makes a caller-supplied wrong org unrepresentable, and RLS is a
+ * backstop for it, not a replacement.
+ *
+ * BEHAVIOUR CHANGE under RLS worth knowing: a CROSS-ORG converging ingest (org A ingesting a
+ * fingerprint already owned by org B) now raises `new row violates row-level security policy`
+ * instead of silently overwriting org B's `parser_version` / `tokens` / `cost` / `machine_id`
+ * (spike 6 measured exactly that today). That is the slice working as intended; it is pinned
+ * by a negative test in `rls.int.test.ts`, not caught-and-ignored.
  */
 export async function ingestBatch(
-  db: Db,
+  db: DbClient,
   machineId: string,
   batch: IngestBatch,
   /**
