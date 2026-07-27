@@ -160,6 +160,48 @@ DB-backed layer ran. Before signing off ANY milestone that touches `@420ai/db` o
 actually ran, 0 skipped). This is the gap that hid the M5 `lastActivity` type bug through M5 sign-off —
 the int test asserting it could never have passed against a real DB, so the layer was never exercised.
 
+**A single-role integration suite proves nothing about isolation — `bypassed ≠ enforced` is the
+sibling of `skipped ≠ passed`** (M15 15.3). Postgres RLS is INERT against a superuser or any role with
+`rolbypassrls`, and `DATABASE_URL_TEST` is exactly that (it owns the tables). An owner-only suite
+therefore reports green while enforcing **nothing** — the same shape as a skipped layer, one level
+deeper. So **any slice that touches tenancy MUST carry a TWO-ROLE suite**: the owner handle for setup
+only (`TRUNCATE` requires ownership), a non-owner handle (`DATABASE_URL_TEST_APP` → `420ai_app`) for
+every assertion, and a **role-identity assertion as the suite's first test**
+(`current_setting('is_superuser') = 'off'` AND `rolbypassrls = false`). Without that first test the
+whole file is theatre: point the "app" handle at the owner URL by mistake and every isolation test
+still passes. `repo-health --require-db` now checks the same thing before it runs vitest, and it is
+deliberately out of `--fast` (it needs a live DB).
+
+Four corollaries the 15.3 conversion measured rather than assumed:
+
+- **Verify a negative test FAILS with the policy removed** — and remove it the RIGHT way. Dropping a
+  policy while RLS stays ENABLED makes Postgres deny _everything_, so tests fail for the wrong
+  reason. Replace it with `USING (true)` to simulate the actual leak.
+- Under that real simulation, **9 of 10 HTTP-level tests still passed**, because 15.2's explicit
+  `orgId` predicates scope those reads on their own. That is the layering working as designed — but
+  it means an endpoint-level suite validates the PRIMARY defence, not the backstop. Put the backstop
+  proof in a repository-level two-role suite, where dropping one policy fails most of the file.
+- **A per-FILE grep exempts the file, not the call site** — the same shape as the `tsc` lesson above,
+  now proven twice. 15.3's `org-scoping.test.ts` skips any route file containing `withOrg(`
+  anywhere, so `monitor.ts` passed it while `deliverPendingFirings`/`deliverResolvedFirings` still
+  ran on the unwrapped `app.db`. Under the app role that read `alert_firings` (a strict-policy
+  table) as ZERO rows: outbound alert delivery was **completely dead**, with no error, no log and a
+  200 response — and every existing delivery test stayed green because they all build on the owner
+  handle. A structural grep cannot decide whether an identifier is a `Tx` or a `Db`; **pair it with
+  a BEHAVIOURAL test on the app role** that asserts the side effect actually happened
+  (`delivered.length > 0`), which is what caught this. Corollary of the corollary: **a
+  best-effort/swallow path is the worst place to lose a policy** — it is designed not to complain.
+- **A grep that exempts a whole FILE is not a call-site check** — the same shape as the `tsc`
+  file-level lesson above, one layer up. `org-scoping.test.ts` skips any file containing `withOrg(`
+  anywhere, so `monitor.ts` passed while its alert-DELIVERY pass still ran on the unwrapped
+  `app.db`: under a strict policy that reads **zero rows silently**, so every webhook and email
+  stopped going out while the UI still showed the alert and every owner-connected test stayed green.
+  Source text cannot tell a `Tx` from a `Db`, so do not try to make the regex exact — pair it with a
+  **behavioural** test on the non-owner role (`rls.int.test.ts` asserts a firing is actually
+  delivered and stamped). Corollary of the corollary: **an org-scoped read reached through a
+  best-effort `try/catch` is the worst case** — RLS filters rather than errors, so there is nothing
+  for the catch to swallow and nothing to log. Audit those paths first.
+
 ## Tooling gotchas (Windows)
 
 - The **Bash tool is Git Bash (POSIX sh)**. For multi-line commit messages / PR bodies use a

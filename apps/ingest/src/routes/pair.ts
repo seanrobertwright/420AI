@@ -6,6 +6,13 @@ import { pairBodySchema } from "../schemas.js";
 /**
  * POST /v1/pair — the code IS the credential (no bearer). Atomically redeems the
  * code, registers the machine, and issues a revocable ingest token (PRD §19).
+ *
+ * M15 15.3 — DELIBERATELY NOT wrapped in `withOrg`, and this route is the reason the
+ * BOOTSTRAP-PERMISSIVE policy exists (D-15.3-3). The three tables it touches — `pairing_codes`,
+ * `machines`, `ingest_tokens` — are exactly the three that carry it, because this transaction
+ * is CIRCULAR with respect to tenancy: it must read the pairing code IN ORDER TO discover the
+ * org, so there is no org to set beforehand. A strict policy here would 401 every collector at
+ * pairing time. The org still comes from the redeemed code, never from the request body.
  */
 export default async function pairRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Body: PairRequest }>(

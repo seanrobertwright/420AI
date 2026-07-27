@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { HeartbeatRequest, HeartbeatResponse } from "@420ai/shared";
-import { recordHeartbeat } from "@420ai/db";
+import { recordHeartbeat, getMachineOrgId, withOrg } from "@420ai/db";
 import { heartbeatBodySchema } from "../schemas.js";
 
 /**
@@ -16,12 +16,20 @@ export default async function heartbeatRoutes(app: FastifyInstance): Promise<voi
     "/v1/heartbeat",
     { preHandler: app.authenticate, schema: { body: heartbeatBodySchema } },
     async (request, reply) => {
-      await recordHeartbeat(app.db, request.machineId, {
-        queuePending: request.body.queuePending,
-        queueInflight: request.body.queueInflight,
-        collectorVersion: request.body.collectorVersion,
-        consecutiveSyncFailures: request.body.consecutiveSyncFailures,
-      });
+      // M15 15.3: machine-authed — resolve the org from `machines` (bootstrap-permissive, so
+      // this read runs with no context yet) before opening the RLS-scoped transaction.
+      const orgId = await getMachineOrgId(app.db, request.machineId);
+      if (!orgId) {
+        return reply.code(401).send({ error: "machine has no organization" });
+      }
+      await withOrg(app.db, orgId, (tx) =>
+        recordHeartbeat(tx, request.machineId, {
+          queuePending: request.body.queuePending,
+          queueInflight: request.body.queueInflight,
+          collectorVersion: request.body.collectorVersion,
+          consecutiveSyncFailures: request.body.consecutiveSyncFailures,
+        }),
+      );
       return reply.code(200).send({ ok: true } satisfies HeartbeatResponse);
     },
   );

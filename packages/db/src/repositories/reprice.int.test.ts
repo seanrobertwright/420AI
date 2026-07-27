@@ -158,7 +158,7 @@ describe.skipIf(!TEST_URL)("repriceAll repository (integration) — M12 12.5a", 
   });
 
   it("reprices NULL- and old-version cost-bearing rows; skips active; never adds a cost", async () => {
-    const result = await repriceAll(dbh.db, ACTIVE);
+    const result = await repriceAll(dbh.db, orgId, ACTIVE);
     expect(result).toEqual({ repriced: 2, catalogVersion: "v-new" });
 
     const costs = await readCosts(dbh.db);
@@ -176,8 +176,8 @@ describe.skipIf(!TEST_URL)("repriceAll repository (integration) — M12 12.5a", 
   });
 
   it("is idempotent — a second run under the same catalog reprices 0 rows", async () => {
-    await repriceAll(dbh.db, ACTIVE);
-    const second = await repriceAll(dbh.db, ACTIVE);
+    await repriceAll(dbh.db, orgId, ACTIVE);
+    const second = await repriceAll(dbh.db, orgId, ACTIVE);
     expect(second).toEqual({ repriced: 0, catalogVersion: "v-new" });
   });
 });

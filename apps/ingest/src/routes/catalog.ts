@@ -22,6 +22,12 @@ interface CatalogUploadBody {
  * GET  /v1/catalog            — list all catalog rows (newest first).
  * POST /v1/catalog/:id/approve — activate a pending catalog, superseding the prior active.
  * POST /v1/catalog/:id/reject  — reject a pending catalog.
+ *
+ * M15 15.3 — NO `withOrg` here, deliberately. Every route in this file touches only
+ * `pricing_catalogs`, which is deployment-GLOBAL (D-M15-9): it has no `org_id` column and
+ * therefore no RLS policy (D-15.3-4). Wrapping would set a context nothing reads and cost a
+ * transaction per request for nothing. These routes still resolve a principal — that is
+ * authentication, not tenancy.
  */
 export default async function catalogRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Body: CatalogUploadBody }>(

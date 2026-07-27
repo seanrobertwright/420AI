@@ -66,6 +66,28 @@ export async function getOrgIdForUser(db: DbClient, userId: string): Promise<str
 }
 
 /**
+ * Every organization in the deployment, oldest first.
+ *
+ * Exists for exactly one caller shape (M15 15.3, D-15.3-5): the three DEPLOYMENT-WIDE
+ * maintenance ops — `/v1/replay/reprice`, `/v1/replay/reparse`, `/v1/search/reindex` — which
+ * must touch all orgs. Under RLS they cannot do that in one unscoped pass, and giving the
+ * ingest server a privileged bypass connection would put a cross-org seam in the server
+ * forever. Instead they LOOP: `listOrganizations` then one `withOrg` pass per org, summing the
+ * counts. The server can never see across orgs, full stop.
+ *
+ * `organizations` carries no RLS (D-15.3-4), so this read works from the app role.
+ *
+ * Explicit column list, never a bare `select()` — 15.1's lesson: rows that can reach
+ * `reply.send()` must not carry unannounced columns.
+ */
+export async function listOrganizations(db: DbClient): Promise<{ id: string }[]> {
+  return db
+    .select({ id: organizations.id })
+    .from(organizations)
+    .orderBy(asc(organizations.createdAt), asc(organizations.id));
+}
+
+/**
  * Find-or-create the user's personal organization, returning its id (IDEMPOTENT).
  * Returns the existing membership's org when there is one; otherwise inserts an
  * `organizations` row (`is_personal: true`) plus an `owner` membership (D-M15-4/D-M15-11).

@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import {
+  withOrg,
   usageTotals,
   usageByModel,
   usageOverTime,
@@ -18,6 +19,17 @@ import { resolvePrincipal, isUuid } from "../auth.js";
  * `:sessionId` is a connector TEXT id (not a uuid) so it is ungated — an unknown
  * id returns a zeroed projection (200), not 404. Read-only: bad input is a guard
  * 401/404/400, never a new typed error.
+ *
+ * M15 15.3: every DB call runs inside `withOrg`, which sets the transaction-local
+ * `app.current_org` the RLS policies key on. Note BOTH layers are kept — the repo still
+ * takes its explicit `orgId` argument. That is D-M15-3 (RLS backstops application scoping,
+ * it does not replace it) and it is also what keeps the policy CHEAP: with an explicit
+ * `org_id = <literal>` in the query the planner collapses the policy predicate to a
+ * one-time filter instead of evaluating it per row. Deleting the explicit predicate
+ * "because RLS handles it now" would be a correctness AND a performance regression.
+ *
+ * Guards stay OUTSIDE the transaction: opening one only to 404 wastes a connection, and a
+ * `reply.send()` inside the callback would tie commit/rollback to serialization order.
  */
 export default async function projectionRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { id: string } }>("/v1/projects/:id/sessions", async (request, reply) => {
@@ -28,9 +40,10 @@ export default async function projectionRoutes(app: FastifyInstance): Promise<vo
     if (!isUuid(request.params.id)) {
       return reply.code(404).send({ error: "project not found" });
     }
-    return reply
-      .code(200)
-      .send(await sessionProjections(app.db, principal.orgId, request.params.id));
+    const result = await withOrg(app.db, principal.orgId, (tx) =>
+      sessionProjections(tx, principal.orgId, request.params.id),
+    );
+    return reply.code(200).send(result);
   });
 
   app.get<{ Params: { id: string } }>("/v1/projects/:id/usage", async (request, reply) => {
@@ -41,7 +54,10 @@ export default async function projectionRoutes(app: FastifyInstance): Promise<vo
     if (!isUuid(request.params.id)) {
       return reply.code(404).send({ error: "project not found" });
     }
-    return reply.code(200).send(await usageTotals(app.db, principal.orgId, request.params.id));
+    const result = await withOrg(app.db, principal.orgId, (tx) =>
+      usageTotals(tx, principal.orgId, request.params.id),
+    );
+    return reply.code(200).send(result);
   });
 
   app.get<{ Params: { id: string } }>("/v1/projects/:id/usage/by-model", async (request, reply) => {
@@ -52,7 +68,10 @@ export default async function projectionRoutes(app: FastifyInstance): Promise<vo
     if (!isUuid(request.params.id)) {
       return reply.code(404).send({ error: "project not found" });
     }
-    return reply.code(200).send(await usageByModel(app.db, principal.orgId, request.params.id));
+    const result = await withOrg(app.db, principal.orgId, (tx) =>
+      usageByModel(tx, principal.orgId, request.params.id),
+    );
+    return reply.code(200).send(result);
   });
 
   app.get<{ Params: { id: string }; Querystring: { bucket?: "day" | "week" } }>(
@@ -67,9 +86,10 @@ export default async function projectionRoutes(app: FastifyInstance): Promise<vo
         return reply.code(404).send({ error: "project not found" });
       }
       const bucket = request.query.bucket ?? "day";
-      return reply
-        .code(200)
-        .send(await usageOverTime(app.db, principal.orgId, request.params.id, bucket));
+      const result = await withOrg(app.db, principal.orgId, (tx) =>
+        usageOverTime(tx, principal.orgId, request.params.id, bucket),
+      );
+      return reply.code(200).send(result);
     },
   );
 
@@ -81,9 +101,10 @@ export default async function projectionRoutes(app: FastifyInstance): Promise<vo
     if (!isUuid(request.params.id)) {
       return reply.code(404).send({ error: "project not found" });
     }
-    return reply
-      .code(200)
-      .send(await projectGitMetadata(app.db, principal.orgId, request.params.id));
+    const result = await withOrg(app.db, principal.orgId, (tx) =>
+      projectGitMetadata(tx, principal.orgId, request.params.id),
+    );
+    return reply.code(200).send(result);
   });
 
   app.get<{ Params: { sessionId: string } }>("/v1/sessions/:sessionId", async (request, reply) => {
@@ -92,9 +113,10 @@ export default async function projectionRoutes(app: FastifyInstance): Promise<vo
       return reply.code(401).send({ error: "admin authorization required" });
     }
     // sessionId is a connector text id (NOT a uuid) — unknown → zeroed projection.
-    return reply
-      .code(200)
-      .send(await sessionDetail(app.db, principal.orgId, request.params.sessionId));
+    const result = await withOrg(app.db, principal.orgId, (tx) =>
+      sessionDetail(tx, principal.orgId, request.params.sessionId),
+    );
+    return reply.code(200).send(result);
   });
 
   app.get("/v1/connectors/health", async (request, reply) => {
@@ -103,6 +125,7 @@ export default async function projectionRoutes(app: FastifyInstance): Promise<vo
       return reply.code(401).send({ error: "admin authorization required" });
     }
     const userId = principal.userId;
-    return reply.code(200).send(await connectorHealth(app.db, userId));
+    const result = await withOrg(app.db, principal.orgId, (tx) => connectorHealth(tx, userId));
+    return reply.code(200).send(result);
   });
 }

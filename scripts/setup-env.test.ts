@@ -5,14 +5,20 @@ import { join } from "node:path";
 import {
   buildEnvFiles,
   fillKey,
+  fillPasswordPlaceholder,
   generateSecrets,
   setupEnv,
   assertBootValid,
 } from "./setup-env.mjs";
 
-// A minimal .env.example stand-in: the three fillable keys plus the longer siblings that must
-// NOT be matched by the anchored KEY= replace, plus a required key that keeps its default.
+// A minimal .env.example stand-in: the fillable keys plus the longer siblings that must NOT be
+// matched by the anchored KEY= replace, plus a required key that keeps its default. M15 15.3
+// adds APP_DB_PASSWORD and the two `<password>`-templated app-role URLs.
 const EXAMPLE = `DATABASE_URL=postgres://420ai:420ai@localhost:5433/420ai
+APP_DB_PASSWORD=
+DATABASE_URL_APP=postgres://420ai_app:<password>@localhost:5433/420ai
+DATABASE_URL_TEST=postgres://420ai:420ai@localhost:5433/420ai_test
+DATABASE_URL_TEST_APP=postgres://420ai_app:<password>@localhost:5433/420ai_test
 ARCHIVE_ENCRYPTION_KEY=
 ARCHIVE_ENCRYPTION_KEYS=
 ARCHIVE_ENCRYPTION_ACTIVE_KEY_ID=
@@ -52,15 +58,55 @@ describe("fillKey", () => {
   });
 });
 
+describe("fillPasswordPlaceholder", () => {
+  it("replaces EVERY <password> occurrence (both app-role URLs, M15 15.3)", () => {
+    const out = fillPasswordPlaceholder(EXAMPLE, "PW");
+    expect(out).not.toContain("<password>");
+    expect(out).toContain("postgres://420ai_app:PW@localhost:5433/420ai\n");
+    expect(out).toContain("postgres://420ai_app:PW@localhost:5433/420ai_test");
+  });
+
+  it("inserts a value containing $ metachars literally (split/join, not replace)", () => {
+    expect(fillPasswordPlaceholder("x=<password>", "a$&b")).toBe("x=a$&b");
+  });
+
+  it("throws when the placeholder is absent (drift guard)", () => {
+    expect(() => fillPasswordPlaceholder("FOO=1\n", "PW")).toThrow(/<password> placeholder/);
+  });
+});
+
 describe("buildEnvFiles", () => {
-  it("fills the three secrets and shares SESSION_SECRET with the dashboard file", () => {
-    const secrets = { archiveKey: "AK", adminToken: "AT", sessionSecret: "SS" };
+  it("fills the secrets and shares SESSION_SECRET with the dashboard file", () => {
+    const secrets = {
+      archiveKey: "AK",
+      adminToken: "AT",
+      sessionSecret: "SS",
+      appDbPassword: "PW",
+    };
     const { env, dashboardEnv } = buildEnvFiles(EXAMPLE, secrets);
     expect(env).toContain("ARCHIVE_ENCRYPTION_KEY=AK");
     expect(env).toContain("ADMIN_TOKEN=AT");
     expect(env).toContain("SESSION_SECRET=SS");
     expect(dashboardEnv).toContain("SESSION_SECRET=SS");
     expect(dashboardEnv).toContain("INGEST_URL=http://localhost:8420");
+  });
+
+  it("M15 15.3: APP_DB_PASSWORD and both app-role URLs carry the SAME password", () => {
+    const secrets = {
+      archiveKey: "AK",
+      adminToken: "AT",
+      sessionSecret: "SS",
+      appDbPassword: "PW",
+    };
+    const { env } = buildEnvFiles(EXAMPLE, secrets);
+    expect(env).toContain("APP_DB_PASSWORD=PW");
+    // The URLs and the password the provisioning CLI applies must never disagree — a mismatch
+    // is a server that boots, connects, and fails every query with an auth error.
+    expect(env).toContain("DATABASE_URL_APP=postgres://420ai_app:PW@localhost:5433/420ai");
+    expect(env).toContain(
+      "DATABASE_URL_TEST_APP=postgres://420ai_app:PW@localhost:5433/420ai_test",
+    );
+    expect(env).not.toContain("<password>");
   });
 });
 
@@ -71,6 +117,14 @@ describe("generateSecrets", () => {
     expect(s.adminToken).toMatch(/^[A-Za-z0-9_-]+$/);
     expect(s.sessionSecret).toMatch(/^[A-Za-z0-9_-]+$/);
     expect(s.adminToken).not.toBe(s.sessionSecret);
+  });
+
+  it("produces a url-safe app-role password (it is embedded in a postgres:// URL)", () => {
+    const s = generateSecrets();
+    // base64url only: a `+` or `/` would need percent-escaping inside the connection URL.
+    expect(s.appDbPassword).toMatch(/^[A-Za-z0-9_-]+$/);
+    expect(Buffer.from(s.appDbPassword, "base64url")).toHaveLength(24);
+    expect(s.appDbPassword).not.toBe(s.adminToken);
   });
 });
 
@@ -88,6 +142,9 @@ describe("setupEnv", () => {
     expect(() => assertBootValid(env)).not.toThrow();
     // DATABASE_URL kept its example default (not blanked).
     expect(env).toContain("DATABASE_URL=postgres://420ai:420ai@localhost:5433/420ai");
+    // M15 15.3: DATABASE_URL_APP is boot-REQUIRED, so a generated .env must carry a real one
+    // — assertBootValid above would have thrown otherwise, but pin the placeholder too.
+    expect(env).not.toContain("<password>");
 
     // SESSION_SECRET matches across the two files (the D.3 mismatch bug guard).
     const secret = /^SESSION_SECRET=(\S+)$/m.exec(env)?.[1];

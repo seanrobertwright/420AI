@@ -1,5 +1,6 @@
 import type { Db } from "@420ai/db";
 import {
+  withOrg,
   contextPathSample,
   failedToolBreakdown,
   failureSeries,
@@ -28,7 +29,7 @@ import {
 /**
  * M13 13.2: the five new project report orchestrators (PRD §15), kept in their
  * own file so `generate-report.ts` stays small. Same contract as the M7
- * orchestrators: `Promise.all(projections) → metrics stored verbatim →
+ * orchestrators: `projections → metrics stored verbatim →
  * renderer → insertReportArtifact`; clock-free (the route passes `generatedAt`).
  * `reportVersion` stamps `REPORT_VERSION_M13`, NOT the M7 `REPORT_VERSION` — the
  * two old renderers are untouched. Never decrypts here — the two decrypt-bearing
@@ -44,10 +45,13 @@ export async function generateToolModelComparisonReport(
   projectId: string,
   generatedAt: string,
 ): Promise<ReportArtifactRow> {
-  const [rows, projectName] = await Promise.all([
-    toolStatsByModel(db, orgId, projectId),
-    getProjectName(db, orgId, projectId),
-  ]);
+  // Sequential inside the RLS transaction: a transaction is ONE connection, so `Promise.all`
+  // here never overlapped — node-postgres queues the queries and warns that concurrent
+  // client.query() is deprecated (removed in pg@9). See routes/monitor.ts for the full note.
+  const { rows, projectName } = await withOrg(db, orgId, async (tx) => ({
+    rows: await toolStatsByModel(tx, orgId, projectId),
+    projectName: await getProjectName(tx, orgId, projectId),
+  }));
   const metrics = { rows };
   const markdown = renderToolModelComparisonReport({
     projectName: projectName ?? "(unknown)",
@@ -78,11 +82,14 @@ export async function generateFailedToolCallsReport(
   bucket: "day" | "week",
   generatedAt: string,
 ): Promise<ReportArtifactRow> {
-  const [breakdown, series, projectName] = await Promise.all([
-    failedToolBreakdown(db, orgId, projectId),
-    failureSeries(db, orgId, projectId, bucket),
-    getProjectName(db, orgId, projectId),
-  ]);
+  // Sequential inside the RLS transaction: a transaction is ONE connection, so `Promise.all`
+  // here never overlapped — node-postgres queues the queries and warns that concurrent
+  // client.query() is deprecated (removed in pg@9). See routes/monitor.ts for the full note.
+  const { breakdown, series, projectName } = await withOrg(db, orgId, async (tx) => ({
+    breakdown: await failedToolBreakdown(tx, orgId, projectId),
+    series: await failureSeries(tx, orgId, projectId, bucket),
+    projectName: await getProjectName(tx, orgId, projectId),
+  }));
   const metrics = { breakdown, series };
   const markdown = renderFailedToolCallsReport({
     projectName: projectName ?? "(unknown)",
@@ -113,10 +120,13 @@ export async function generateContextWasteReport(
   projectId: string,
   generatedAt: string,
 ): Promise<ReportArtifactRow> {
-  const [sample, projectName] = await Promise.all([
-    contextPathSample(db, orgId, projectId),
-    getProjectName(db, orgId, projectId),
-  ]);
+  // Sequential inside the RLS transaction: a transaction is ONE connection, so `Promise.all`
+  // here never overlapped — node-postgres queues the queries and warns that concurrent
+  // client.query() is deprecated (removed in pg@9). See routes/monitor.ts for the full note.
+  const { sample, projectName } = await withOrg(db, orgId, async (tx) => ({
+    sample: await contextPathSample(tx, orgId, projectId),
+    projectName: await getProjectName(tx, orgId, projectId),
+  }));
   // The deterministic §17 deliverable: a project-specific, ranked ignore-recommendation
   // list derived purely from the classified counts (no I/O, no clock).
   const recommendations = contextWasteRecommendations(sample.byClass, sample.topPaths);
@@ -149,12 +159,15 @@ export async function generateProjectEfficiencyReport(
   projectId: string,
   generatedAt: string,
 ): Promise<ReportArtifactRow> {
-  const [totals, sessions, commits, projectName] = await Promise.all([
-    usageTotals(db, orgId, projectId),
-    sessionProjections(db, orgId, projectId),
-    gitCommitsByProject(db, orgId, projectId),
-    getProjectName(db, orgId, projectId),
-  ]);
+  // Sequential inside the RLS transaction: a transaction is ONE connection, so `Promise.all`
+  // here never overlapped — node-postgres queues the queries and warns that concurrent
+  // client.query() is deprecated (removed in pg@9). See routes/monitor.ts for the full note.
+  const { totals, sessions, commits, projectName } = await withOrg(db, orgId, async (tx) => ({
+    totals: await usageTotals(tx, orgId, projectId),
+    sessions: await sessionProjections(tx, orgId, projectId),
+    commits: await gitCommitsByProject(tx, orgId, projectId),
+    projectName: await getProjectName(tx, orgId, projectId),
+  }));
   const metrics = { totals, sessions, commits };
   const markdown = renderProjectEfficiencyReport({
     projectName: projectName ?? "(unknown)",
@@ -185,11 +198,14 @@ export async function generateTrendAnomaliesReport(
   bucket: "day" | "week",
   generatedAt: string,
 ): Promise<ReportArtifactRow> {
-  const [costSeries, failureSeriesRows, projectName] = await Promise.all([
-    usageOverTime(db, orgId, projectId, bucket),
-    failureSeries(db, orgId, projectId, bucket),
-    getProjectName(db, orgId, projectId),
-  ]);
+  // Sequential inside the RLS transaction: a transaction is ONE connection, so `Promise.all`
+  // here never overlapped — node-postgres queues the queries and warns that concurrent
+  // client.query() is deprecated (removed in pg@9). See routes/monitor.ts for the full note.
+  const { costSeries, failureSeriesRows, projectName } = await withOrg(db, orgId, async (tx) => ({
+    costSeries: await usageOverTime(tx, orgId, projectId, bucket),
+    failureSeriesRows: await failureSeries(tx, orgId, projectId, bucket),
+    projectName: await getProjectName(tx, orgId, projectId),
+  }));
   const costAnomalies = detectAnomalies(
     costSeries.map((r) => ({ bucket: r.bucket, value: r.costUsd })),
   );

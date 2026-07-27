@@ -67,12 +67,32 @@ jobs:
       - name: Write CI .env
         # Both repo-health and vitest read .env; provide DB URLs + a throwaway 32-byte
         # base64 encryption key (test data only — never a real secret).
+        #
+        # M15 15.3 — the APP-ROLE handles are what make the RLS suites mean anything. RLS is
+        # INERT against `420ai` (the table owner, and the postgres image's superuser), so a
+        # single-role CI would run every isolation test against a role the policies do not
+        # apply to and report green while enforcing nothing: `bypassed ≠ enforced`.
+        # `repo-health --require-db` FAILS if DATABASE_URL_TEST_APP is unset or names a
+        # bypassing role, which is exactly how this omission was caught (PR #63).
+        # The password is a throwaway generated per run — it never leaves the runner.
         run: |
+          APP_DB_PASSWORD="$(openssl rand -base64 24 | tr -d '/+=')"
           {
             echo "DATABASE_URL=postgres://420ai:420ai@localhost:5432/420ai"
             echo "DATABASE_URL_TEST=postgres://420ai:420ai@localhost:5432/420ai_test"
+            echo "APP_DB_PASSWORD=${APP_DB_PASSWORD}"
+            echo "DATABASE_URL_APP=postgres://420ai_app:${APP_DB_PASSWORD}@localhost:5432/420ai"
+            echo "DATABASE_URL_TEST_APP=postgres://420ai_app:${APP_DB_PASSWORD}@localhost:5432/420ai_test"
             echo "ARCHIVE_ENCRYPTION_KEY=$(openssl rand -base64 32)"
           } > .env
+
+      - name: Provision the RLS app role
+        # Grants LOGIN + the password to the NON-OWNER role. The role and its table grants are
+        # created by migration 0015 (which vitest's global setup applies to the test DB), but a
+        # migration is committed to git and therefore never touches a secret — that half lives
+        # here. Idempotent, and it creates the role itself if migrations have not run yet, so
+        # this step does not depend on migration ordering.
+        run: npm run db:provision-app-role
 
       - name: repo-health (full, --require-db)
         run: npm run repo-health -- --require-db

@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import {
+  withOrg,
   listProjects,
   createProject,
   renameProject,
@@ -29,6 +30,13 @@ interface PatchProjectBody {
  * M13 13.4: the create/rename mutations refresh the project's search doc
  * best-effort — awaited-with-swallow (the deliverFirings pattern), so index
  * maintenance never fails the mutation response.
+ *
+ * M15 15.3: every DB call runs inside `withOrg` (the RLS context). The best-effort
+ * `indexProjectDoc` refresh gets its OWN short `withOrg` rather than joining the mutation's
+ * transaction — keeping the swallow-on-failure semantics intact. If it shared the mutation's
+ * transaction, a failed index write would abort the surrounding transaction (`current
+ * transaction is aborted`) and the catch could no longer save the mutation it is meant to
+ * protect: the swallow would become a lie.
  */
 export default async function projectRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Querystring: { limit?: number; offset?: number } }>(
@@ -40,10 +48,12 @@ export default async function projectRoutes(app: FastifyInstance): Promise<void>
         return reply.code(401).send({ error: "admin authorization required" });
       }
       const userId = principal.userId;
-      const projects = await listProjects(app.db, userId, {
-        limit: request.query.limit,
-        offset: request.query.offset,
-      });
+      const projects = await withOrg(app.db, principal.orgId, (tx) =>
+        listProjects(tx, userId, {
+          limit: request.query.limit,
+          offset: request.query.offset,
+        }),
+      );
       return reply.code(200).send({ projects });
     },
   );
@@ -57,9 +67,11 @@ export default async function projectRoutes(app: FastifyInstance): Promise<void>
         return reply.code(401).send({ error: "admin authorization required" });
       }
       const userId = principal.userId;
-      const { id } = await createProject(app.db, userId, request.body.name, request.body.gitRemote);
+      const { id } = await withOrg(app.db, principal.orgId, (tx) =>
+        createProject(tx, userId, request.body.name, request.body.gitRemote),
+      );
       try {
-        await indexProjectDoc(app.db, id);
+        await withOrg(app.db, principal.orgId, (tx) => indexProjectDoc(tx, id));
       } catch (err) {
         request.log.warn({ err }, "project search indexing failed");
       }
@@ -78,15 +90,12 @@ export default async function projectRoutes(app: FastifyInstance): Promise<void>
       if (!isUuid(request.params.id)) {
         return reply.code(404).send({ error: "project not found" });
       }
-      const row = await renameProject(
-        app.db,
-        principal.orgId,
-        request.params.id,
-        request.body.name,
+      const row = await withOrg(app.db, principal.orgId, (tx) =>
+        renameProject(tx, principal.orgId, request.params.id, request.body.name),
       );
       if (!row) return reply.code(404).send({ error: "project not found" });
       try {
-        await indexProjectDoc(app.db, row.id);
+        await withOrg(app.db, principal.orgId, (tx) => indexProjectDoc(tx, row.id));
       } catch (err) {
         request.log.warn({ err }, "project search indexing failed");
       }
@@ -102,7 +111,9 @@ export default async function projectRoutes(app: FastifyInstance): Promise<void>
     if (!isUuid(request.params.id)) {
       return reply.code(404).send({ error: "project not found" });
     }
-    const summary = await projectEventSummary(app.db, principal.orgId, request.params.id);
+    const summary = await withOrg(app.db, principal.orgId, (tx) =>
+      projectEventSummary(tx, principal.orgId, request.params.id),
+    );
     return reply.code(200).send(summary);
   });
 }

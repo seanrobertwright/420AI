@@ -100,6 +100,8 @@ export interface ServerConfigView {
   ingestUrl: string;
   hasAdminToken: boolean;
   hasDatabaseUrl: boolean;
+  /** M15 15.3 — the non-owner app-role DSN. The ingest server refuses to start without it. */
+  hasDatabaseUrlApp: boolean;
   hasArchiveEncryptionKey: boolean;
   hasAnalysisApiKey: boolean;
   ingestPort: number | null;
@@ -118,6 +120,7 @@ export interface ServerConfigInput {
   ingestUrl: string;
   adminToken?: string;
   databaseUrl?: string;
+  databaseUrlApp?: string;
   archiveEncryptionKey?: string;
   ingestPort?: number;
   analysisProvider?: string;

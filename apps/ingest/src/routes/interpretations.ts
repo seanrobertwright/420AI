@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { getProjectName, sessionDetail, usageTotals, indexReportDoc } from "@420ai/db";
+import { withOrg, getProjectName, sessionDetail, usageTotals, indexReportDoc } from "@420ai/db";
 import {
   generateSessionInterpretation,
   generateProjectInterpretation,
@@ -42,7 +42,9 @@ export default async function interpretationRoutes(app: FastifyInstance): Promis
       }
       // sessionId is a connector text id (NOT a uuid) — ungated. Empty/unknown → 404
       // BEFORE the (billable) provider call (D8).
-      const detail = await sessionDetail(app.db, principal.orgId, request.params.sessionId);
+      const detail = await withOrg(app.db, principal.orgId, (tx) =>
+        sessionDetail(tx, principal.orgId, request.params.sessionId),
+      );
       if (detail.eventCount === 0) {
         return reply.code(404).send({ error: "session not found or has no events" });
       }
@@ -60,7 +62,7 @@ export default async function interpretationRoutes(app: FastifyInstance): Promis
       // 13.4: refresh the artifact's search doc best-effort (awaited-with-swallow,
       // the deliverFirings pattern — never fails the response).
       try {
-        await indexReportDoc(app.db, row.id);
+        await withOrg(app.db, principal.orgId, (tx) => indexReportDoc(tx, row.id));
       } catch (err) {
         request.log.warn({ err }, "report search indexing failed");
       }
@@ -81,11 +83,16 @@ export default async function interpretationRoutes(app: FastifyInstance): Promis
       }
       // Existence guard (M7 FK lesson) — a well-formed-but-missing project must 404
       // BEFORE the insert (report_artifacts.project_id FKs to projects.id).
-      if (!(await getProjectName(app.db, principal.orgId, request.params.id))) {
+      const exists = await withOrg(app.db, principal.orgId, (tx) =>
+        getProjectName(tx, principal.orgId, request.params.id),
+      );
+      if (!exists) {
         return reply.code(404).send({ error: "project not found" });
       }
       // Empty project → 404 before the billable provider call (D8).
-      const totals = await usageTotals(app.db, principal.orgId, request.params.id);
+      const totals = await withOrg(app.db, principal.orgId, (tx) =>
+        usageTotals(tx, principal.orgId, request.params.id),
+      );
       if (totals.eventCount === 0) {
         return reply.code(404).send({ error: "project has no events" });
       }
@@ -103,7 +110,7 @@ export default async function interpretationRoutes(app: FastifyInstance): Promis
       // 13.4: refresh the artifact's search doc best-effort (awaited-with-swallow,
       // the deliverFirings pattern — never fails the response).
       try {
-        await indexReportDoc(app.db, row.id);
+        await withOrg(app.db, principal.orgId, (tx) => indexReportDoc(tx, row.id));
       } catch (err) {
         request.log.warn({ err }, "report search indexing failed");
       }

@@ -134,7 +134,7 @@ describe.skipIf(!TEST_URL)("search repository (integration)", () => {
   });
 
   it("rebuilds with per-entity counts across sessions, reports, projects, and events", async () => {
-    const counts = await rebuildSearchIndex(dbh.db);
+    const counts = await rebuildSearchIndex(dbh.db, orgId);
     expect(counts.sessions).toBeGreaterThanOrEqual(1);
     expect(counts.reports).toBeGreaterThanOrEqual(1);
     expect(counts.projects).toBeGreaterThanOrEqual(1);
@@ -145,7 +145,7 @@ describe.skipIf(!TEST_URL)("search repository (integration)", () => {
   });
 
   it("returns a ranked session hit for a phrase that was encrypted at rest", async () => {
-    await rebuildSearchIndex(dbh.db);
+    await rebuildSearchIndex(dbh.db, orgId);
     const { query, hits } = await searchDocuments(dbh.db, { orgId, q: "anthropic spend" });
     expect(query).toBe("anthropic spend");
     const session = hits.find((h) => h.entityType === "session");
@@ -156,7 +156,7 @@ describe.skipIf(!TEST_URL)("search repository (integration)", () => {
   });
 
   it("never leaks the secret into a hit OR the stored row (decrypt→redact→index)", async () => {
-    await rebuildSearchIndex(dbh.db);
+    await rebuildSearchIndex(dbh.db, orgId);
     const { hits } = await searchDocuments(dbh.db, { orgId, q: "anthropic spend" });
     // Not in any returned hit (title/snippet leave the archive).
     expect(JSON.stringify(hits)).not.toContain(SECRET);
@@ -181,7 +181,7 @@ describe.skipIf(!TEST_URL)("search repository (integration)", () => {
   });
 
   it("filters by entity type and returns no hits for an unmatched query", async () => {
-    await rebuildSearchIndex(dbh.db);
+    await rebuildSearchIndex(dbh.db, orgId);
     const reportOnly = await searchDocuments(dbh.db, { orgId, q: "burndown", type: "report" });
     expect(reportOnly.hits.length).toBeGreaterThanOrEqual(1);
     expect(reportOnly.hits.every((h) => h.entityType === "report")).toBe(true);
@@ -191,7 +191,7 @@ describe.skipIf(!TEST_URL)("search repository (integration)", () => {
   });
 
   it("returns a per-event hit scoped to its session for a tool-call phrase (14.4 grain)", async () => {
-    await rebuildSearchIndex(dbh.db);
+    await rebuildSearchIndex(dbh.db, orgId);
     const { hits } = await searchDocuments(dbh.db, {
       orgId,
       q: "search index configuration",
@@ -205,7 +205,7 @@ describe.skipIf(!TEST_URL)("search repository (integration)", () => {
   });
 
   it("hybrid: a phrase in a message returns BOTH a session hit and an event hit for the session", async () => {
-    await rebuildSearchIndex(dbh.db);
+    await rebuildSearchIndex(dbh.db, orgId);
     const { hits } = await searchDocuments(dbh.db, { orgId, q: "anthropic spend" });
     const session = hits.find((h) => h.entityType === "session" && h.entityId === "s1");
     const event = hits.find((h) => h.entityType === "event" && h.entityId === "se-user");
@@ -215,8 +215,8 @@ describe.skipIf(!TEST_URL)("search repository (integration)", () => {
   });
 
   it("is idempotent — re-running yields stable counts and no duplicate-key error", async () => {
-    const first = await rebuildSearchIndex(dbh.db);
-    const second = await rebuildSearchIndex(dbh.db);
+    const first = await rebuildSearchIndex(dbh.db, orgId);
+    const second = await rebuildSearchIndex(dbh.db, orgId);
     expect(second).toEqual(first);
     // The (entity_type, entity_id) unique index holds: exactly one row per entity.
     const [{ n }] = await dbh.db.select({ n: sql<number>`count(*)::int` }).from(searchDocumentsTbl);

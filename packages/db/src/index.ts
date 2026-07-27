@@ -24,6 +24,8 @@ export {
 } from "./schema.js";
 export { createDb } from "./client.js";
 export type { Db, Tx, DbClient } from "./client.js";
+export { withOrg, APP_ROLE_NAME, ORG_SETTING } from "./org-context.js";
+export { provisionAppRole } from "./provision-app-role.js";
 export { encryptField, decryptField, activeKeyId } from "./crypto.js";
 export type { EncryptedField } from "./crypto.js";
 export { generateToken, hashToken } from "./tokens.js";
@@ -40,6 +42,7 @@ export {
   ensurePersonalOrg,
   getOrgIdForUser,
   findOrgIdByUserId,
+  listOrganizations,
 } from "./repositories/organizations.js";
 export { findPrincipalByEmail } from "./repositories/principal.js";
 export type { Principal } from "./repositories/principal.js";

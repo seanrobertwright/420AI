@@ -11,7 +11,7 @@ import {
   type ModelPricing,
   type ParseResult,
 } from "@420ai/shared";
-import type { Db } from "../client.js";
+import type { DbClient } from "../client.js";
 import { decryptField } from "../crypto.js";
 import { events, rawSourceRecords } from "../schema.js";
 import { ingestBatch } from "./ingest.js";
@@ -125,12 +125,19 @@ function reassembleClaude(rows: { plaintext: string }[]): string {
  * uses). Returns honest counts — including what was skipped and why.
  */
 export async function reparseAll(
-  db: Db,
+  db: DbClient,
+  orgId: string,
   opts?: {
     sessionId?: string;
     repricing?: { version: string; rates: Record<string, ModelPricing> };
   },
 ): Promise<ReparseResult> {
+  // M15 15.3: EXPLICIT org scoping, not just the RLS policy. `/v1/replay/reparse` is
+  // deployment-wide by looping one org at a time (D-15.3-5); relying on RLS alone to make each
+  // pass distinct breaks for any OWNER-role caller (every other int suite, plus the `db:reparse`
+  // CLI), which bypasses RLS and would re-parse EVERY org's sessions on EVERY pass — an
+  // N_orgs-times-inflated count. `session_id` is also a connector-supplied, globally-scoped
+  // string two tenants can share, so the `opts.sessionId` filter needs this too.
   const tuples = await db
     .selectDistinct({
       sessionId: rawSourceRecords.sessionId,
@@ -138,7 +145,12 @@ export async function reparseAll(
       machineId: rawSourceRecords.machineId,
     })
     .from(rawSourceRecords)
-    .where(opts?.sessionId ? eq(rawSourceRecords.sessionId, opts.sessionId) : undefined)
+    .where(
+      and(
+        eq(rawSourceRecords.orgId, orgId),
+        opts?.sessionId ? eq(rawSourceRecords.sessionId, opts.sessionId) : undefined,
+      ),
+    )
     .orderBy(asc(rawSourceRecords.sessionId));
 
   const result: ReparseResult = {
@@ -170,6 +182,7 @@ export async function reparseAll(
       .from(rawSourceRecords)
       .where(
         and(
+          eq(rawSourceRecords.orgId, orgId),
           eq(rawSourceRecords.sessionId, t.sessionId),
           eq(rawSourceRecords.sourceConnector, t.sourceConnector),
           eq(rawSourceRecords.machineId, t.machineId),
@@ -223,12 +236,15 @@ export async function reparseAll(
       const existing = await db
         .select({ fingerprint: events.fingerprint })
         .from(events)
-        // M15 15.2: DELIBERATELY not org-scoped, like POST /v1/search/reindex and the
-        // /v1/replay/* ops (D-15.2-7) — reparse is a deployment-wide maintenance operation.
-        // It is bounded by `rawRecordId IN (chunk)`, and those ids come from already
-        // org-stamped raw records, so it does not cross tenants despite the session key.
+        // M15 15.2 reasoned this was safe unscoped because `rawRecordId IN (chunk)` bounds it to
+        // already-org-stamped raw records. M15 15.3 scopes it anyway: the enclosing op now runs
+        // ONE PASS PER ORG (D-15.3-5), so "bounded by ids that came from org X" is an argument
+        // about the current call, not a predicate the database enforces — and `session_id` +
+        // `raw_record_id` are both connector-supplied strings two tenants can share. Explicit
+        // beats inferred on a delete path.
         .where(
           and(
+            eq(events.orgId, orgId),
             eq(events.sessionId, t.sessionId),
             eq(events.sourceConnector, t.sourceConnector),
             inArray(events.rawRecordId, idChunk),
@@ -239,7 +255,12 @@ export async function reparseAll(
       }
     }
     for (const fpChunk of chunks(orphans, CHUNK)) {
-      await db.delete(events).where(inArray(events.fingerprint, fpChunk));
+      // `fingerprint` is machine-INDEPENDENT and globally scoped — two tenants can hold the same
+      // one. The org predicate makes this DELETE unable to reach another tenant's row even if a
+      // fingerprint were somehow collected from one.
+      await db
+        .delete(events)
+        .where(and(eq(events.orgId, orgId), inArray(events.fingerprint, fpChunk)));
     }
     result.orphansDeleted += orphans.length;
     result.sessions += 1;

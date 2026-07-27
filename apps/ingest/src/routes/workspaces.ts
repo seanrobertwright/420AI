@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import type { DiscoverRequest, DiscoverResponse } from "@420ai/shared";
 import { repoNameFromRemote, basenameFromRoot } from "@420ai/shared";
 import {
+  withOrg,
   getMachineUserId,
   getOrgIdForUser,
   upsertWorkspace,
@@ -28,6 +29,12 @@ interface PatchWorkspaceBody {
  *   and records the connector's `project_key` alias. Idempotent.
  * - GET /v1/workspaces and PATCH /v1/workspaces/:id are ADMIN-gated (the editable
  *   mapping, D4).
+ *
+ * M15 15.3: `discover` is the MACHINE-authed shape — there is no request principal, so the
+ * org is resolved from the machine's owning user FIRST (that read hits `machines`, which is
+ * bootstrap-permissive precisely so a credential lookup can run with no context yet), and the
+ * whole batch then runs inside one `withOrg`. The two admin routes take the ordinary
+ * principal-authed shape.
  */
 export default async function workspaceRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Body: DiscoverRequest }>(
@@ -42,7 +49,7 @@ export default async function workspaceRoutes(app: FastifyInstance): Promise<voi
       // from the machine's owning user (the documented surviving seam; D-M15-7 / 15.9).
       const machineOrgId = await getOrgIdForUser(app.db, userId);
 
-      const result = await app.db.transaction(async (tx) => {
+      const result = await withOrg(app.db, machineOrgId, async (tx) => {
         let workspacesUpserted = 0;
         let projectsCreated = 0;
         const mappings: DiscoverResponse["mappings"] = [];
@@ -106,7 +113,7 @@ export default async function workspaceRoutes(app: FastifyInstance): Promise<voi
       return reply.code(401).send({ error: "admin authorization required" });
     }
     const userId = principal.userId;
-    const workspaces = await listWorkspaces(app.db, userId);
+    const workspaces = await withOrg(app.db, principal.orgId, (tx) => listWorkspaces(tx, userId));
     return reply.code(200).send({ workspaces });
   });
 
@@ -127,12 +134,18 @@ export default async function workspaceRoutes(app: FastifyInstance): Promise<voi
         return reply.code(400).send({ error: "projectId must be a valid id" });
       }
       // Verify the target project exists, so an unknown id is a clean 404
-      // rather than a foreign-key 500.
-      if (!(await getProjectName(app.db, principal.orgId, projectId))) {
+      // rather than a foreign-key 500. Its own short `withOrg` (not the mutation's) so the
+      // 404 reply still happens OUTSIDE a transaction — the CLAUDE.md guard rule.
+      const exists = await withOrg(app.db, principal.orgId, (tx) =>
+        getProjectName(tx, principal.orgId, projectId),
+      );
+      if (!exists) {
         return reply.code(404).send({ error: "project not found" });
       }
       const userId = principal.userId;
-      const row = await remapWorkspace(app.db, userId, id, projectId);
+      const row = await withOrg(app.db, principal.orgId, (tx) =>
+        remapWorkspace(tx, userId, id, projectId),
+      );
       if (!row) return reply.code(404).send({ error: "workspace not found" });
       return reply.code(200).send({ id: row.id, projectId: row.projectId });
     },

@@ -8,7 +8,15 @@
  *   - ARCHIVE_ENCRYPTION_KEY  (32 raw bytes, base64 — the AES-256-GCM field key, crypto.ts)
  *   - ADMIN_TOKEN             (32 bytes, base64url — the machine/service bearer, 12.3)
  *   - SESSION_SECRET          (32 bytes, base64url — the login-cookie HMAC key, 12.3)
+ *   - APP_DB_PASSWORD         (24 bytes, base64url — the M15 15.3 RLS app-role password)
  * DATABASE_URL keeps the .env.example dev default; ADMIN_PASSWORD stays blank (login opt-in).
+ *
+ * M15 15.3: APP_DB_PASSWORD is also substituted into the `<password>` placeholder inside
+ * DATABASE_URL_APP and DATABASE_URL_TEST_APP, so `npm run setup` yields an env the server can
+ * actually boot on (it HARD-FAILS without DATABASE_URL_APP, D-15.3-2). The URLs keep their
+ * host/port from `.env.example` — that file stays the single source for those. The generated
+ * password still has to be applied to the database once: `npm run db:provision-app-role`.
+ * base64url on purpose — the value is embedded in a URL, so `+` and `/` would need escaping.
  *
  * It ALSO writes `apps/dashboard/.env.local` with the SAME SESSION_SECRET when that file is
  * absent — the dashboard loads env from its own cwd, and a mismatched secret fails every login
@@ -23,10 +31,10 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { pathToFileURL } from "node:url";
 
-/** The server-boot-required keys (mirrors ingest server.ts:13-24) — assertBootValid checks these. */
-export const REQUIRED_KEYS = ["DATABASE_URL", "ADMIN_TOKEN", "SESSION_SECRET"];
+/** The server-boot-required keys (mirrors ingest server.ts) — assertBootValid checks these. */
+export const REQUIRED_KEYS = ["DATABASE_URL", "DATABASE_URL_APP", "ADMIN_TOKEN", "SESSION_SECRET"];
 
-/** Generate the three secrets the server + dashboard need to boot (the only non-default values). */
+/** Generate the secrets the server + dashboard need to boot (the only non-default values). */
 export function generateSecrets() {
   return {
     // AES-256-GCM field key: 32 raw bytes, base64 (crypto.ts decodes base64, not base64url).
@@ -34,6 +42,8 @@ export function generateSecrets() {
     // Bearer + HMAC secrets: url-safe so they paste into shells/URLs without escaping.
     adminToken: randomBytes(32).toString("base64url"),
     sessionSecret: randomBytes(32).toString("base64url"),
+    // M15 15.3 app-role password. base64url because it is embedded in a postgres:// URL.
+    appDbPassword: randomBytes(24).toString("base64url"),
   };
 }
 
@@ -49,12 +59,31 @@ export function fillKey(content, key, value) {
   return content.replace(re, () => `${key}=${value}`);
 }
 
+/**
+ * Substitute the literal `<password>` placeholder (M15 15.3 — it appears in DATABASE_URL_APP
+ * and DATABASE_URL_TEST_APP) with the generated app-role password. Throws when absent so a
+ * drift in `.env.example` is caught loudly, matching `fillKey`'s contract. A plain global
+ * `split`/`join` rather than `replace` with a regex: the password is base64url and could
+ * otherwise be misread as a `$`-replacement pattern.
+ */
+export function fillPasswordPlaceholder(content, value) {
+  if (!content.includes("<password>")) {
+    throw new Error(".env.example is missing the <password> placeholder");
+  }
+  return content.split("<password>").join(value);
+}
+
 /** Build the `.env` and dashboard `.env.local` contents from the example + secrets (pure). */
 export function buildEnvFiles(exampleContent, secrets) {
   let env = exampleContent;
   env = fillKey(env, "ARCHIVE_ENCRYPTION_KEY", secrets.archiveKey);
   env = fillKey(env, "ADMIN_TOKEN", secrets.adminToken);
   env = fillKey(env, "SESSION_SECRET", secrets.sessionSecret);
+  env = fillKey(env, "APP_DB_PASSWORD", secrets.appDbPassword);
+  // Must run AFTER the APP_DB_PASSWORD fill: it rewrites the `<password>` placeholders in
+  // DATABASE_URL_APP / DATABASE_URL_TEST_APP to the SAME value, so the URLs and the password
+  // the provisioning CLI applies can never disagree.
+  env = fillPasswordPlaceholder(env, secrets.appDbPassword);
   // The dashboard loads env from ITS OWN cwd (apps/dashboard), so it needs its own file.
   // SESSION_SECRET MUST equal the ingest value or every login cookie fails verification (D.3).
   const dashboardEnv =
@@ -99,7 +128,9 @@ export function setupEnv({ cwd, log = () => {} }) {
   assertBootValid(env);
 
   writeFileSync(envPath, env, { mode: 0o600 });
-  log(`wrote ${envPath} (filled ARCHIVE_ENCRYPTION_KEY, ADMIN_TOKEN, SESSION_SECRET)`);
+  log(
+    `wrote ${envPath} (filled ARCHIVE_ENCRYPTION_KEY, ADMIN_TOKEN, SESSION_SECRET, APP_DB_PASSWORD)`,
+  );
 
   const written = [envPath];
   if (existsSync(dashboardEnvPath)) {
@@ -121,8 +152,9 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     const { written } = setupEnv({ cwd: process.cwd(), log: (m) => console.log(m) });
     console.log("\nsetup complete. Next steps:");
     console.log("  1. npm run db:up && npm run db:migrate");
-    console.log("  2. npm run ingest:dev       (in one terminal)");
-    console.log("  3. npm run dashboard:dev    (in another) → http://localhost:3000");
+    console.log("  2. npm run db:provision-app-role   (M15 15.3 — the RLS app role)");
+    console.log("  3. npm run ingest:dev       (in one terminal)");
+    console.log("  4. npm run dashboard:dev    (in another) → http://localhost:3000");
     console.log("  Full walkthrough: docs/guide/quickstart.md");
     if (written.length === 1) {
       console.log(
