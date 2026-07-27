@@ -136,15 +136,34 @@ export interface GitCommitDetail {
 }
 
 /**
- * Resolve a commit by SHA, scoped to the user (via `machines.user_id` — a commit
- * has no userId of its own). Returns the commit id (so a route can create a link)
+ * Resolve a commit by SHA, scoped to the org AND the user (a commit has no userId of its own —
+ * it reaches one through `machines`). Returns the commit id (so a route can create a link)
  * + its files, or `undefined` for an unknown SHA → the route turns that into a
- * clean 404 (never an FK-violation 500 on the link insert). Scoped by userId per
- * CLAUDE.md; the admin route supplies the userId (the manual-link path has no
- * machine token, and a SHA is git's globally-unique content hash).
+ * clean 404 (never an FK-violation 500 on the link insert).
+ *
+ * M15 15.4 — `orgId` SECOND, on BOTH the fact table (`gitCommits.orgId`, isolation) and the join
+ * (`machines.orgId`, ownership). That was the real defect: a commit SHA is git's globally-unique
+ * content hash, so two TENANTS working the same repo genuinely share the key, and before the org
+ * predicate RLS was the only thing between them.
+ *
+ * The `machines.userId` predicate deliberately STAYS, unlike the visibility reads that dropped
+ * theirs (D-15.4-2). This is not a UI read — its only caller is
+ * `POST /v1/sessions/:sessionId/git-links`, and the whole git-link neighbourhood is per-user by
+ * INDEX design: `session_git_links` is unique on `(user_id, session_id, commit_id)`, and
+ * `listSessionLinks` / `computeSessionGitSuggestions` / the candidate-commit query in
+ * `attribution.ts` all filter `machines.user_id`. Widening only this one read produced a real
+ * regression, caught in review: a member could pass the 404 existence check on a COLLEAGUE's
+ * commit, then `resolveWorkspaceId` (which keeps its own `user_id` predicate) would resolve
+ * nothing, and `addManualLink` would store `project_id = NULL` — a clean 404 turned into a
+ * silently unattributed link. Org-wide manual git-linking is a feature decision for a later
+ * slice, and it needs `session_git_links`' unique index changed to match.
+ *
+ * The file read is keyed on the already-verified `commitId`, and `git_commit_files` carries its
+ * own strict policy.
  */
 export async function gitCommitDetail(
   db: DbClient,
+  orgId: string,
   userId: string,
   commitSha: string,
 ): Promise<GitCommitDetail | undefined> {
@@ -152,7 +171,14 @@ export async function gitCommitDetail(
     .select({ id: gitCommits.id, ...gitCommitRowColumns })
     .from(gitCommits)
     .innerJoin(machines, eq(machines.id, gitCommits.machineId))
-    .where(and(eq(machines.userId, userId), eq(gitCommits.commitSha, commitSha)))
+    .where(
+      and(
+        eq(gitCommits.orgId, orgId),
+        eq(machines.orgId, orgId),
+        eq(machines.userId, userId),
+        eq(gitCommits.commitSha, commitSha),
+      ),
+    )
     .limit(1);
   if (!row) return undefined;
   const { id, ...commit } = row;
@@ -164,6 +190,6 @@ export async function gitCommitDetail(
       deletions: gitCommitFiles.deletions,
     })
     .from(gitCommitFiles)
-    .where(eq(gitCommitFiles.commitId, id));
+    .where(and(eq(gitCommitFiles.orgId, orgId), eq(gitCommitFiles.commitId, id)));
   return { id, commit, files: files as GitFileChange[] };
 }

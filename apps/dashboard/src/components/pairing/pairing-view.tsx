@@ -5,6 +5,7 @@ import { PageShell } from "@/components/page-shell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { formatDate } from "@/lib/format";
+import { FORBIDDEN_MESSAGE } from "@/lib/mutation-error";
 
 interface PairingCode {
   code: string;
@@ -36,7 +37,7 @@ export function PairingView() {
         body: JSON.stringify(trimmed ? { email: trimmed } : {}),
       });
       if (!res.ok) {
-        setError(`Generation failed (${res.status}).`);
+        setError(res.status === 403 ? FORBIDDEN_MESSAGE : `Generation failed (${res.status}).`);
         return;
       }
       setResult((await res.json()) as PairingCode);

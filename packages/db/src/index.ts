@@ -10,6 +10,7 @@ export {
   rawSourceRecords,
   events,
   projects,
+  projectGrants,
   workspaces,
   workspaceKeys,
   reportArtifacts,
@@ -24,7 +25,7 @@ export {
 } from "./schema.js";
 export { createDb } from "./client.js";
 export type { Db, Tx, DbClient } from "./client.js";
-export { withOrg, APP_ROLE_NAME, ORG_SETTING } from "./org-context.js";
+export { withOrg, APP_ROLE_NAME, ORG_SETTING, ROLE_SETTING } from "./org-context.js";
 export { provisionAppRole } from "./provision-app-role.js";
 export { encryptField, decryptField, activeKeyId } from "./crypto.js";
 export type { EncryptedField } from "./crypto.js";
@@ -72,6 +73,14 @@ export {
   archiveProject,
 } from "./repositories/projects.js";
 export type { ProjectRow } from "./repositories/projects.js";
+// M15 15.4 per-project capability grants (D-15.4-2). Grants ELEVATE, never restrict.
+export {
+  listProjectGrants,
+  grantProjectRole,
+  revokeProjectGrant,
+  effectiveProjectRole,
+} from "./repositories/project-grants.js";
+export type { ProjectGrantRow } from "./repositories/project-grants.js";
 export {
   upsertWorkspace,
   addWorkspaceKey,

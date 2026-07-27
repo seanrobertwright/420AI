@@ -24,6 +24,14 @@ declare module "fastify" {
     analysisMaxOutputTokens: number;
     /** M9 SSE push cadence for GET /v1/monitor/stream (default 3000; tests inject 50). */
     monitorStreamIntervalMs: number;
+    /** M15 15.4 (audit B.4) minimum gap between alert reconcile WRITES per (org,user).
+     * Default 30 000; tests inject 0, which reproduces pre-15.4 behaviour exactly (every
+     * tick reconciles). Without it a connected dashboard wrote every monitorStreamIntervalMs. */
+    reconcileThrottleMs: number;
+    /** M15 15.4 per-PROCESS "last reconcile" clock, keyed `${orgId}:${userId}` — the same grain
+     * as the firing rows. In-memory and reset on restart on purpose: a missed window costs one
+     * extra reconcile, never a wrong result. Mirrors the `metrics` store's shape. */
+    reconcileLastRunAt: Map<string, number>;
     /** M12 12.4b in-memory request/error counter store (GET /v1/metrics). */
     metrics: import("../metrics.js").MetricsStore;
     /** M12 12.4c per-route login rate limit ({max,timeWindow}) or false when off. Decorated

@@ -17,7 +17,15 @@ export interface Principal {
   userId: string;
   email: string;
   orgId: string;
-  /** owner | admin | member | viewer (D-M15-4). RESOLVED here, ENFORCED in 15.4 — never gate on it in this slice. */
+  /**
+   * owner | admin | member | viewer (D-M15-4). RESOLVED here; ENFORCED as of 15.4 by
+   * `apps/ingest/src/auth.ts`'s `authorized()` at the route layer, and backstopped by the
+   * migration-0016 RESTRICTIVE write policies via `withOrg`'s `role` parameter.
+   *
+   * Typed `string`, not `Role`: it comes from a TEXT column with no CHECK constraint, so a
+   * hand-edited row can hold anything. `hasRole` takes a `string` and fails CLOSED — do not
+   * cast this.
+   */
   role: string;
 }
 

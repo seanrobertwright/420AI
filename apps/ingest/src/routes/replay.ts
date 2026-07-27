@@ -1,7 +1,8 @@
 import type { FastifyInstance } from "fastify";
+import { SERVICE_ROLE } from "@420ai/shared";
 import { getActiveCatalog, repriceAll, reparseAll, listOrganizations, withOrg } from "@420ai/db";
 import type { RepriceResult, ReparseResult } from "@420ai/db";
-import { resolvePrincipal } from "../auth.js";
+import { resolvePrincipal, authorized } from "../auth.js";
 
 /**
  * M12 12.5a + M13 13.3 archive-replay. Admin-gated.
@@ -34,6 +35,9 @@ export default async function replayRoutes(app: FastifyInstance): Promise<void> 
     if (!principal) {
       return reply.code(401).send({ error: "admin authorization required" });
     }
+    if (!authorized(principal, "admin")) {
+      return reply.code(403).send({ error: "insufficient role" });
+    }
     const active = await getActiveCatalog(app.db);
     if (!active) {
       return reply.code(409).send({ error: "no active catalog to re-price under" });
@@ -41,7 +45,9 @@ export default async function replayRoutes(app: FastifyInstance): Promise<void> 
     const orgs = await listOrganizations(app.db);
     const totals: RepriceResult = { repriced: 0, catalogVersion: active.version };
     for (const org of orgs) {
-      const counts = await withOrg(app.db, org.id, (tx) => repriceAll(tx, org.id, active));
+      const counts = await withOrg(app.db, org.id, SERVICE_ROLE, (tx) =>
+        repriceAll(tx, org.id, active),
+      );
       totals.repriced += counts.repriced;
     }
     return reply.code(200).send(totals);
@@ -51,6 +57,9 @@ export default async function replayRoutes(app: FastifyInstance): Promise<void> 
     const principal = await resolvePrincipal(app, request);
     if (!principal) {
       return reply.code(401).send({ error: "admin authorization required" });
+    }
+    if (!authorized(principal, "admin")) {
+      return reply.code(403).send({ error: "insufficient role" });
     }
     // The body is OPTIONAL (a bare POST re-parses everything, mirroring reprice's
     // no-body contract) — so no JSON-schema `body` (Fastify would 400 an absent
@@ -75,7 +84,7 @@ export default async function replayRoutes(app: FastifyInstance): Promise<void> 
       skipped: { gemini: 0, other: 0 },
     };
     for (const org of orgs) {
-      const counts = await withOrg(app.db, org.id, (tx) =>
+      const counts = await withOrg(app.db, org.id, SERVICE_ROLE, (tx) =>
         reparseAll(tx, org.id, { sessionId, repricing }),
       );
       totals.sessions += counts.sessions;

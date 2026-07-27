@@ -13,6 +13,7 @@ import {
   AUTH_FAILURE_ALERT,
   CONNECTOR_RATE_ALERT,
   MONITOR_VERSION,
+  SERVICE_ROLE,
   type LiveMonitorSnapshot,
 } from "@420ai/shared";
 import {
@@ -22,6 +23,7 @@ import {
   connectorHealthWindowed,
   recentBacklogSamples,
   reconcileAlertFirings,
+  listAlertFirings,
   deliverPendingFirings,
   deliverResolvedFirings,
   countPendingCatalogs,
@@ -29,7 +31,7 @@ import {
   withOrg,
   type DbClient,
 } from "@420ai/db";
-import { resolvePrincipal } from "../auth.js";
+import { resolvePrincipal, authorized } from "../auth.js";
 
 /**
  * The "active now" window: a session whose last event is within this lookback is
@@ -47,12 +49,27 @@ const ACTIVE_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
  * `deriveAlerts` plus the sibling `deriveBacklogTrendAlerts` over the recent heartbeat
  * samples, merged + re-sorted by `sortAlerts`), it reconciles them against the persisted
  * open firings (evaluate-on-read — no background dispatcher) and attaches `alertFirings`.
+ *
+ * M15 15.4 (audit B.4): `reconcile` decides whether this tick performs that WRITE or merely
+ * READS the persisted firing list. The emitted frame is identical in SHAPE either way; the
+ * route owns the decision (see the throttle note there). `false` is not a degraded snapshot —
+ * it is the same firing rows, just not re-derived on this particular tick.
+ *
+ * M15 15.4 — BOTH routes wrap this in `withOrg(..., SERVICE_ROLE, ...)`, NOT `principal.role`,
+ * and that is the same call the plan makes for `deliverFirings`. Evaluate-on-read means a GET
+ * performs a WRITE: the reconcile upserts a firing per derived alert. That write is the ORG's
+ * bookkeeping, triggered by whoever happened to open the monitor — it is not the caller's
+ * mutation. Under `principal.role` the 0016 restrictive INSERT policy rejects it for a viewer
+ * and `GET /v1/monitor` returns **500** to every read-only member of the org. (Measured, not
+ * theorised: it is what `rbac.int.test.ts` did on its first run.) The monitor's own route gate
+ * at `viewer` is what authorizes the READ; nothing here is a user-initiated write.
  */
 async function buildSnapshot(
   db: DbClient,
   orgId: string,
   userId: string,
   now: Date,
+  reconcile: boolean,
 ): Promise<LiveMonitorSnapshot> {
   const nowMs = now.getTime();
   const sinceIso = new Date(nowMs - ACTIVE_WINDOW_MS).toISOString();
@@ -64,11 +81,15 @@ async function buildSnapshot(
   // is deprecated` (removed in pg@9). So the "parallel" version never actually overlapped; it
   // only bought a deprecation warning and a future breakage. Awaiting in order is what the
   // driver does anyway, stated honestly.
-  const machines = await machineStatuses(db, userId);
-  const connectors = await connectorHealth(db, userId);
-  const windowedConnectors = await connectorHealthWindowed(db, userId, connectorRateSinceIso);
-  const sessions = await activeSessions(db, userId, sinceIso);
-  const samplesByMachine = await recentBacklogSamples(db, userId, trendSince);
+  // M15 15.4: `orgId` SECOND on every one of these (the 15.2 convention). Before this slice
+  // they filtered on `userId` alone and leaned entirely on RLS for isolation — the inverse of
+  // D-M15-3. With two users in one org that is also WRONG on the read side, not merely
+  // unlayered: a member would not see a colleague's machines.
+  const machines = await machineStatuses(db, orgId);
+  const connectors = await connectorHealth(db, orgId);
+  const windowedConnectors = await connectorHealthWindowed(db, orgId, connectorRateSinceIso);
+  const sessions = await activeSessions(db, orgId, sinceIso);
+  const samplesByMachine = await recentBacklogSamples(db, orgId, trendSince);
   const pendingCatalogs = await countPendingCatalogs(db);
   const authFailureCount = await countRecentAuthFailures(
     db,
@@ -100,8 +121,11 @@ async function buildSnapshot(
     ...deriveAuthFailureAlerts(authFailureCount),
     ...deriveConnectorFailureRateAlerts(windowedConnectors),
   ]);
-  // The new WRITE (D1): reconcile firing state against the derived alerts (route owns `now`).
-  const alertFirings = await reconcileAlertFirings(db, orgId, userId, alerts, now);
+  // The WRITE (D1): reconcile firing state against the derived alerts (route owns `now`).
+  // M15 15.4: throttled — on a non-reconcile tick we serve the persisted list instead.
+  const alertFirings = reconcile
+    ? await reconcileAlertFirings(db, orgId, userId, alerts, now)
+    : await listAlertFirings(db, orgId, userId, now);
   return { ...built, alerts, alertFirings };
 }
 
@@ -118,6 +142,13 @@ async function buildSnapshot(
  * not around them: each opens short `withOrg` transactions around its statements and runs the
  * webhook/SMTP round-trip between them, with no connection pinned across the network hop. Wrapping
  * this call in `withOrg` instead would restore the leak this comment used to describe.
+ *
+ * M15 15.4: passes `SERVICE_ROLE`, NOT `principal.role`, and that choice is load-bearing.
+ * Delivery is TRIGGERED by whoever happens to have the monitor open, but the ACTION belongs to
+ * the org. Under `principal.role` an org whose only active user is a viewer would have every
+ * webhook and email silently stop — the 0016 restrictive UPDATE policy would reject the
+ * `delivery_attempted_at` stamp inside a best-effort try/catch that is designed not to
+ * complain. That is precisely the bug class the 15.3 code review caught here.
  */
 async function deliverFirings(
   app: FastifyInstance,
@@ -126,11 +157,17 @@ async function deliverFirings(
   now: Date,
 ): Promise<void> {
   try {
-    await deliverPendingFirings(app.db, orgId, userId, app.alertDeliverer, now, (e) =>
+    await deliverPendingFirings(app.db, orgId, SERVICE_ROLE, userId, app.alertDeliverer, now, (e) =>
       app.log.error(e),
     );
-    await deliverResolvedFirings(app.db, orgId, userId, app.alertDeliverer, now, (e) =>
-      app.log.error(e),
+    await deliverResolvedFirings(
+      app.db,
+      orgId,
+      SERVICE_ROLE,
+      userId,
+      app.alertDeliverer,
+      now,
+      (e) => app.log.error(e),
     );
   } catch (e) {
     app.log.error(e);
@@ -151,17 +188,45 @@ async function deliverFirings(
  * survives and recovers on the next tick). The interval is ALWAYS cleared on disconnect.
  */
 export default async function monitorRoutes(app: FastifyInstance): Promise<void> {
+  /**
+   * M15 15.4 (audit B.4) — the reconcile is a WRITE (an upsert per derived alert plus a bulk
+   * update). 15.3 made every SSE tick a transaction, so before this throttle a single connected
+   * dashboard produced that write every 3 s, forever, per org. Alert state does not change
+   * meaningfully at 3 s granularity, so we reconcile at most once per `reconcileThrottleMs` and
+   * serve the persisted firing list in between — the frame the client receives is identical in
+   * shape either way.
+   *
+   * The map is keyed on org+user (the same grain as the firing rows themselves) and lives on the
+   * app, so it is per-process and resets on restart. That is fine: a missed throttle window costs
+   * one extra reconcile, never a wrong result.
+   *
+   * The timestamp is stamped BEFORE the snapshot await, not after: two overlapping requests must
+   * not both observe a stale `last`. (The SSE path's `inFlight` guard prevents that within one
+   * stream, but two browser tabs are two streams.)
+   */
+  const shouldReconcile = (orgId: string, userId: string, now: Date): boolean => {
+    const key = `${orgId}:${userId}`;
+    const last = app.reconcileLastRunAt.get(key) ?? 0;
+    const due = now.getTime() - last >= app.reconcileThrottleMs;
+    if (due) app.reconcileLastRunAt.set(key, now.getTime());
+    return due;
+  };
+
   app.get("/v1/monitor", async (request, reply) => {
     const principal = await resolvePrincipal(app, request);
     if (!principal) {
       return reply.code(401).send({ error: "admin authorization required" });
     }
+    if (!authorized(principal, "viewer")) {
+      return reply.code(403).send({ error: "insufficient role" });
+    }
     const userId = principal.userId;
     const now = new Date();
     // M15 15.2: the "no such user → empty snapshot" branch is gone — a resolved
     // principal always has a user row, so it was dead code once the gate returned one.
-    const snap = await withOrg(app.db, principal.orgId, (tx) =>
-      buildSnapshot(tx, principal.orgId, userId, now),
+    const reconcile = shouldReconcile(principal.orgId, userId, now);
+    const snap = await withOrg(app.db, principal.orgId, SERVICE_ROLE, (tx) =>
+      buildSnapshot(tx, principal.orgId, userId, now, reconcile),
     );
     await deliverFirings(app, principal.orgId, userId, now); // best-effort; never throws
     return reply.code(200).send(snap);
@@ -172,6 +237,12 @@ export default async function monitorRoutes(app: FastifyInstance): Promise<void>
     const principal = await resolvePrincipal(app, request);
     if (!principal) {
       return reply.code(401).send({ error: "admin authorization required" });
+    }
+    // M15 15.4: the role gate is a PRE-HIJACK guard (D7). After `reply.hijack()` the error
+    // handler no longer applies and a 403 cannot be sent — so it belongs here, with the others.
+    // It gates at `viewer`, i.e. any resolved principal: every org member may watch the monitor.
+    if (!authorized(principal, "viewer")) {
+      return reply.code(403).send({ error: "insufficient role" });
     }
     const userId = principal.userId;
 
@@ -220,8 +291,9 @@ export default async function monitorRoutes(app: FastifyInstance): Promise<void>
         // exactly the class /lril:code-review caught in M9. The `inFlight` guard above is the
         // NEW half of that rule this slice forced: making the tick transactional means two
         // ticks can now deadlock each other, so they must not overlap.
-        const snap = await withOrg(app.db, principal.orgId, (tx) =>
-          buildSnapshot(tx, principal.orgId, userId, now),
+        const reconcile = shouldReconcile(principal.orgId, userId, now);
+        const snap = await withOrg(app.db, principal.orgId, SERVICE_ROLE, (tx) =>
+          buildSnapshot(tx, principal.orgId, userId, now, reconcile),
         );
         // Deliver newly-opened firings before writing the frame (best-effort; guarded on
         // still-connected so a deliver query never runs against a dropped client).

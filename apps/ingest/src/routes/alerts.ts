@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { withOrg, ackAlertFiring } from "@420ai/db";
-import { resolvePrincipal, isUuid } from "../auth.js";
+import { resolvePrincipal, isUuid, authorized } from "../auth.js";
 
 /**
  * M10 3c — admin-gated alert-firing acknowledgement (PRD §20). Mirrors the
@@ -15,11 +15,14 @@ export default async function alertRoutes(app: FastifyInstance): Promise<void> {
     if (!principal) {
       return reply.code(401).send({ error: "admin authorization required" });
     }
+    if (!authorized(principal, "member")) {
+      return reply.code(403).send({ error: "insufficient role" });
+    }
     if (!isUuid(request.params.id)) {
       return reply.code(404).send({ error: "alert firing not found" });
     }
     const userId = principal.userId;
-    const firing = await withOrg(app.db, principal.orgId, (tx) =>
+    const firing = await withOrg(app.db, principal.orgId, principal.role, (tx) =>
       ackAlertFiring(tx, principal.orgId, userId, request.params.id, new Date()),
     );
     if (!firing) return reply.code(404).send({ error: "alert firing not found" });

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
+import { FORBIDDEN_MESSAGE } from "@/lib/mutation-error";
 
 /**
  * Project-scoped report generation (M12 12.2b; widened M13 13.2 — PRD §15). A small
@@ -53,9 +54,11 @@ export function ProjectReportActions({ projectId }: { projectId: string }) {
       });
       if (!res.ok) {
         setError(
-          res.status === 404
-            ? "Project has no events to report on."
-            : `Generation failed (${res.status}).`,
+          res.status === 403
+            ? FORBIDDEN_MESSAGE
+            : res.status === 404
+              ? "Project has no events to report on."
+              : `Generation failed (${res.status}).`,
         );
         return;
       }
@@ -88,9 +91,11 @@ export function ProjectReportActions({ projectId }: { projectId: string }) {
             ? "AI provider not configured."
             : res.status === 502
               ? "AI provider error — try again."
-              : res.status === 404
-                ? "Project has no events to report on."
-                : `Generation failed (${res.status}).`,
+              : res.status === 403
+                ? FORBIDDEN_MESSAGE
+                : res.status === 404
+                  ? "Project has no events to report on."
+                  : `Generation failed (${res.status}).`,
         );
         return;
       }

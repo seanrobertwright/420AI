@@ -52,6 +52,7 @@ export async function generateSessionInterpretation(
   db: Db,
   provider: AnalysisProvider,
   orgId: string,
+  role: string,
   userId: string,
   sessionId: string,
   generatedAt: string,
@@ -61,7 +62,7 @@ export async function generateSessionInterpretation(
   // call below. That ordering is deliberate — an external LLM round-trip can take tens of
   // seconds, and holding a pooled connection open across it would starve the pool under any
   // concurrency. (`insertReportArtifact` opens its own afterwards; see D-15.3-6.)
-  const { metrics, raw } = await withOrg(db, orgId, async (tx) => ({
+  const { metrics, raw } = await withOrg(db, orgId, role, async (tx) => ({
     metrics: await sessionDetail(tx, orgId, sessionId),
     raw: await sessionTranscript(tx, orgId, sessionId), // DECRYPTED plaintext (transient)
   }));
@@ -91,7 +92,7 @@ export async function generateSessionInterpretation(
 
   const result = await provider.interpret({ system, user: final.redacted, maxOutputTokens });
 
-  return insertReportArtifact(db, {
+  return insertReportArtifact(db, role, {
     orgId,
     userId,
     projectId: null,
@@ -120,6 +121,7 @@ export async function generateProjectInterpretation(
   db: Db,
   provider: AnalysisProvider,
   orgId: string,
+  role: string,
   userId: string,
   projectId: string,
   generatedAt: string,
@@ -132,6 +134,7 @@ export async function generateProjectInterpretation(
   const { totals, byModel, overTime, sessions, projectName } = await withOrg(
     db,
     orgId,
+    role,
     async (tx) => ({
       totals: await usageTotals(tx, orgId, projectId),
       byModel: await usageByModel(tx, orgId, projectId),
@@ -155,7 +158,7 @@ export async function generateProjectInterpretation(
 
   const result = await provider.interpret({ system, user: final.redacted, maxOutputTokens });
 
-  return insertReportArtifact(db, {
+  return insertReportArtifact(db, role, {
     orgId,
     userId,
     projectId,

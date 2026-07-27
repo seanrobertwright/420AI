@@ -29,8 +29,12 @@ import { events, machines, workspaceKeys, workspaces } from "../schema.js";
  * and before the predicate two orgs whose machines used the same path (`C:\dev\app`)
  * had their events, tokens and cost merged into whichever org owned the project row.
  * `orgId` is always the SECOND parameter (D-15.2-4) so a transposed argument is visible.
- * `connectorHealth`/`connectorHealthWindowed` are DELIBERATELY exempt — they join
- * `machines` and filter `machines.user_id`, which is already tenant-correct.
+ *
+ * M15 15.4 CORRECTION: `connectorHealth`/`connectorHealthWindowed` were exempted here on the
+ * grounds that `machines.user_id` was "already tenant-correct". That was only true while every
+ * org held exactly one user — the property 15.4 ends. They are now org-scoped like everything
+ * else, and their `user_id` predicate is GONE (D-15.4-2: every org member sees every connector
+ * in their org). Both sides of the `machines` join carry the org predicate.
  *
  * Token sums use the four `computeTotal` sub-types and RECOMPUTE `total` (never
  * trust a possibly-stale stored `total`) so server totals match the M1 report
@@ -303,13 +307,18 @@ export async function sessionDetail(
 }
 
 /**
- * Derived per-connector health (PRD §10.1.1, D8). Scoped to the user via the
+ * Derived per-connector health (PRD §10.1.1, D8). Scoped to the org via the
  * `machines` join so UNATTRIBUTED events (e.g. Gemini hash sessions with no
  * workspace_keys row) are still counted — unlike the project rollups, which join
  * through workspace_keys and drop them. Clock-free: returns `lastEventAt`; the
  * "N seconds ago" framing is computed by the consumer.
+ *
+ * M15 15.4 — takes `orgId` SECOND and filters on BOTH sides of the join: `events.orgId`
+ * isolates, `machines.orgId` establishes ownership. The `userId` predicate is GONE (D-15.4-2:
+ * every org member sees every connector in their org); keeping it would have left a colleague's
+ * connector panel empty. See `repositories/monitor.ts`'s header for the full argument.
  */
-export async function connectorHealth(db: DbClient, userId: string): Promise<ConnectorHealthRow[]> {
+export async function connectorHealth(db: DbClient, orgId: string): Promise<ConnectorHealthRow[]> {
   const rows = await db
     .select({
       sourceConnector: events.sourceConnector,
@@ -327,7 +336,7 @@ export async function connectorHealth(db: DbClient, userId: string): Promise<Con
     })
     .from(events)
     .innerJoin(machines, eq(events.machineId, machines.id))
-    .where(eq(machines.userId, userId))
+    .where(and(eq(events.orgId, orgId), eq(machines.orgId, orgId)))
     .groupBy(events.sourceConnector)
     .orderBy(events.sourceConnector);
   return rows.map((r) => ({
@@ -347,12 +356,15 @@ export async function connectorHealth(db: DbClient, userId: string): Promise<Con
  * (deriveConnectorFailureRateAlerts in @420ai/shared): unlike the LIFETIME `connectorHealth`
  * ratio (which only clears as healthy calls dilute a permanent denominator), this fires on
  * RECENT data and self-clears once the window rolls past the failures. `events.ts` is
- * `mode:"string"`, so the ISO `sinceIso` compares directly (no Date coercion). Same user
+ * `mode:"string"`, so the ISO `sinceIso` compares directly (no Date coercion). Same org+user
  * scoping + terminal-call denominator as connectorHealth.
+ *
+ * M15 15.4 — this is the TWELFTH `userId`-only read. The PR #63 review listed eleven and missed
+ * it: it has the identical shape and the identical defect as `connectorHealth` above.
  */
 export async function connectorHealthWindowed(
   db: DbClient,
-  userId: string,
+  orgId: string,
   sinceIso: string,
 ): Promise<ConnectorHealthRow[]> {
   const rows = await db
@@ -370,7 +382,7 @@ export async function connectorHealthWindowed(
     })
     .from(events)
     .innerJoin(machines, eq(events.machineId, machines.id))
-    .where(and(eq(machines.userId, userId), gte(events.ts, sinceIso)))
+    .where(and(eq(events.orgId, orgId), eq(machines.orgId, orgId), gte(events.ts, sinceIso)))
     .groupBy(events.sourceConnector)
     .orderBy(events.sourceConnector);
   return rows.map((r) => ({

@@ -240,7 +240,7 @@ through the deferral-audit + scope conversation that produced M12/M13/M14. Full 
   Org-level tenancy (D-M15-1), RLS as a backstop behind primary application scoping (D-M15-3), four
   fixed roles + per-project grants (D-M15-4), all four identity paths + reset + MFA (D-M15-5),
   `ADMIN_TOKEN` retired to a bootstrap-only seed (D-M15-7). Slices: **15.0** ✅ Truth + RLS spike ·
-  **15.1** ✅ Tenancy schema · **15.2** ✅ Request principal · **15.3** ✅ RLS enforcement · **15.4** RBAC ·
+  **15.1** ✅ Tenancy schema · **15.2** ✅ Request principal · **15.3** ✅ RLS enforcement · **15.4** ✅ RBAC ·
   **15.5** Identity core · **15.6** Sessions + revocation · **15.7** SSO (Google + GitHub) ·
   **15.8** MFA · **15.9** API keys + retire `ADMIN_TOKEN` · **15.10** Team surfaces + audit table.
   **15.0 gates 15.3**; 15.5 gates 15.7.
@@ -428,7 +428,7 @@ ROW LEVEL SECURITY` does **not** fix it → a non-owner app role is load-bearing
         transaction (8 concurrent generations → 8 contiguous versions, 0 failures). `server.ts` now
         seeds the bootstrap admin IDENTITY unconditionally, so `ADMIN_TOKEN` keeps working on
         token-only deployments (it previously existed only when `ADMIN_PASSWORD` was set).
-        Role is resolved but NOT enforced (15.4); RLS backstop is 15.3 and must land next.
+        Role is resolved but NOT enforced (enforced in 15.4); RLS backstop is 15.3.
   - [x] **15.3** RLS enforcement — DONE `2026-07-26` (PR #NN). The **backstop** behind 15.2's
         application scoping (D-M15-3). A non-owner role `420ai_app` (`rolsuper=f`,
         `rolbypassrls=f`) is what the ingest server now connects as — without it RLS is INERT and
@@ -445,7 +445,33 @@ ROW LEVEL SECURITY` does **not** fix it → a non-owner app role is load-bearing
 enforced`, the sibling of `skipped ≠ passed`. Closes the Spike-6 hole: a cross-org
         converging ingest used to silently overwrite the other tenant's row and is now rejected.
         Audit B.4 (alert-reconcile throttle) moved to 15.4 (D-15.3-7).
-  - [ ] **15.4** RBAC · **15.5** Identity core · **15.6** Sessions + revocation · **15.7** SSO ·
+  - [x] **15.4** RBAC — DONE `2026-07-27` (PR #NN). The slice that makes an org able to hold more
+        than ONE user, which is why three things had to land together. (1) **Roles become real**:
+        an ordered ladder `viewer < member < admin < owner` in `@420ai/shared`, one `authorized()`
+        gate on all **45** principal-authed handlers, and an RLS **write** backstop — migration
+        `0016` adds **39 RESTRICTIVE** policies (13 tables x INSERT/UPDATE/DELETE) reading a second
+        transaction-local `app.current_role`. Restrictive policies AND with permissive ones, so
+        15.3's 15 org policies are **untouched**. INSERT/UPDATE are LOUD (`WITH CHECK`); DELETE is
+        unavoidably a silent `DELETE 0` — Postgres has no `WITH CHECK` for it — so the route gate is
+        the only loud layer for deletes, asserted explicitly rather than hidden. (2) It closes the
+        **`userId`-only read backlog** (12 reads). Adding `org_id` was not enough: those reads had
+        TWO defects wearing one face — RLS was the only tenant boundary (inverse of D-M15-3) AND the
+        result was only correct while every org held one user. Nine are now scoped by **org
+        instead of** user (D-15.4-2: every member sees every machine/project/workspace in their
+        org); `listAlertFirings`, `createProject` and `resolveWorkspaceId` keep `user_id` for
+        reasons stated at each. (3) It moves the alert reconcile **off the SSE hot path** (audit
+        B.4, inherited via D-15.3-7): throttled to once per 30 s per `(org,user)`, injectable, `0`
+        reproducing pre-15.4 behaviour exactly. Also: `project_grants` (grants **ELEVATE, never
+        demote**, so a solo install holds zero rows and is byte-identical to 15.3), the catalog
+        approver is the real `principal.email` rather than the literal `"admin"` (audit B.6), and
+        D-15.4-5 records that connector approval is machine-local, NOT org RBAC. Proven by
+        `rbac.int.test.ts` — **two Postgres roles, three users, ONE org**, a configuration that had
+        never existed; neutralising one policy to `WITH CHECK (true)` turns the backstop tests red.
+        Two things the suite caught that no type could: a viewer's `GET /v1/monitor` **500ed**
+        because evaluate-on-read makes a GET a WRITE (fixed with `SERVICE_ROLE`, the same call the
+        plan already made for alert delivery), and seeding a second org member by INSERT is
+        shadowed by the personal `owner` membership `setUserPassword` creates.
+  - [ ] **15.5** Identity core · **15.6** Sessions + revocation · **15.7** SSO ·
         **15.8** MFA · **15.9** API keys + retire `ADMIN_TOKEN` · **15.10** Team surfaces + audit
         table.
 

@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
+import { FORBIDDEN_MESSAGE } from "@/lib/mutation-error";
 
 /**
  * Inline project rename (M12 12.2b) — a client island in the (server) project detail view.
@@ -38,7 +39,13 @@ export function ProjectRename({
         body: JSON.stringify({ name: trimmed }),
       });
       if (!res.ok) {
-        setError(res.status === 404 ? "Project not found." : `Rename failed (${res.status}).`);
+        setError(
+          res.status === 403
+            ? FORBIDDEN_MESSAGE
+            : res.status === 404
+              ? "Project not found."
+              : `Rename failed (${res.status}).`,
+        );
         return;
       }
       setEditing(false);

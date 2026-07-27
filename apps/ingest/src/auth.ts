@@ -1,6 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { findPrincipalByEmail, type Principal } from "@420ai/db";
+import { hasRole, type Role } from "@420ai/shared";
 import { verifySession } from "./session.js";
 
 /**
@@ -60,6 +61,26 @@ export async function resolvePrincipal(
   // `request.principal` exists for future middleware and 15.3's transaction wrapper.
   request.principal = principal;
   return principal;
+}
+
+/**
+ * M15 15.4 — the ROUTE-LAYER authorization gate (D-M15-4). The PRIMARY defence; the RLS
+ * restrictive policies (migration 0016) are the backstop behind it, and they only cover
+ * WRITES and only fire loudly for INSERT/UPDATE. So this must be complete on its own:
+ * a missed gate on a DELETE path is silent at BOTH layers.
+ *
+ * Deliberately NOT folded into `resolvePrincipal`: 401 (who are you?) and 403 (you may not)
+ * are different answers, and keeping the two `if` blocks adjacent at every call site is
+ * what makes the grep in `routes/org-scoping.test.ts` able to see them.
+ *
+ * `Principal.role` is `string`, not `Role` — it comes from a TEXT column with no CHECK
+ * constraint. It is deliberately NOT cast: `hasRole` takes a `string` and fails CLOSED, which
+ * is the correct handling for a row someone edited by hand. Note the asymmetry with the RLS
+ * backstop, which only ever asks "is this a viewer?" and therefore PERMITS an unknown role to
+ * write. The strict layer is this one.
+ */
+export function authorized(principal: Principal, minimum: Role): boolean {
+  return hasRole(principal.role, minimum);
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { parseSignedCatalogText } from "@/lib/signed-catalog";
 import { cn } from "@/lib/utils";
+import { FORBIDDEN_MESSAGE } from "@/lib/mutation-error";
 
 /**
  * Pricing-catalog upload form (M14 14.2). Submits an offline ed25519-SIGNED bundle
@@ -46,7 +47,7 @@ export function CatalogUpload() {
       });
       if (!res.ok) {
         // The proxy forwards ingest's status + JSON body (400 → "signature verification failed").
-        let message = `Upload failed (${res.status}).`;
+        let message = res.status === 403 ? FORBIDDEN_MESSAGE : `Upload failed (${res.status}).`;
         try {
           const body = (await res.json()) as { error?: string };
           if (body.error) message = `${body.error} (${res.status}).`;

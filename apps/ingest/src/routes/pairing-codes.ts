@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { createPairingCode, ensurePersonalOrg, users } from "@420ai/db";
 import { pairingCodeBodySchema } from "../schemas.js";
-import { resolvePrincipal } from "../auth.js";
+import { resolvePrincipal, authorized } from "../auth.js";
 
 interface PairingCodeBody {
   email?: string;
@@ -28,6 +28,9 @@ export default async function pairingCodeRoutes(app: FastifyInstance): Promise<v
       const principal = await resolvePrincipal(app, request);
       if (!principal) {
         return reply.code(401).send({ error: "admin authorization required" });
+      }
+      if (!authorized(principal, "admin")) {
+        return reply.code(403).send({ error: "insufficient role" });
       }
 
       let userId = request.body.userId;

@@ -3,7 +3,7 @@ import { findAdminCredential } from "@420ai/db";
 import { loginBodySchema } from "../schemas.js";
 import { verifyPassword } from "../password.js";
 import { signSession, SESSION_TTL_SECONDS } from "../session.js";
-import { resolvePrincipal } from "../auth.js";
+import { resolvePrincipal, authorized } from "../auth.js";
 
 interface LoginBody {
   email: string;
@@ -50,6 +50,9 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
     const principal = await resolvePrincipal(app, request);
     if (!principal) {
       return reply.code(401).send({ error: "admin authorization required" });
+    }
+    if (!authorized(principal, "viewer")) {
+      return reply.code(403).send({ error: "insufficient role" });
     }
     // M15 15.2 BUG FIX: report the CALLER's email, not the env admin's. Before the
     // principal existed this returned `app.adminEmail` no matter who logged in, so a

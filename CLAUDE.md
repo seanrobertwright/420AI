@@ -202,6 +202,29 @@ Four corollaries the 15.3 conversion measured rather than assumed:
   best-effort `try/catch` is the worst case** — RLS filters rather than errors, so there is nothing
   for the catch to swallow and nothing to log. Audit those paths first.
 
+**A backstop that cannot be LOUD is not a substitute for a complete gate** (M15 15.4). A RESTRICTIVE
+RLS policy blocks INSERT and UPDATE loudly (`WITH CHECK` → `new row violates row-level security
+policy`) but filters DELETE **silently** — Postgres has no `WITH CHECK` for DELETE, so a blocked
+delete is an unavoidable `DELETE 0` with no error, no log and a 200 response. Do not try to make it
+loud; there is no mechanism. Instead make the ROUTE gate complete and **assert the silence
+explicitly in a test**, so nobody later "fixes" it into an expectation the database cannot meet.
+Three further 15.4 findings, each measured rather than assumed:
+
+- **A `pg_policies` assertion keyed on `tablename` alone silently collapses.** `new Map(rows.map(r
+=> [r.tablename, r.qual]))` kept reading `size === 15` after 39 policies were added, with `qual`
+  becoming whichever row came last — green, and meaningless. Re-key on `(tablename, policyname)`;
+  do **not** merely bump the expected number.
+- **Evaluate-on-read means a GET performs a WRITE, so a read gate is not enough.** `GET /v1/monitor`
+  reconciles alert firings. Wrapping it in `withOrg(..., principal.role, ...)` made it **500 for
+  every viewer**. A write that is the ORG's bookkeeping — the reconcile, the alert-delivery stamp —
+  must run under `SERVICE_ROLE`, not the role of whoever happened to open the page. Ask "whose
+  action is this?", not "who triggered it?".
+- **`setUserPassword` auto-creates a personal `owner` membership** (via `ensurePersonalOrg`), and
+  `findPrincipalByEmail` resolves the FIRST membership by `(created_at, id)`. So seeding a
+  second-rung user by INSERTing a membership is silently shadowed and every role assertion tests an
+  owner. **Move** the existing membership instead. A multi-user fixture that has never existed
+  before is exactly where this class of seeding bug hides.
+
 ## Tooling gotchas (Windows)
 
 - The **Bash tool is Git Bash (POSIX sh)**. For multi-line commit messages / PR bodies use a

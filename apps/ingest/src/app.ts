@@ -31,6 +31,13 @@ import type { AlertDeliverer } from "./delivery/alert-deliverer.js";
 
 const DEFAULT_ANALYSIS_MAX_OUTPUT_TOKENS = 4096;
 const DEFAULT_MONITOR_STREAM_INTERVAL_MS = 3000;
+/**
+ * M15 15.4 (audit B.4) — the alert reconcile is a WRITE, and 15.3 made every SSE tick a
+ * transaction, so it ran once per DEFAULT_MONITOR_STREAM_INTERVAL_MS per connected client per
+ * org. 30 s is an order of magnitude off that hot path while staying far below the human
+ * threshold for noticing a stale alert. Injectable; `0` reproduces pre-15.4 behaviour exactly.
+ */
+const DEFAULT_RECONCILE_THROTTLE_MS = 30_000;
 
 const DEFAULT_ADMIN_EMAIL = "seanrobertwright@gmail.com";
 
@@ -53,6 +60,10 @@ export interface BuildAppOptions {
   analysisMaxOutputTokens?: number;
   /** M9 SSE push cadence for GET /v1/monitor/stream (default 3000; tests inject 50). */
   monitorStreamIntervalMs?: number;
+  /** M15 15.4 minimum gap between alert reconcile writes per (org,user) (default 30 000).
+   * Tests that assert a firing appears on the first GET inject `0` — every tick reconciles,
+   * which is exactly today's behaviour. */
+  reconcileThrottleMs?: number;
   logger?: boolean;
   /** M12 12.4b pino level (default "info"); ignored when logger:false. */
   logLevel?: string;
@@ -118,6 +129,10 @@ export function buildApp(opts: BuildAppOptions): FastifyInstance {
     "monitorStreamIntervalMs",
     opts.monitorStreamIntervalMs ?? DEFAULT_MONITOR_STREAM_INTERVAL_MS,
   );
+  app.decorate("reconcileThrottleMs", opts.reconcileThrottleMs ?? DEFAULT_RECONCILE_THROTTLE_MS);
+  // Per-PROCESS, in-memory, like `metrics` below. Not a cache of results — only of "when did
+  // this (org,user) last reconcile", so losing it on restart is free.
+  app.decorate("reconcileLastRunAt", new Map<string, number>());
   // M12 12.6 alert delivery: omitted → null → disabled (no webhook). The monitor route's
   // deliverFirings early-returns when null, so the default no-webhook path adds no query.
   app.decorate("alertDeliverer", opts.alertDeliverer ?? null);

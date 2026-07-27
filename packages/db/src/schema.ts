@@ -297,6 +297,51 @@ export const projects = pgTable(
 );
 
 /**
+ * M15 15.4 — per-project capability ELEVATION (D-M15-4, D-15.4-2).
+ *
+ * Grants ADD capability; they never restrict it. Every member of an org already sees every
+ * project in that org, so this table is empty in a solo install and behaviour is identical
+ * to pre-15.4 (D-M15-10). A row raises ONE user's capability on ONE project:
+ * effective role = max(org membership role, grant role).
+ *
+ * That direction is the load-bearing choice. The alternative — grants as the SOURCE of
+ * visibility — forces a grants JOIN onto every project-scoped read and turns each RLS policy
+ * into a correlated subquery, the exact shape D-M15-2 rejected for `events` on performance
+ * grounds.
+ *
+ * `org_id` is carried (not merely reachable via `project_id`) so the row is coverable by the
+ * same one-column policy as every other tenant table — a policy keyed through a join would
+ * be that correlated subquery again.
+ *
+ * Unique on `(project_id, user_id)` and NOT `(org_id, project_id, user_id)`: a project
+ * belongs to exactly one org, so adding `org_id` to the key would permit two grants for the
+ * same (project, user) pair under different orgs — unrepresentable, and it would only weaken
+ * the constraint.
+ */
+export const projectGrants = pgTable(
+  "project_grants",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organizations.id),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
+    role: text("role").notNull(), // viewer | member | admin | owner (D-M15-4)
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("project_grants_project_user").on(t.projectId, t.userId),
+    index("project_grants_by_org").on(t.orgId),
+    index("project_grants_by_user").on(t.userId),
+  ],
+);
+
+/**
  * A local dev context where sessions occurred (PRD §6). One per (user, root_path).
  * `project_id` is nullable until mapped (auto-mapped on discover); `root_path` is
  * the resolved real path (Claude/Codex cwd, or the Gemini `.project_root` value).

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
+import { FORBIDDEN_SHORT } from "@/lib/mutation-error";
 
 /**
  * Per-session report generation (M12 12.2b) — a compact client island rendered in each row of
@@ -41,9 +42,11 @@ export function SessionReportActions({ sessionId }: { sessionId: string }) {
             ? "provider off"
             : res.status === 502
               ? "provider err"
-              : res.status === 404
-                ? "no events"
-                : `failed (${res.status})`,
+              : res.status === 403
+                ? FORBIDDEN_SHORT
+                : res.status === 404
+                  ? "no events"
+                  : `failed (${res.status})`,
         );
         return;
       }

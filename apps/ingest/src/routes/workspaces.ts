@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { DiscoverRequest, DiscoverResponse } from "@420ai/shared";
-import { repoNameFromRemote, basenameFromRoot } from "@420ai/shared";
+import { repoNameFromRemote, basenameFromRoot, SERVICE_ROLE } from "@420ai/shared";
 import {
   withOrg,
   getMachineUserId,
@@ -14,7 +14,7 @@ import {
   getProjectName,
 } from "@420ai/db";
 import { discoverBodySchema, patchWorkspaceBodySchema } from "../schemas.js";
-import { resolvePrincipal, isUuid } from "../auth.js";
+import { resolvePrincipal, isUuid, authorized } from "../auth.js";
 
 interface PatchWorkspaceBody {
   projectId: string;
@@ -49,7 +49,7 @@ export default async function workspaceRoutes(app: FastifyInstance): Promise<voi
       // from the machine's owning user (the documented surviving seam; D-M15-7 / 15.9).
       const machineOrgId = await getOrgIdForUser(app.db, userId);
 
-      const result = await withOrg(app.db, machineOrgId, async (tx) => {
+      const result = await withOrg(app.db, machineOrgId, SERVICE_ROLE, async (tx) => {
         let workspacesUpserted = 0;
         let projectsCreated = 0;
         const mappings: DiscoverResponse["mappings"] = [];
@@ -76,11 +76,11 @@ export default async function workspaceRoutes(app: FastifyInstance): Promise<voi
               if (proj.created) projectsCreated += 1;
             } else {
               projectName = basenameFromRoot(w.rootPath);
-              const proj = await createProject(tx, userId, projectName);
+              const proj = await createProject(tx, machineOrgId, userId, projectName);
               projectId = proj.id;
               projectsCreated += 1;
             }
-            await remapWorkspace(tx, userId, ws.id, projectId);
+            await remapWorkspace(tx, machineOrgId, ws.id, projectId);
           } else {
             projectName = (await getProjectName(tx, machineOrgId, projectId)) ?? "";
           }
@@ -112,8 +112,12 @@ export default async function workspaceRoutes(app: FastifyInstance): Promise<voi
     if (!principal) {
       return reply.code(401).send({ error: "admin authorization required" });
     }
-    const userId = principal.userId;
-    const workspaces = await withOrg(app.db, principal.orgId, (tx) => listWorkspaces(tx, userId));
+    if (!authorized(principal, "viewer")) {
+      return reply.code(403).send({ error: "insufficient role" });
+    }
+    const workspaces = await withOrg(app.db, principal.orgId, principal.role, (tx) =>
+      listWorkspaces(tx, principal.orgId),
+    );
     return reply.code(200).send({ workspaces });
   });
 
@@ -124,6 +128,9 @@ export default async function workspaceRoutes(app: FastifyInstance): Promise<voi
       const principal = await resolvePrincipal(app, request);
       if (!principal) {
         return reply.code(401).send({ error: "admin authorization required" });
+      }
+      if (!authorized(principal, "member")) {
+        return reply.code(403).send({ error: "insufficient role" });
       }
       const { id } = request.params;
       const { projectId } = request.body;
@@ -136,15 +143,14 @@ export default async function workspaceRoutes(app: FastifyInstance): Promise<voi
       // Verify the target project exists, so an unknown id is a clean 404
       // rather than a foreign-key 500. Its own short `withOrg` (not the mutation's) so the
       // 404 reply still happens OUTSIDE a transaction — the CLAUDE.md guard rule.
-      const exists = await withOrg(app.db, principal.orgId, (tx) =>
+      const exists = await withOrg(app.db, principal.orgId, principal.role, (tx) =>
         getProjectName(tx, principal.orgId, projectId),
       );
       if (!exists) {
         return reply.code(404).send({ error: "project not found" });
       }
-      const userId = principal.userId;
-      const row = await withOrg(app.db, principal.orgId, (tx) =>
-        remapWorkspace(tx, userId, id, projectId),
+      const row = await withOrg(app.db, principal.orgId, principal.role, (tx) =>
+        remapWorkspace(tx, principal.orgId, id, projectId),
       );
       if (!row) return reply.code(404).send({ error: "workspace not found" });
       return reply.code(200).send({ id: row.id, projectId: row.projectId });

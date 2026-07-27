@@ -9,8 +9,24 @@ import { events, machineHeartbeats, machines } from "../schema.js";
  * clock; the ingest route passes `now`/`sinceIso` and applies `deriveMachineStatus`
  * (D6). Silent library (CLAUDE.md): throws, never logs.
  *
- * Scoping mirrors `connectorHealth`: user-scoped via the `machines` join so
+ * Scoping mirrors `connectorHealth`: reached via the `machines` join so
  * UNATTRIBUTED events (no workspace_keys row) still count.
+ *
+ * M15 15.4 — every read here takes `orgId` as its SECOND parameter (the 15.2 convention) and
+ * scopes by ORG, not by user. The `userId` predicate is GONE, and its removal — not merely the
+ * addition of `orgId` — is the point.
+ *
+ * Until this slice these filtered on `userId` alone, which had TWO defects that looked like one:
+ * RLS was the only thing between tenants (the inverse of D-M15-3), AND the result was only
+ * correct while every org held exactly one user. D-15.4-2 settles the second: org membership is
+ * open-by-default, every member sees every machine/session/connector in their org. Keeping
+ * `user_id` here would have left a colleague's monitor EMPTY — visible-but-partial, which is a
+ * worse failure than the one it replaced because nothing errors.
+ *
+ * For the JOIN-based reads the org predicate goes on BOTH sides: the FACT table
+ * (`events.orgId` / `machineHeartbeats.orgId`) gives isolation, and `machines.orgId` gives
+ * OWNERSHIP — without the second, one tenant can get a non-empty rollup of its own rows
+ * attributed through another tenant's machine (the 15.2 lesson, verbatim in CLAUDE.md).
  *
  * Timestamp coercion (CLAUDE.md Drizzle gotcha): `machines.*` timestamptz columns
  * are PLAIN `timestamp(..,{withTimezone:true})` (NOT mode:"string"), so the driver
@@ -18,8 +34,8 @@ import { events, machineHeartbeats, machines } from "../schema.js";
  * mode:"string" (already ISO) — do NOT re-coerce it.
  */
 
-/** Per-machine status rows for the current user (clock-free; Date→ISO normalized). */
-export async function machineStatuses(db: DbClient, userId: string): Promise<MachineStatusRow[]> {
+/** Per-machine status rows for the caller's ORG (clock-free; Date→ISO normalized). */
+export async function machineStatuses(db: DbClient, orgId: string): Promise<MachineStatusRow[]> {
   const rows = await db
     .select({
       id: machines.id,
@@ -34,7 +50,7 @@ export async function machineStatuses(db: DbClient, userId: string): Promise<Mac
       consecutiveSyncFailures: machines.consecutiveSyncFailures,
     })
     .from(machines)
-    .where(eq(machines.userId, userId))
+    .where(eq(machines.orgId, orgId))
     .orderBy(machines.name);
   return rows.map((r) => ({
     id: r.id,
@@ -54,8 +70,8 @@ export async function machineStatuses(db: DbClient, userId: string): Promise<Mac
 
 /**
  * Sessions with activity at or after `sinceIso` (the "active now" window). Clock-free:
- * the route computes `sinceIso = now - ACTIVE_WINDOW` and passes it in. Scoped to the
- * user via the `machines` join (mirrors `connectorHealth`). Newest activity first.
+ * the route computes `sinceIso = now - ACTIVE_WINDOW` and passes it in. Org-scoped via
+ * the `machines` join (mirrors `connectorHealth`). Newest activity first.
  *
  * GOTCHA 1: the `since` filter is a HAVING value-comparison (`max(ts) >= sinceIso`), NOT
  * a GROUP BY / ORDER BY expression, so a bound ISO param cast `::timestamptz` is SAFE
@@ -69,7 +85,7 @@ export async function machineStatuses(db: DbClient, userId: string): Promise<Mac
 const toIso = (v: string | null): string | null => (v ? new Date(v).toISOString() : null);
 export async function activeSessions(
   db: DbClient,
-  userId: string,
+  orgId: string,
   sinceIso: string,
 ): Promise<ActiveSessionRow[]> {
   const rows = await db
@@ -87,7 +103,8 @@ export async function activeSessions(
     })
     .from(events)
     .innerJoin(machines, eq(events.machineId, machines.id))
-    .where(eq(machines.userId, userId))
+    // Fact table AND join table: `events.orgId` isolates, `machines.orgId` owns.
+    .where(and(eq(events.orgId, orgId), eq(machines.orgId, orgId)))
     .groupBy(events.sessionId)
     .having(sql`max(${events.ts}) >= ${sinceIso}::timestamptz`)
     .orderBy(sql`max(${events.ts}) desc`);
@@ -105,13 +122,13 @@ export async function activeSessions(
 
 /**
  * Recent backlog samples per machine for the trend derivative (M10 3c). Clock-free:
- * the route passes `since` (a Date = now - BACKLOG_TREND_WINDOW_MS). Scoped by userId
+ * the route passes `since` (a Date = now - BACKLOG_TREND_WINDOW_MS). Org-scoped
  * via the machines join. `ts` is plain timestamptz → Date → ISO. Sorted asc (by machine
  * then ts) so the pure `deriveBacklogTrend` can read first/last directly.
  */
 export async function recentBacklogSamples(
   db: DbClient,
-  userId: string,
+  orgId: string,
   since: Date,
 ): Promise<Map<string, BacklogSample[]>> {
   const rows = await db
@@ -122,7 +139,14 @@ export async function recentBacklogSamples(
     })
     .from(machineHeartbeats)
     .innerJoin(machines, eq(machineHeartbeats.machineId, machines.id))
-    .where(and(eq(machines.userId, userId), gte(machineHeartbeats.ts, since)))
+    .where(
+      and(
+        // Fact table AND join table — see the file header.
+        eq(machineHeartbeats.orgId, orgId),
+        eq(machines.orgId, orgId),
+        gte(machineHeartbeats.ts, since),
+      ),
+    )
     .orderBy(machineHeartbeats.machineId, machineHeartbeats.ts);
   const byMachine = new Map<string, BacklogSample[]>();
   for (const r of rows) {

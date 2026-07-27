@@ -17,6 +17,7 @@ import {
 import { cn } from "@/lib/utils";
 import { formatDate } from "@/lib/format";
 import { CatalogUpload } from "@/components/catalog/catalog-upload";
+import { FORBIDDEN_MESSAGE } from "@/lib/mutation-error";
 
 /** Status → badge tint (mirrors STATUS_BADGE in monitor-view.tsx). */
 const STATUS_BADGE: Record<PricingCatalogRow["status"], string> = {
@@ -66,7 +67,13 @@ function CatalogTable({
     try {
       const res = await fetch(`${actionBase}/${id}/${action}`, { method: "POST" });
       if (!res.ok) {
-        setError(res.status === 404 ? "No longer pending." : `Action failed (${res.status}).`);
+        setError(
+          res.status === 403
+            ? FORBIDDEN_MESSAGE
+            : res.status === 404
+              ? "No longer pending."
+              : `Action failed (${res.status}).`,
+        );
         return;
       }
       router.refresh();

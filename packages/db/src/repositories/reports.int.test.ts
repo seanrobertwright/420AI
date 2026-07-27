@@ -50,8 +50,8 @@ describe.skipIf(!TEST_URL)("report-artifacts repository (integration)", () => {
   }
 
   it("bumps version per (user, reportType, scopeId) and retains history", async () => {
-    const first = await insertReportArtifact(dbh.db, artifact("sess-1", "# first"));
-    const second = await insertReportArtifact(dbh.db, artifact("sess-1", "# second"));
+    const first = await insertReportArtifact(dbh.db, "member", artifact("sess-1", "# first"));
+    const second = await insertReportArtifact(dbh.db, "member", artifact("sess-1", "# second"));
     expect(first.version).toBe(1);
     expect(second.version).toBe(2);
     expect(first.id).not.toBe(second.id); // both retained, not overwritten
@@ -62,13 +62,17 @@ describe.skipIf(!TEST_URL)("report-artifacts repository (integration)", () => {
   });
 
   it("a distinct scopeId restarts the version at 1", async () => {
-    await insertReportArtifact(dbh.db, artifact("sess-1", "# a"));
-    const other = await insertReportArtifact(dbh.db, artifact("sess-2", "# b"));
+    await insertReportArtifact(dbh.db, "member", artifact("sess-1", "# a"));
+    const other = await insertReportArtifact(dbh.db, "member", artifact("sess-2", "# b"));
     expect(other.version).toBe(1);
   });
 
   it("getReportArtifact returns the exact stored markdown + metrics", async () => {
-    const row = await insertReportArtifact(dbh.db, artifact("sess-1", "# exact markdown"));
+    const row = await insertReportArtifact(
+      dbh.db,
+      "member",
+      artifact("sess-1", "# exact markdown"),
+    );
     const fetched = await getReportArtifact(dbh.db, orgId, row.id);
     expect(fetched).toBeDefined();
     expect(fetched!.markdown).toBe("# exact markdown");
@@ -84,13 +88,17 @@ describe.skipIf(!TEST_URL)("report-artifacts repository (integration)", () => {
 
   it("round-trips catalog_version + analysis_version per artifact kind (PRD §23)", async () => {
     // A deterministic report: catalog stamped, analysis NULL.
-    const det = await insertReportArtifact(dbh.db, artifact("sess-det", "# deterministic"));
+    const det = await insertReportArtifact(
+      dbh.db,
+      "member",
+      artifact("sess-det", "# deterministic"),
+    );
     const detFetched = await getReportArtifact(dbh.db, orgId, det.id);
     expect(detFetched!.catalogVersion).toBe("m10-catalog-v1");
     expect(detFetched!.analysisVersion).toBeNull();
 
     // An AI interpretation: BOTH catalog + analysis stamped (D3/D4).
-    const ai = await insertReportArtifact(dbh.db, {
+    const ai = await insertReportArtifact(dbh.db, "member", {
       orgId,
       userId,
       projectId: null,
@@ -110,9 +118,9 @@ describe.skipIf(!TEST_URL)("report-artifacts repository (integration)", () => {
   });
 
   it("listReportArtifacts returns a scope's history newest-first and filters", async () => {
-    await insertReportArtifact(dbh.db, artifact("sess-1", "# v1"));
-    await insertReportArtifact(dbh.db, artifact("sess-1", "# v2"));
-    await insertReportArtifact(dbh.db, artifact("sess-2", "# other"));
+    await insertReportArtifact(dbh.db, "member", artifact("sess-1", "# v1"));
+    await insertReportArtifact(dbh.db, "member", artifact("sess-1", "# v2"));
+    await insertReportArtifact(dbh.db, "member", artifact("sess-2", "# other"));
 
     const scoped = await listReportArtifacts(dbh.db, orgId, userId, { scopeId: "sess-1" });
     expect(scoped).toHaveLength(2);

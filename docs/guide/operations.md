@@ -564,3 +564,102 @@ a backup first (12.4d), and prefer a read-only query over a mutation.
 | `password authentication failed for user "420ai_app"`      | `DATABASE_URL_APP` and `APP_DB_PASSWORD` disagree. Re-run `npm run db:provision-app-role` after aligning them.                                                                                       |
 | `permission denied for table <x>`                          | The migration was applied to a different database than the one being connected to, or a new table was created by a role other than `420ai` (the `ALTER DEFAULT PRIVILEGES` grant follows the owner). |
 | A maintenance op reports `{repriced: 0}`                   | The deployment-wide ops iterate per org (D-15.3-5). A zero here means `listOrganizations` returned nothing, not that RLS blocked the pass.                                                           |
+
+## 15.4 — Roles, permissions & the write backstop
+
+M15 15.4 makes `memberships.role` load-bearing. Until this slice every authenticated caller had
+full admin power over their org; a `viewer` could `POST /v1/replay/reparse` and rewrite the archive.
+
+### The four roles
+
+They form an **ordered ladder** (`packages/shared/src/roles.ts`), so gates express "admin or
+better" as a rank comparison rather than enumerating roles — the form that silently omits `owner`
+when someone adds a rung.
+
+| Role     | May do                                                                                                                                                                              |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `viewer` | **Read everything in the org** — monitor, projects, sessions, reports, search, exports, workspaces, connector health, the catalogs. No writes at all.                               |
+| `member` | Everything a viewer may, **plus ordinary work**: create/rename projects, remap workspaces, generate reports and AI interpretations, ack alerts, manage git links.                   |
+| `admin`  | Everything a member may, **plus deployment administration**: upload/approve/reject catalogs, issue pairing codes, replay re-price and re-parse, search re-index, `GET /v1/metrics`. |
+| `owner`  | Everything an admin may. Created automatically for the user an org is seeded around (`ensurePersonalOrg`).                                                                          |
+
+Two rules follow from D-15.4-2 and are worth stating plainly:
+
+- **Org membership is open-by-default.** Every member of an org sees every machine, project,
+  workspace, session and commit in that org. The reads are scoped by `org_id`, not by `user_id` —
+  a colleague's machines appear in your monitor.
+- **Project grants only ever ELEVATE.** A `project_grants` row raises one user's capability on one
+  project; effective role = `max(org role, grant role)`. A grant below the org role is a no-op,
+  never a demotion. A solo install holds zero grant rows and behaves exactly as it did before 15.4.
+
+Anything a role may not do returns **403 `{"error":"insufficient role"}`** — never a 404, and
+never a silent no-op. The dashboard renders it as "You do not have permission to do this."
+
+### The RLS write backstop (`app.current_role`)
+
+`withOrg(db, orgId, role, fn)` sets a **second** transaction-local alongside `app.current_org`:
+
+```sql
+SELECT set_config('app.current_role', $1, true);   -- SET LOCAL semantics, bound parameter
+```
+
+Migration `0016` adds **39 RESTRICTIVE policies** (13 tenant tables x INSERT/UPDATE/DELETE) that
+read it. Restrictive policies combine with `AND`, permissive ones with `OR`, so these sit _behind_
+15.3's org policies without modifying any of them.
+
+Three operational facts you need before debugging anything here:
+
+1. **A blocked INSERT or UPDATE is LOUD** — `new row violates row-level security policy`. Both put
+   the role test in `WITH CHECK`.
+2. **A blocked DELETE is SILENT** — `DELETE 0`, no error. Postgres has no `WITH CHECK` for DELETE,
+   so this is unavoidable. **The route gate is the only loud layer for deletes**; the backstop is
+   genuinely a backstop, not a substitute for a complete gate.
+3. **An UNSET role is PERMISSIVE.** The policies `coalesce(..., 'member')`, so a context with no
+   role still writes. That is deliberate: machine-authed collector writes and the deployment-wide
+   maintenance ops have no principal and pass the `SERVICE_ROLE` sentinel, and failing closed here
+   would 500 every ingest. Strictness lives at the route layer, which fails closed on any role it
+   does not recognise.
+
+There is deliberately **no restrictive policy on SELECT**: a viewer is entitled to read their own
+org, so a role predicate there would buy nothing the org policy does not already give while making
+every read more expensive.
+
+### `SERVICE_ROLE`: writes that belong to the ORG, not the caller
+
+Three paths pass `SERVICE_ROLE` rather than `principal.role`, and each is load-bearing:
+
+| Path                                          | Why                                                                                                                                                                                                                                                                                                          |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Collector ingest / heartbeat / git / discover | No request principal exists — the caller is a machine bearing a machine token.                                                                                                                                                                                                                               |
+| Replay + re-index per-org loops               | Deployment-wide maintenance, already gated at `admin` at the route.                                                                                                                                                                                                                                          |
+| The monitor snapshot **and** alert delivery   | Evaluate-on-read means a `GET` performs a WRITE. That write is the org's bookkeeping, triggered by whoever happened to open the dashboard. Under `principal.role` a viewer's `GET /v1/monitor` would **500**, and every webhook and email would silently stop for an org whose only active user is a viewer. |
+
+### Connector approval is NOT org RBAC (D-15.4-5)
+
+Audit item B.7 asked whether connector capture-surface approval should be role-gated. It should
+not, and this is a decision rather than an omission. Approval is entirely collector-**local**: it
+is driven by `connectors.approve` over the M11 desktop control protocol, **there is no HTTP
+approval endpoint**, and it is a machine-local trust decision made by whoever physically runs that
+machine — the same person who could edit `~/.420ai/connector-config.json` directly or repoint the
+collector with `--home`. Gating it on an org role would refuse someone who already holds the
+filesystem. Recorded in the header of `apps/collector/src/connectors/connector-approvals.ts` too.
+
+### Alert reconcile throttle
+
+The monitor's evaluate-on-read reconcile is a WRITE, and 15.3 made every SSE tick a transaction —
+so before this slice a single connected dashboard produced that write every
+`monitorStreamIntervalMs` (default 3 s), forever, per org. It is now throttled to at most once per
+`reconcileThrottleMs` (default **30 000**) per `(org, user)`; in between, the snapshot serves the
+persisted firing list. **The emitted frame is identical in shape either way.** Set it to `0` to
+restore pre-15.4 behaviour (every tick reconciles) — that is what the integration suites inject.
+
+### Troubleshooting
+
+| Symptom                                                   | Cause                                                                                                                                                                                             |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A user gets `403 {"error":"insufficient role"}`           | Their `memberships.role` is below the endpoint's minimum. Check with `select u.email, m.role from users u join memberships m on m.user_id = u.id`.                                                |
+| A hand-edited role like `superadmin` grants nothing       | `hasRole` fails CLOSED on any unrecognised string. Note the asymmetry: the RLS backstop only asks "is this a viewer?", so the same row IS permitted to write at the database layer.               |
+| A delete "worked" but nothing changed                     | A blocked DELETE is `DELETE 0` with no error. Check the route's `authorized(...)` gate — the backstop cannot make this loud.                                                                      |
+| `withOrg requires a non-empty role`                       | A caller passed `""`. Machine paths must pass `SERVICE_ROLE` explicitly; a blank role would be coalesced to the permissive default.                                                               |
+| A user has two memberships and resolves to the wrong role | `findPrincipalByEmail` takes the FIRST by `(created_at, id)`. `setUserPassword` auto-creates a personal `owner` membership, so **move** an invited user's membership rather than adding a second. |
+| A viewer's `GET /v1/monitor` 500s                         | The snapshot's reconcile write is running under `principal.role` instead of `SERVICE_ROLE`. See the table above.                                                                                  |

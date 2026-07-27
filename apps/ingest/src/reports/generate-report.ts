@@ -47,6 +47,7 @@ import {
 export async function generateProjectCostReport(
   db: Db,
   orgId: string,
+  role: string,
   userId: string,
   projectId: string,
   bucket: "day" | "week",
@@ -55,7 +56,7 @@ export async function generateProjectCostReport(
   // Sequential inside the RLS transaction: a transaction is ONE connection, so `Promise.all`
   // here never overlapped — node-postgres queues the queries and warns that concurrent
   // client.query() is deprecated (removed in pg@9). See routes/monitor.ts for the full note.
-  const { totals, byModel, overTime, projectName } = await withOrg(db, orgId, async (tx) => ({
+  const { totals, byModel, overTime, projectName } = await withOrg(db, orgId, role, async (tx) => ({
     totals: await usageTotals(tx, orgId, projectId),
     byModel: await usageByModel(tx, orgId, projectId),
     overTime: await usageOverTime(tx, orgId, projectId, bucket),
@@ -68,7 +69,7 @@ export async function generateProjectCostReport(
     bucket,
     ...metrics,
   });
-  return insertReportArtifact(db, {
+  return insertReportArtifact(db, role, {
     orgId,
     userId,
     projectId,
@@ -92,13 +93,14 @@ export async function generateProjectCostReport(
 export async function generateSessionAutopsyReport(
   db: Db,
   orgId: string,
+  role: string,
   userId: string,
   sessionId: string,
   generatedAt: string,
 ): Promise<ReportArtifactRow> {
-  const session = await withOrg(db, orgId, (tx) => sessionDetail(tx, orgId, sessionId));
+  const session = await withOrg(db, orgId, role, (tx) => sessionDetail(tx, orgId, sessionId));
   const markdown = renderSessionAutopsyReport({ generatedAt, session });
-  return insertReportArtifact(db, {
+  return insertReportArtifact(db, role, {
     orgId,
     userId,
     projectId: null,

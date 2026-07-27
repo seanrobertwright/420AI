@@ -4,6 +4,7 @@ import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
+import { FORBIDDEN_MESSAGE } from "@/lib/mutation-error";
 
 /**
  * New-project form (M12 12.2b) — a client island above the (server) projects table. Mirrors the
@@ -32,7 +33,7 @@ export function ProjectCreate() {
         body: JSON.stringify(remote ? { name: trimmed, gitRemote: remote } : { name: trimmed }),
       });
       if (!res.ok) {
-        setError(`Create failed (${res.status}).`);
+        setError(res.status === 403 ? FORBIDDEN_MESSAGE : `Create failed (${res.status}).`);
         return;
       }
       setName("");

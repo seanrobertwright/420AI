@@ -64,7 +64,7 @@ describe.skipIf(!TEST_URL)("workspaces + projects repositories (integration)", (
     expect(second.id).toBe(first.id); // same row
     expect(second.gitBranch).toBe("m5-project-mapping"); // updated in place
 
-    const all = await listWorkspaces(dbh.db, userId);
+    const all = await listWorkspaces(dbh.db, orgId);
     expect(all).toHaveLength(1);
   });
 
@@ -76,7 +76,7 @@ describe.skipIf(!TEST_URL)("workspaces + projects repositories (integration)", (
       gitRemote: REMOTE,
     });
     const { id: projectId } = await findOrCreateProjectByRemote(dbh.db, userId, REMOTE, "420AI");
-    await remapWorkspace(dbh.db, userId, ws.id, projectId);
+    await remapWorkspace(dbh.db, orgId, ws.id, projectId);
 
     await addWorkspaceKey(dbh.db, {
       userId,
@@ -95,10 +95,10 @@ describe.skipIf(!TEST_URL)("workspaces + projects repositories (integration)", (
       .rows as { n: number }[];
     expect(n).toBe(1);
 
-    const resolved = await resolveWorkspaceId(dbh.db, userId, "/repo");
+    const resolved = await resolveWorkspaceId(dbh.db, orgId, userId, "/repo");
     expect(resolved).toEqual({ workspaceId: ws.id, projectId });
 
-    const miss = await resolveWorkspaceId(dbh.db, userId, "/unknown");
+    const miss = await resolveWorkspaceId(dbh.db, orgId, userId, "/unknown");
     expect(miss).toBeUndefined();
   });
 
@@ -115,7 +115,7 @@ describe.skipIf(!TEST_URL)("workspaces + projects repositories (integration)", (
     expect(b.created).toBe(false);
     expect(b.id).toBe(a.id);
 
-    const projs = await listProjects(dbh.db, userId);
+    const projs = await listProjects(dbh.db, orgId);
     expect(projs).toHaveLength(1);
     // name preserved from the first create (rename not clobbered)
     expect(projs[0]!.name).toBe("420AI");
@@ -123,13 +123,13 @@ describe.skipIf(!TEST_URL)("workspaces + projects repositories (integration)", (
 
   it("remapWorkspace repoints project_id", async () => {
     const ws = await upsertWorkspace(dbh.db, { userId, machineId, rootPath: "/r2" });
-    const p1 = await createProject(dbh.db, userId, "proj-one");
-    const p2 = await createProject(dbh.db, userId, "proj-two");
-    await remapWorkspace(dbh.db, userId, ws.id, p1.id);
-    const after1 = await listWorkspaces(dbh.db, userId);
+    const p1 = await createProject(dbh.db, orgId, userId, "proj-one");
+    const p2 = await createProject(dbh.db, orgId, userId, "proj-two");
+    await remapWorkspace(dbh.db, orgId, ws.id, p1.id);
+    const after1 = await listWorkspaces(dbh.db, orgId);
     expect(after1[0]!.projectId).toBe(p1.id);
-    await remapWorkspace(dbh.db, userId, ws.id, p2.id);
-    const after2 = await listWorkspaces(dbh.db, userId);
+    await remapWorkspace(dbh.db, orgId, ws.id, p2.id);
+    const after2 = await listWorkspaces(dbh.db, orgId);
     expect(after2[0]!.projectId).toBe(p2.id);
   });
 
@@ -143,7 +143,7 @@ describe.skipIf(!TEST_URL)("workspaces + projects repositories (integration)", (
       gitRemote: REMOTE,
     });
     const { id: projectId } = await findOrCreateProjectByRemote(dbh.db, userId, REMOTE, "420AI");
-    await remapWorkspace(dbh.db, userId, ws.id, projectId);
+    await remapWorkspace(dbh.db, orgId, ws.id, projectId);
     // Gemini's project_key is the HASH (== events.project_path), NOT the real path.
     await addWorkspaceKey(dbh.db, {
       userId,
@@ -180,7 +180,7 @@ describe.skipIf(!TEST_URL)("workspaces + projects repositories (integration)", (
       },
     ]);
 
-    const resolved = await resolveWorkspaceId(dbh.db, userId, hash);
+    const resolved = await resolveWorkspaceId(dbh.db, orgId, userId, hash);
     expect(resolved).toEqual({ workspaceId: ws.id, projectId });
 
     const summary = await projectEventSummary(dbh.db, orgId, projectId);
@@ -189,15 +189,15 @@ describe.skipIf(!TEST_URL)("workspaces + projects repositories (integration)", (
   });
 
   it("a remote-less workspace's project is NOT unified with another folder", async () => {
-    const p1 = await createProject(dbh.db, userId, "folder-a");
-    const p2 = await createProject(dbh.db, userId, "folder-b");
+    const p1 = await createProject(dbh.db, orgId, userId, "folder-a");
+    const p2 = await createProject(dbh.db, orgId, userId, "folder-b");
     expect(p1.id).not.toBe(p2.id);
-    const projs = await listProjects(dbh.db, userId);
+    const projs = await listProjects(dbh.db, orgId);
     expect(projs).toHaveLength(2);
   });
 
   it("an event with an unknown project_path is not counted (stays unattributed)", async () => {
-    const { id: projectId } = await createProject(dbh.db, userId, "lonely");
+    const { id: projectId } = await createProject(dbh.db, orgId, userId, "lonely");
     await dbh.db.insert(events).values({
       fingerprint: "x1",
       orgId,
