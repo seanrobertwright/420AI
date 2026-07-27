@@ -456,14 +456,12 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.4 RBAC (two-role, two-user)", () 
       // `deliverPendingFirings` reads persisted ROWS, so a derived-but-unreconciled alert is one
       // whose webhook has not been sent. A blanket throttle would delay every new alert by up to
       // `reconcileThrottleMs` on the path whose entire job is to say something broke.
-      await owner.db
-        .insert(pricingCatalogs)
-        .values({
-          version: "throttle-new-alert",
-          payload: {},
-          signature: "sig",
-          status: "pending",
-        });
+      await owner.db.insert(pricingCatalogs).values({
+        version: "throttle-new-alert",
+        payload: {},
+        signature: "sig",
+        status: "pending",
+      });
 
       const third = await get();
       expect(third.statusCode).toBe(200);
