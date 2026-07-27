@@ -14,7 +14,10 @@ import {
   CONNECTOR_RATE_ALERT,
   MONITOR_VERSION,
   SERVICE_ROLE,
+  alertKey,
+  type AlertFiring,
   type LiveMonitorSnapshot,
+  type OperationalAlert,
 } from "@420ai/shared";
 import {
   machineStatuses,
@@ -122,11 +125,38 @@ async function buildSnapshot(
     ...deriveConnectorFailureRateAlerts(windowedConnectors),
   ]);
   // The WRITE (D1): reconcile firing state against the derived alerts (route owns `now`).
-  // M15 15.4: throttled — on a non-reconcile tick we serve the persisted list instead.
-  const alertFirings = reconcile
-    ? await reconcileAlertFirings(db, orgId, userId, alerts, now)
-    : await listAlertFirings(db, orgId, userId, now);
+  //
+  // M15 15.4 (audit B.4) — the throttle suppresses the STEADY-STATE write, not a state CHANGE.
+  // A blanket "skip the reconcile for 30 s" would have been wrong in a way that is easy to miss:
+  // `alerts` is re-derived every tick, but `alertFirings` comes from persisted rows, and
+  // `deliverPendingFirings` reads those ROWS. So a newly-derived alert would sit in `alerts` with
+  // no firing row — un-ackable, and its webhook/email delayed from ~3 s to up to 30 s — on the
+  // one path whose entire job is to tell someone that something broke. The frame would also be
+  // internally inconsistent: an alert present in `alerts` and absent from `alertFirings`.
+  //
+  // So a throttled tick READS first (a SELECT it was going to do anyway) and reconciles anyway
+  // when the derived set disagrees with what is persisted. The write is skipped only when there
+  // is genuinely nothing to write, which is the actual goal — and the common case by far.
+  let alertFirings = reconcile ? null : await listAlertFirings(db, orgId, userId, now);
+  if (alertFirings === null || openFiringsDiverge(alerts, alertFirings)) {
+    alertFirings = await reconcileAlertFirings(db, orgId, userId, alerts, now);
+  }
   return { ...built, alerts, alertFirings };
+}
+
+/**
+ * True when the set of OPEN firing keys differs from the set of derived alert keys — i.e. an
+ * alert has appeared or cleared since the last reconcile. Compared by `alertKey` (the same key
+ * the partial unique index uses), so this asks exactly the question the reconcile would answer.
+ * Recently-RESOLVED firings are ignored: they linger in the list as confirmation by design and
+ * are not evidence of a change.
+ */
+function openFiringsDiverge(alerts: OperationalAlert[], firings: AlertFiring[]): boolean {
+  const open = new Set(firings.filter((f) => f.status === "open").map((f) => f.alertKey));
+  const derived = new Set(alerts.map(alertKey));
+  if (open.size !== derived.size) return true;
+  for (const key of derived) if (!open.has(key)) return true;
+  return false;
 }
 
 /**

@@ -450,6 +450,36 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.4 RBAC (two-role, two-user)", () 
       // …but `last_seen_at` was NOT re-stamped, which is the observable proof the WRITE was
       // skipped. Under the pre-15.4 behaviour every tick re-stamped it.
       expect(secondFirings.map((f) => f.lastSeenAt)).toEqual(firstFirings.map((f) => f.lastSeenAt));
+
+      // 13b ── …and the throttle suppresses the STEADY STATE only. A NEW alert must still get a
+      // firing row on the very next tick, INSIDE the 60 s window. This is the half that matters:
+      // `deliverPendingFirings` reads persisted ROWS, so a derived-but-unreconciled alert is one
+      // whose webhook has not been sent. A blanket throttle would delay every new alert by up to
+      // `reconcileThrottleMs` on the path whose entire job is to say something broke.
+      await owner.db
+        .insert(pricingCatalogs)
+        .values({
+          version: "throttle-new-alert",
+          payload: {},
+          signature: "sig",
+          status: "pending",
+        });
+
+      const third = await get();
+      expect(third.statusCode).toBe(200);
+      const body = third.json() as {
+        alerts: { code: string }[];
+        alertFirings: { code: string; status: string }[];
+      };
+      // The alert is derived…
+      expect(body.alerts.some((a) => a.code === "catalog.update_requires_approval")).toBe(true);
+      // …AND persisted in the same frame, despite the 60 s window being wide open.
+      expect(
+        body.alertFirings.some(
+          (f) => f.code === "catalog.update_requires_approval" && f.status === "open",
+        ),
+        "a newly-derived alert must be reconciled even on a throttled tick",
+      ).toBe(true);
     } finally {
       await throttled.close();
     }

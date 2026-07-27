@@ -15,22 +15,14 @@
  * collapses every upstream failure to 502 ("ingest down"). That is harmless today only because
  * `GET /v1/monitor/stream` gates at `viewer`, so it can never return 403. If a later slice
  * raises that gate, the dashboard would show "ingest down" for a permission refusal.
+ *
+ * Exported as CONSTANTS rather than a `mutationErrorMessage(status)` helper: every call site
+ * already has its own 404 wording ("No longer pending.", "Project has no events to report on.")
+ * that a generic formatter would flatten, so a helper would either be bypassed or would make the
+ * messages worse. Only the 403 case is genuinely shared.
  */
 /** The 403 wording, shared so every refusal in the UI reads the same. */
 export const FORBIDDEN_MESSAGE = "You do not have permission to do this. Ask an admin for access.";
 
 /** The compact form, for the inline status labels that render beside a row. */
 export const FORBIDDEN_SHORT = "not permitted";
-
-export function mutationErrorMessage(status: number, action = "Action"): string {
-  if (status === 403) {
-    return FORBIDDEN_MESSAGE;
-  }
-  if (status === 401) {
-    return "Your session has expired. Sign in again.";
-  }
-  if (status === 404) {
-    return "No longer available.";
-  }
-  return `${action} failed (${status}).`;
-}
