@@ -237,8 +237,15 @@ describe.skipIf(!TEST_URL)("M15 tenancy invariants (integration)", () => {
     await ingestBatch(dbh.db, machineA, batch("A"));
     await ingestBatch(dbh.db, machineB, batch("B"));
 
-    const counts = await indexSessions(dbh.db, ["COLLIDING-SESSION"]);
-    expect(counts.sessions).toBe(2); // one per org, not one collapsed row
+    // M15 15.3: `orgId` is REQUIRED, so the shared session id is indexed once per org — which
+    // is how every real caller does it (the ingest hop knows its machine's org; the reindex
+    // loop iterates orgs). The 15.1 invariant under test is unchanged and is asserted on the
+    // STORED ROWS below: two documents, one per org, neither carrying the other's content —
+    // not one collapsed row owned by `min(org_id)` whose body concatenates both tenants.
+    const countsA = await indexSessions(dbh.db, ["COLLIDING-SESSION"], orgA);
+    const countsB = await indexSessions(dbh.db, ["COLLIDING-SESSION"], orgB);
+    expect(countsA.sessions).toBe(1);
+    expect(countsB.sessions).toBe(1);
 
     const docs = await dbh.db
       .select()

@@ -250,7 +250,10 @@ describe.skipIf(!TEST_URL)("M15 15.2 request principal + org-scoped reads (integ
     const SHARED = "COLLIDING-SESSION";
     await ingestBatch(dbh.db, machineA, batch("A", 1, SHARED, "C:\\dev\\app"));
     await ingestBatch(dbh.db, machineB, batch("B", 1, SHARED, "C:\\dev\\app"));
-    await indexSessions(dbh.db, [SHARED]);
+    // One pass per org (M15 15.3 made `orgId` required) — both orgs must be indexed for the
+    // "each caller sees only its own hits" assertion below to mean anything.
+    await indexSessions(dbh.db, [SHARED], orgA);
+    await indexSessions(dbh.db, [SHARED], orgB);
 
     const hitsA = await searchDocuments(dbh.db, { orgId: orgA, q: "claude-code" });
     const hitsB = await searchDocuments(dbh.db, { orgId: orgB, q: "claude-code" });

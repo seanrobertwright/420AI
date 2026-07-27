@@ -31,7 +31,7 @@ import {
  *     search snippets leave the archive, so this is the §18 gate for this surface.
  *     Each row stamps `REDACTION_VERSION` (§23).
  *
- *   - `indexSessions(db, sessionIds)` / `indexProjectDoc` / `indexReportDoc` —
+ *   - `indexSessions(db, sessionIds, orgId)` / `indexProjectDoc` / `indexReportDoc` —
  *     M13 13.4 INCREMENTAL maintenance: the same doc builds scoped to the entities
  *     a mutation just touched, upserting on the `(entity_type, entity_id)` unique
  *     index. Callers (ingest/project/report routes) invoke them best-effort AFTER
@@ -345,14 +345,16 @@ export async function indexSessions(
   db: DbClient,
   sessionIds: string[],
   /**
-   * M15 15.3 — optional explicit org scope. `session_id` is a connector-supplied, GLOBALLY
-   * scoped string, so a given id can belong to two tenants; the GROUP BY below already keeps
-   * their documents separate (15.1's fix), but an unscoped call still WRITES both orgs' docs.
-   * That is correct for the ingest path (one org's sessions, one org's docs) and wrong for the
-   * per-org reindex loop (D-15.3-5), where it would rebuild every org on every pass and inflate
-   * the summed counts N_orgs-fold for any owner-role caller. Callers that know their org pass it.
+   * M15 15.3 — REQUIRED, not optional, and the requiredness is the point (PR #63 review).
+   * `session_id` is a connector-supplied, GLOBALLY scoped string, so a given id can belong to
+   * two tenants; the GROUP BY below already keeps their documents separate (15.1's fix), but an
+   * UNSCOPED call still WRITES both orgs' docs — which under the per-org reindex loop (D-15.3-5)
+   * rebuilds every org on every pass and inflates the summed counts N_orgs-fold for any
+   * owner-role caller. That is precisely the bug this slice fixed in `repriceAll`/`reparseAll`.
+   * Leaving the parameter optional would have made the dangerous call the DEFAULT and left a
+   * doc-comment as the only guard; both callers already pass it, so the compiler guards it now.
    */
-  orgId?: string,
+  orgId: string,
 ): Promise<{ sessions: number; events: number }> {
   const ids = [...new Set(sessionIds)];
   let sessions = 0;
@@ -373,7 +375,7 @@ export async function indexSessions(
       .where(
         and(
           inArray(rawSourceRecords.sessionId, ids.slice(i, i + INDEX_SESSIONS_CHUNK)),
-          orgId ? eq(rawSourceRecords.orgId, orgId) : undefined,
+          eq(rawSourceRecords.orgId, orgId),
         ),
       )
       .groupBy(rawSourceRecords.orgId, rawSourceRecords.sessionId);

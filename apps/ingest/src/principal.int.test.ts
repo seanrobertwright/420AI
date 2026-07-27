@@ -264,7 +264,10 @@ describe.skipIf(!TEST_URL)("M15 15.2 request principal (HTTP e2e via inject)", (
   });
 
   it("GET /v1/search returns only the caller's org's hits", async () => {
-    await indexSessions(dbh.db, [SHARED_SESSION]);
+    // One pass per org (M15 15.3 made `orgId` required) — the point of the test is that BOTH
+    // orgs have a document for the same connector session id, and each caller sees only its own.
+    await indexSessions(dbh.db, [SHARED_SESSION], orgA);
+    await indexSessions(dbh.db, [SHARED_SESSION], orgB);
     const a = await app.inject({
       method: "GET",
       url: "/v1/search?q=claude-code",

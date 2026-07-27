@@ -26,10 +26,32 @@ export async function provisionAppRole(ownerUrl: string, password: string): Prom
 
   const pool = new Pool({ connectionString: ownerUrl });
   try {
-    await pool.query(
-      `DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${APP_ROLE_NAME}')
-         THEN CREATE ROLE "${APP_ROLE_NAME}" NOLOGIN; END IF; END $$;`,
-    );
+    // Server-side quoting here too (PR #63 review) — not because `APP_ROLE_NAME` is untrusted
+    // (it is a module constant), but because two statements three lines apart should not teach
+    // opposite lessons about building SQL.
+    //
+    // Note this is a THIRD instance of the same trap: `DO $$ … $$` is itself a utility
+    // statement, so wrapping the guard in a DO block and binding `$1` into it does NOT work
+    // either — DO takes no parameters. The check therefore runs as an ordinary parameterized
+    // SELECT, and only the CREATE is built by `format(… %I …)`.
+    const { rowCount } = await pool.query("SELECT 1 FROM pg_roles WHERE rolname = $1", [
+      APP_ROLE_NAME,
+    ]);
+    if (rowCount === 0) {
+      const [create] = (
+        await pool.query<{ stmt: string }>(
+          `SELECT format('CREATE ROLE %I NOLOGIN', $1::text) AS stmt`,
+          [APP_ROLE_NAME],
+        )
+      ).rows;
+      try {
+        await pool.query(create!.stmt);
+      } catch (e) {
+        // 42710 duplicate_object — a concurrent provisioner won the race between the SELECT
+        // above and this CREATE. That is the outcome we wanted, so it is not an error.
+        if ((e as { code?: string }).code !== "42710") throw e;
+      }
+    }
     // `ALTER ROLE ... PASSWORD $1` is REJECTED (`syntax error at or near "$1"`, SQLSTATE
     // 42601): like `SET`, ALTER ROLE is a utility statement and takes no bind parameters. This
     // is the SAME trap as 15.0 Finding 4, one statement over — and the naive fix is the same
