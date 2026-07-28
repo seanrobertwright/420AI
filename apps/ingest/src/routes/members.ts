@@ -113,31 +113,37 @@ export default async function memberRoutes(app: FastifyInstance): Promise<void> 
       // `findPrincipalByEmail` resolves the FIRST membership by (created_at, id), and every
       // existing user already owns a personal org that predates any invite. A second membership
       // would therefore be permanently shadowed. Multi-org membership + an org switcher is 15.10.
-      const existingMember = await withOrg(app.db, principal.orgId, principal.role, (tx) =>
-        findMemberByEmail(tx, principal.orgId, email),
-      );
-      if (existingMember) {
-        return reply.code(409).send({ error: "already a member" });
-      }
-      const existingUserId = await findUserIdByEmail(app.db, email);
-      if (existingUserId) {
-        return reply
-          .code(409)
-          .send({ error: "user already exists — multi-org membership lands in 15.10" });
-      }
-
+      //
+      // ALL THREE CHECKS AND THE INSERT SHARE ONE TRANSACTION. They were three round trips across
+      // two transactions until this was reviewed, which left two check-then-act windows: a
+      // concurrent accept could turn the target into a member between the member check and the
+      // insert, and two simultaneous invites could both pass the pending check and mint two live
+      // tokens for one colleague (`invites.email` is deliberately not unique, so nothing downstream
+      // catches that). One transaction closes both and costs one fewer round trip.
       const result = await withOrg(app.db, principal.orgId, principal.role, async (tx) => {
-        // An outstanding invite for the same address is reused rather than duplicated, so a
+        if (await findMemberByEmail(tx, principal.orgId, email)) return "already_member" as const;
+        // `users` carries no RLS, so this read is unaffected by the org context — it is in here for
+        // the ATOMICITY, not for scoping. It deliberately asks about the whole deployment: a user in
+        // ANOTHER org is exactly the case D-15.5-9 rejects.
+        if (await findUserIdByEmail(tx, email)) return "user_exists" as const;
+        // An outstanding invite for the same address is refused rather than duplicated, so a
         // double-click does not leave two live tokens for one colleague.
-        const pending = await findPendingInviteByEmail(tx, principal.orgId, email);
-        if (pending) return null;
+        if (await findPendingInviteByEmail(tx, principal.orgId, email)) return "pending" as const;
         return createInvite(tx, principal.orgId, {
           email,
           role: requestedRole,
           invitedByUserId: principal.userId,
         });
       });
-      if (!result) {
+      if (result === "already_member") {
+        return reply.code(409).send({ error: "already a member" });
+      }
+      if (result === "user_exists") {
+        return reply
+          .code(409)
+          .send({ error: "user already exists — multi-org membership lands in 15.10" });
+      }
+      if (result === "pending") {
         return reply.code(409).send({ error: "an invite for this address is already pending" });
       }
 
