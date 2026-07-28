@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import type { DbClient } from "../client.js";
 import { passwordResetTokens } from "../schema.js";
 import { generateToken, hashToken } from "../tokens.js";
@@ -31,12 +31,30 @@ export class PasswordResetError extends Error {
 
 const DEFAULT_TTL_MS = 60 * 60 * 1000; // 1 hour
 
-/** Mint a reset token for a user; the plaintext is returned exactly once (D-15.5-8). */
+/**
+ * Mint a reset token for a user; the plaintext is returned exactly once (D-15.5-8).
+ *
+ * ONE LIVE TOKEN PER USER, always: every outstanding unconsumed token is stamped consumed BEFORE the
+ * new one is inserted. OWASP's Forgot-Password guidance requires it, and the 15.5 review measured
+ * why it matters here specifically — without this, two reset requests left TWO rows usable for the
+ * full hour, which multiplies the number of stale links the 1-hour TTL is the only bound on. A user
+ * who requests twice, uses the second link, and later has the first scraped out of mail history
+ * stays compromisable until that first token expires.
+ *
+ * The stamp and the insert are two statements; callers pass the pool handle, so they are not atomic
+ * with each other. That is fine — the failure mode of a crash between them is ZERO live tokens (the
+ * user re-requests), never two.
+ */
 export async function createPasswordReset(
   db: DbClient,
   userId: string,
   ttlMs: number = DEFAULT_TTL_MS,
 ): Promise<{ token: string; expiresAt: Date }> {
+  await db
+    .update(passwordResetTokens)
+    .set({ consumedAt: new Date() })
+    .where(and(eq(passwordResetTokens.userId, userId), isNull(passwordResetTokens.consumedAt)));
+
   const token = generateToken();
   const expiresAt = new Date(Date.now() + ttlMs);
   await db.insert(passwordResetTokens).values({ userId, tokenHash: hashToken(token), expiresAt });

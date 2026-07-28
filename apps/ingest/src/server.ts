@@ -136,15 +136,22 @@ const alertDeliverer = createFanoutDeliverer([webhookDeliverer, smtpDeliverer]);
 // dedicated one is not given, so an existing deployment gets invites with zero new env. Note this
 // needs only URL + FROM — unlike the alert deliverer there is no fixed recipient; each message goes
 // to the invitee or the account holder.
-const smtpUrl = process.env.SMTP_URL ?? process.env.ALERT_SMTP_URL;
-const mailFrom = process.env.MAIL_FROM ?? process.env.ALERT_EMAIL_FROM;
+// `||`, NEVER `??`, at all three sites below — same rule as RATE_LIMIT_WINDOW above and
+// ANALYSIS_BASE_URL. `??` only falls through on null/undefined, and `.env.example` ships `SMTP_URL=`
+// and `MAIL_FROM=` EMPTY. So under `??` the exact operator this fallback exists for — one who
+// already sends alert email and pastes the new .env.example block — gets `"" ?? ALERT_SMTP_URL` ===
+// `""`, a null mailer, and invites that silently stop being emailed while looking like a deliberate
+// no-SMTP install. Found by the 15.5 review; do not "modernise" these back to `??`.
+const smtpUrl = process.env.SMTP_URL || process.env.ALERT_SMTP_URL;
+const mailFrom = process.env.MAIL_FROM || process.env.ALERT_EMAIL_FROM;
 const mailer = createMailer(
   smtpUrl && mailFrom
     ? {
         url: smtpUrl,
         from: mailFrom,
         // `next dev`'s default port — apps/dashboard's script is a bare `next dev` with no -p.
-        appBaseUrl: process.env.APP_BASE_URL ?? "http://localhost:3000",
+        // `||` so an EMPTY APP_BASE_URL falls back rather than making every emailed link a bare path.
+        appBaseUrl: process.env.APP_BASE_URL || "http://localhost:3000",
       }
     : null,
 );

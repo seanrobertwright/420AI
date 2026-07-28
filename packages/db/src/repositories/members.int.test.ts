@@ -165,6 +165,74 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.5 member management (two-role)", 
     expect((await findMemberByUserId(appRole.db, orgA, userSecondOwner))!.role).toBe("member");
   });
 
+  // 4b ── THE GUARD IS SERIALISED BY A ROW LOCK, not merely by sharing a transaction.
+  //
+  // This test exists because the 15.5 review found the file header CLAIMING that a shared
+  // transaction prevents two concurrent demotions from each seeing two owners. It does not: a
+  // transaction buys atomicity, and `SELECT count(*)` takes no locks, so under READ COMMITTED both
+  // could have succeeded and left the org with ZERO owners.
+  //
+  // It is deliberately written at the REPOSITORY layer with two hand-held transactions, because an
+  // HTTP-level version could not tell the fixed code from the broken code — two concurrent requests
+  // serialise on their own at that granularity and passed either way. A test that cannot fail proves
+  // nothing, so this one observes the lock DIRECTLY: while tx1 holds it, tx2 must be unable to
+  // proceed. Remove `.for("update")` from `countOwners` and this test fails (tx2 sails through and
+  // both demotions commit).
+  it("a second demotion BLOCKS on the owner-row lock and then correctly refuses", async () => {
+    // Org A has exactly two owners: userOwner and userSecondOwner.
+    let releaseTx1: (() => void) | undefined;
+    const tx1Gate = new Promise<void>((resolve) => {
+      releaseTx1 = resolve;
+    });
+
+    // tx1: demote one owner, then HOLD the transaction open (locks still held).
+    const tx1 = appRole.db.transaction(async (tx) => {
+      await setMemberRole(tx, orgA, userSecondOwner, "member");
+      await tx1Gate;
+    });
+
+    // Let tx1 reach its lock before tx2 starts.
+    await new Promise((r) => setTimeout(r, 200));
+
+    // tx2: try to demote the OTHER owner. It must not get past `countOwners`.
+    let tx2Settled = false;
+    const tx2 = appRole.db
+      .transaction((tx) => setMemberRole(tx, orgA, userOwner, "member"))
+      .then(
+        () => {
+          tx2Settled = true;
+          return "resolved" as const;
+        },
+        () => {
+          tx2Settled = true;
+          return "rejected" as const;
+        },
+      );
+
+    // THE DISCRIMINATING ASSERTION: still blocked after a generous wait. Without the row lock tx2
+    // would have completed here, having counted two owners.
+    //
+    // The wait is wrapped so that a FAILING assertion still releases tx1. Without the `finally` a
+    // failure leaves the transaction open, its connection checked out, and every later test in this
+    // file times out at 10 s against an exhausted pool — which is how this test first reported: one
+    // real failure wearing five fake ones.
+    try {
+      await new Promise((r) => setTimeout(r, 500));
+      expect(tx2Settled, "tx2 must be BLOCKED on tx1's owner-row lock").toBe(false);
+    } finally {
+      releaseTx1!();
+      await tx1.catch(() => {});
+    }
+    // Now tx2 wakes, re-evaluates the predicate (EvalPlanQual) and sees only ONE owner left.
+    expect(await tx2).toBe("rejected");
+
+    // …and the invariant holds: the org still has an owner.
+    const owners = await owner.db.execute<{ n: number }>(
+      sql`select count(*)::int as n from memberships where org_id = ${orgA} and role = 'owner'`,
+    );
+    expect(owners.rows[0]!.n).toBe(1);
+  });
+
   it("setMemberRole on a NON-member throws reason 'not_a_member' (never a silent no-op)", async () => {
     await expect(
       appRole.db.transaction((tx) => setMemberRole(tx, orgA, userStranger, "member")),

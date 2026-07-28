@@ -412,6 +412,88 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.5 identity core (two-role, multi-
     expect(await owner.db.select().from(invites)).toHaveLength(1);
   });
 
+  // 4c ── THE OUTRANK GUARD. Added by the 15.5 code review, which found that D-15.5-11 as written
+  //       only covered GRANTING a rung and said nothing about acting ON a member above you. Before
+  //       the fix an admin could PATCH an owner to viewer (200) and DELETE an owner outright (204) —
+  //       a privilege inversion, since the whole point of an ordered ladder is that a lower rung
+  //       cannot reach up. The last-owner guard bounded it to "never zero owners", which is not the
+  //       same promise at all.
+  it("an admin may NOT demote an owner, and may NOT remove one", async () => {
+    // Give org A a second owner so the last-owner guard cannot be what produces the refusal — this
+    // must fail on the RANK, not on the count.
+    const asOwner = await login("owner@example.com");
+    const promoted = await app.inject({
+      method: "PATCH",
+      url: `/v1/members/${userViewer}`,
+      headers: json(asOwner),
+      payload: { role: "owner" },
+    });
+    expect(promoted.statusCode, promoted.body).toBe(200);
+
+    const admin = await login("admin@example.com");
+    const demote = await app.inject({
+      method: "PATCH",
+      url: `/v1/members/${userViewer}`,
+      headers: json(admin),
+      payload: { role: "member" },
+    });
+    expect(demote.statusCode).toBe(403);
+    expect(demote.json()).toEqual({ error: "cannot modify a member who outranks you" });
+
+    const remove = await app.inject({
+      method: "DELETE",
+      url: `/v1/members/${userViewer}`,
+      headers: asUser(admin),
+    });
+    expect(remove.statusCode).toBe(403);
+
+    // The victim is untouched: still an owner, still a member.
+    const [row] = await owner.db
+      .select({ role: memberships.role })
+      .from(memberships)
+      .where(eq(memberships.userId, userViewer));
+    expect(row!.role).toBe("owner");
+  });
+
+  it("an owner MAY act on another owner (equal rank clears the guard)", async () => {
+    // The other half: a guard that refused equal rank would make a co-owner unremovable, so this is
+    // what stops the fix above from being over-restrictive.
+    const asOwner = await login("owner@example.com");
+    const promoted = await app.inject({
+      method: "PATCH",
+      url: `/v1/members/${userAdmin}`,
+      headers: json(asOwner),
+      payload: { role: "owner" },
+    });
+    expect(promoted.statusCode).toBe(200);
+
+    const demoted = await app.inject({
+      method: "PATCH",
+      url: `/v1/members/${userAdmin}`,
+      headers: json(asOwner),
+      payload: { role: "member" },
+    });
+    expect(demoted.statusCode, demoted.body).toBe(200);
+    expect((demoted.json() as { member: { role: string } }).member.role).toBe("member");
+  });
+
+  it("an admin may still act on a member and a viewer (the guard is a ceiling, not a wall)", async () => {
+    const admin = await login("admin@example.com");
+    const ok = await app.inject({
+      method: "PATCH",
+      url: `/v1/members/${userViewer}`,
+      headers: json(admin),
+      payload: { role: "member" },
+    });
+    expect(ok.statusCode, ok.body).toBe(200);
+    const removed = await app.inject({
+      method: "DELETE",
+      url: `/v1/members/${userViewer}`,
+      headers: asUser(admin),
+    });
+    expect(removed.statusCode).toBe(204);
+  });
+
   // 6 ── BOTH LAYERS, as 15.4 did: the route gate AND the RLS backstop underneath it.
   it("a viewer cannot invite — 403 at the route AND an RLS rejection at the database", async () => {
     const viewer = await login("viewer@example.com");
@@ -456,11 +538,16 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.5 identity core (two-role, multi-
 
   // 7 ── THE LAST-OWNER GUARD (D-15.5-12) over HTTP.
   it("removing the org's SOLE owner is 409 and the membership survives", async () => {
-    const admin = await login("admin@example.com");
+    // THE ACTOR MUST BE THE OWNER. Since the review's outrank fix, an ADMIN targeting an owner is
+    // refused 403 by the rank check BEFORE the last-owner guard is ever consulted — so an admin actor
+    // here would assert the wrong thing while still looking red-then-green. The sole owner removing
+    // THEMSELVES is the only way to reach this guard through HTTP, and it is also the realistic case
+    // (someone tidying up their own account).
+    const asOwner = await login("owner@example.com");
     const res = await app.inject({
       method: "DELETE",
       url: `/v1/members/${userOwner}`,
-      headers: asUser(admin),
+      headers: asUser(asOwner),
     });
     expect(res.statusCode).toBe(409);
     expect((res.json() as { reason: string }).reason).toBe("last_owner");
@@ -473,12 +560,27 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.5 identity core (two-role, multi-
     expect(still[0]!.role).toBe("owner");
 
     // …and an ordinary member CAN be removed, proving the 409 was the guard and not a broken route.
+    const admin = await login("admin@example.com");
     const removed = await app.inject({
       method: "DELETE",
       url: `/v1/members/${userViewer}`,
       headers: asUser(admin),
     });
     expect(removed.statusCode).toBe(204);
+  });
+
+  it("an admin removing an owner is refused by RANK (403) before the last-owner guard (409)", async () => {
+    // The ORDER of the two refusals is itself worth pinning: a 409 here would mean the rank check had
+    // been bypassed and the org was saved only by the owner count — a much weaker promise, and one
+    // that evaporates the moment a second owner exists.
+    const admin = await login("admin@example.com");
+    const res = await app.inject({
+      method: "DELETE",
+      url: `/v1/members/${userOwner}`,
+      headers: asUser(admin),
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toEqual({ error: "cannot modify a member who outranks you" });
   });
 
   it("demoting the sole owner is 409 too (the guard covers both mutations)", async () => {
@@ -665,6 +767,96 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.5 identity core (two-role, multi-
     } finally {
       await noMail.close();
     }
+  });
+
+  it("a BROKEN mailer hands the token back instead of stranding the invite", async () => {
+    // Found by the 15.5 code review. The invite row commits BEFORE the send, and only its sha256 is
+    // stored — so an unhandled send failure used to 500 with the token gone forever, and every retry
+    // answered 409 "already pending". A transient SMTP blip turned the onboarding route into a dead
+    // end. It now degrades to the no-mailer branch, which D-15.5-10 already sanctions for this
+    // ADMIN-GATED route.
+    const broken = buildApp({
+      db: appRole.db,
+      adminToken: SERVICE_TOKEN,
+      adminEmail: ADMIN_EMAIL,
+      sessionSecret: SESSION_SECRET,
+      analysisProvider: stubProvider,
+      mailer: {
+        appBaseUrl: "http://test.local",
+        async send() {
+          throw new Error("smtp down");
+        },
+      },
+      logger: false,
+    });
+    await broken.ready();
+    try {
+      const admin = await login("admin@example.com");
+      const res = await broken.inject({
+        method: "POST",
+        url: "/v1/members/invite",
+        headers: json(admin),
+        payload: { email: "new@example.com", role: "member" },
+      });
+      expect(res.statusCode, res.body).toBe(200);
+      const body = res.json() as { mailed: boolean; mailError?: boolean; token?: string };
+      expect(body.mailed).toBe(false);
+      expect(body.mailError).toBe(true); // distinguishes "SMTP broke" from "no SMTP configured"
+      expect(body.token).toBeTruthy();
+
+      // …and the token handed back is USABLE, which is the whole point of not stranding it.
+      const accepted = await broken.inject({
+        method: "POST",
+        url: "/v1/auth/invites/accept",
+        headers: { "content-type": "application/json" },
+        payload: { token: body.token, password: NEW_PASSWORD },
+      });
+      expect(accepted.statusCode, accepted.body).toBe(200);
+    } finally {
+      await broken.close();
+    }
+  });
+
+  it("a second reset request INVALIDATES the first token (one live token per user)", async () => {
+    // OWASP's Forgot-Password rule, and the 15.5 review measured that two requests previously left
+    // TWO tokens usable for the full hour — multiplying the number of stale links the 1-hour TTL is
+    // the only bound on.
+    const request = () =>
+      app.inject({
+        method: "POST",
+        url: "/v1/auth/password-reset",
+        headers: { "content-type": "application/json" },
+        payload: { email: "viewer@example.com" },
+      });
+    await request();
+    const firstToken = resetToken(sent[0]!);
+    await request();
+    const secondToken = resetToken(sent[1]!);
+    expect(secondToken).not.toBe(firstToken);
+
+    const live = await owner.db.execute<{ n: number }>(
+      sql`select count(*)::int as n from password_reset_tokens where consumed_at is null`,
+    );
+    expect(live.rows[0]!.n, "exactly ONE live reset token per user").toBe(1);
+
+    // The superseded token is dead…
+    const stale = await app.inject({
+      method: "POST",
+      url: "/v1/auth/password-reset/confirm",
+      headers: { "content-type": "application/json" },
+      payload: { token: firstToken, password: NEW_PASSWORD },
+    });
+    expect(stale.statusCode).toBe(410);
+    expect((stale.json() as { reason: string }).reason).toBe("consumed");
+
+    // …and the newest one still works, so invalidation did not break the feature.
+    const fresh = await app.inject({
+      method: "POST",
+      url: "/v1/auth/password-reset/confirm",
+      headers: { "content-type": "application/json" },
+      payload: { token: secondToken, password: NEW_PASSWORD },
+    });
+    expect(fresh.statusCode, fresh.body).toBe(204);
   });
 
   // 11 ── D-M15-8 CLOSURE. The count is the real assertion; the status code alone would pass even

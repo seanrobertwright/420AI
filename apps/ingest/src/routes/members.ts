@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import {
   createInvite,
   findMemberByEmail,
+  findMemberByUserId,
   findPendingInviteByEmail,
   findUserIdByEmail,
   listInvites,
@@ -12,7 +13,7 @@ import {
   setMemberRole,
   withOrg,
 } from "@420ai/db";
-import { hasRole } from "@420ai/shared";
+import { hasRole, type Role } from "@420ai/shared";
 import { inviteMemberBodySchema, patchMemberRoleBodySchema } from "../schemas.js";
 import { resolvePrincipal, authorized, isUuid } from "../auth.js";
 
@@ -22,6 +23,30 @@ interface InviteBody {
 }
 interface RoleBody {
   role: string;
+}
+
+/**
+ * May a caller at `actorRole` act ON a member at `targetRole`? (D-15.5-11, EXTENDED — see below.)
+ *
+ * This is the SECOND half of the escalation question, and the plan only specified the first. D-15.5-11
+ * as written is about GRANTING — "you may never grant or assign a role above your own" — which the
+ * `hasRole(principal.role, requestedRole)` checks answer. It says nothing about acting on a member
+ * who sits ABOVE you, and the review found the gap that omission left: an `admin` could PATCH an
+ * `owner` down to `viewer` (200) and could `DELETE` an owner outright (204), because the requested
+ * rung was below the actor's own and the delete path compared no roles at all. The last-owner guard
+ * bounded that to "never zero owners" but not to "an admin cannot evict an owner", which is a
+ * privilege inversion — the entire purpose of an ordered ladder is that a lower rung cannot reach up.
+ *
+ * EQUAL RANK IS ALLOWED (`>=`, via `hasRole`): two owners must be able to administer each other, or
+ * a co-owner could never be removed and the last-owner guard would be the only thing standing
+ * between the org and an unremovable account.
+ *
+ * Fails CLOSED on a corrupt `targetRole`: `hasRole` looks the minimum up in its RANK table, and an
+ * unrecognised key yields `NaN >= undefined` → false → refuse. A hand-edited membership row therefore
+ * makes this route deny rather than permit, which is the right direction for an authorization check.
+ */
+function outranks(actorRole: string, targetRole: string): boolean {
+  return hasRole(actorRole, targetRole as Role);
 }
 
 /**
@@ -123,18 +148,36 @@ export default async function memberRoutes(app: FastifyInstance): Promise<void> 
       // instead — see routes/auth.ts.
       if (app.mailer) {
         const link = `${app.mailer.appBaseUrl}/invite/${result.token}`;
-        await app.mailer.send({
-          to: email,
-          subject: "You have been invited to 420AI",
-          text: [
-            `${principal.email} invited you to join their 420AI organization as ${requestedRole}.`,
-            "",
-            `Accept the invitation: ${link}`,
-            "",
-            `This invitation expires ${result.invite.expiresAt.toISOString()}.`,
-          ].join("\n"),
-        });
-        return reply.code(200).send({ invite: result.invite, mailed: true });
+        try {
+          await app.mailer.send({
+            to: email,
+            subject: "You have been invited to 420AI",
+            text: [
+              `${principal.email} invited you to join their 420AI organization as ${requestedRole}.`,
+              "",
+              `Accept the invitation: ${link}`,
+              "",
+              `This invitation expires ${result.invite.expiresAt.toISOString()}.`,
+            ].join("\n"),
+          });
+          return reply.code(200).send({ invite: result.invite, mailed: true });
+        } catch (err) {
+          // A SEND FAILURE MUST NOT STRAND THE INVITE. The row is already committed and only its
+          // sha256 is stored, so the token is unrecoverable by design — before the 15.5 review this
+          // path threw, the admin got a 500 having never seen the token, and every retry answered
+          // 409 "already pending". A transient SMTP blip turned the one route whose whole job is
+          // onboarding into a dead end that looked like a server bug.
+          //
+          // So degrade to the no-mailer branch instead: hand the token back with `mailed: false`.
+          // That is already sanctioned by D-15.5-10 for this ADMIN-GATED route ("the admin may pass
+          // it on out-of-band"), and the reasoning applies just as well to "SMTP is broken" as to
+          // "SMTP is absent". The UNAUTHENTICATED reset route must NEVER adopt this — there,
+          // returning a token is a complete account-takeover primitive, which is why it 503s.
+          request.log.error(err, "invite mail delivery failed — returning the token to the admin");
+          return reply
+            .code(200)
+            .send({ invite: result.invite, mailed: false, mailError: true, token: result.token });
+        }
       }
       return reply.code(200).send({ invite: result.invite, mailed: false, token: result.token });
     },
@@ -201,11 +244,21 @@ export default async function memberRoutes(app: FastifyInstance): Promise<void> 
         return reply.code(403).send({ error: "cannot grant a role above your own" });
       }
       // The last-owner guard (D-15.5-12) lives in the repository and throws `MemberError`, which
-      // app.ts maps to 409 (`last_owner`) / 404 (`not_a_member`).
-      const member = await withOrg(app.db, principal.orgId, principal.role, (tx) =>
-        setMemberRole(tx, principal.orgId, request.params.userId, requestedRole),
-      );
-      return reply.code(200).send({ member });
+      // app.ts maps to 409 (`last_owner`) / 404 (`not_a_member`). The OUTRANK guard is here,
+      // because only the route knows who is asking — see `outranks` below.
+      const outcome = await withOrg(app.db, principal.orgId, principal.role, async (tx) => {
+        const target = await findMemberByUserId(tx, principal.orgId, request.params.userId);
+        if (!target) return "not_a_member" as const;
+        if (!outranks(principal.role, target.role)) return "outranked" as const;
+        return setMemberRole(tx, principal.orgId, request.params.userId, requestedRole);
+      });
+      if (outcome === "not_a_member") {
+        return reply.code(404).send({ error: "no such member in this organization" });
+      }
+      if (outcome === "outranked") {
+        return reply.code(403).send({ error: "cannot modify a member who outranks you" });
+      }
+      return reply.code(200).send({ member: outcome });
     },
   );
 
@@ -221,10 +274,18 @@ export default async function memberRoutes(app: FastifyInstance): Promise<void> 
     if (!isUuid(request.params.userId)) {
       return reply.code(400).send({ error: "invalid user id" });
     }
-    const removed = await withOrg(app.db, principal.orgId, principal.role, (tx) =>
-      removeMember(tx, principal.orgId, request.params.userId),
-    );
-    if (!removed) {
+    const outcome = await withOrg(app.db, principal.orgId, principal.role, async (tx) => {
+      const target = await findMemberByUserId(tx, principal.orgId, request.params.userId);
+      if (!target) return "not_a_member" as const;
+      // The DELETE path needs the outrank guard MORE than the PATCH path, not less: it had no role
+      // comparison of any kind, so an admin could EVICT an owner outright.
+      if (!outranks(principal.role, target.role)) return "outranked" as const;
+      return removeMember(tx, principal.orgId, request.params.userId);
+    });
+    if (outcome === "outranked") {
+      return reply.code(403).send({ error: "cannot modify a member who outranks you" });
+    }
+    if (outcome === "not_a_member" || outcome === false) {
       return reply.code(404).send({ error: "no such member in this organization" });
     }
     return reply.code(204).send();

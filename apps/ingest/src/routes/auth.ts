@@ -154,7 +154,14 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
    */
   app.post<{ Body: AcceptInviteBody }>(
     "/v1/auth/invites/accept",
-    { schema: { body: acceptInviteBodySchema } },
+    {
+      schema: { body: acceptInviteBodySchema },
+      // An unauthenticated WRITE that creates a user and runs scrypt. The token is 32 random bytes
+      // so guessing is not the threat; bounding the request rate is (the same reason signup carries
+      // it). Note the hash below is computed only AFTER `findInviteByToken` has validated the
+      // token, so an invalid token costs a cheap indexed read rather than a scrypt.
+      config: { rateLimit: app.rateLimitLogin },
+    },
     async (request, reply) => {
       // Validate + resolve the org BEFORE creating anything (throws InviteError → 410).
       const invite = await findInviteByToken(app.db, request.body.token);
@@ -283,13 +290,28 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
    */
   app.post<{ Body: ResetConfirmBody }>(
     "/v1/auth/password-reset/confirm",
-    { schema: { body: passwordResetConfirmBodySchema } },
+    {
+      schema: { body: passwordResetConfirmBodySchema },
+      // An unauthenticated WRITE, so it carries the same limit as login/signup/reset-request.
+      config: { rateLimit: app.rateLimitLogin },
+    },
     async (request, reply) => {
-      const passwordHash = hashPassword(request.body.password);
       await app.db.transaction(async (tx) => {
         // Throws PasswordResetError (unknown/consumed/expired) → 410 via app.ts.
         const { userId } = await consumePasswordReset(tx, request.body.token);
-        await updatePasswordHash(tx, userId, passwordHash);
+        // `hashPassword` is called HERE, AFTER the token is validated, and the ordering is a
+        // security property rather than a style choice. scrypt (N=16384, keylen 64) blocks the
+        // single-threaded event loop for ~100 ms; hashing BEFORE validation — which is what this
+        // route did until the 15.5 review — hands an unauthenticated caller a cheap
+        // CPU-exhaustion primitive, since a garbage token still costs a full scrypt before being
+        // rejected. Note the sibling paths already got this right by accident of ordering (login
+        // hashes only after a hash is found, accept-invite only after the invite validates), which
+        // is precisely why the wrong order read as correct here.
+        //
+        // The cost is holding the transaction open across the scrypt. That is acceptable: it locks
+        // one `password_reset_tokens` row on a rate-limited, low-volume path, and it buys the
+        // atomicity that makes a leaked token non-replayable.
+        await updatePasswordHash(tx, userId, hashPassword(request.body.password));
       });
       // 15.6 (D-M15-12): sessions become stateful; THIS is where invalidate-on-credential-change
       // lands. Today a session is a stateless HMAC (session.ts) and the ONLY revocation is rotating
