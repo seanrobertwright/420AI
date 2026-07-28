@@ -471,7 +471,7 @@ enforced`, the sibling of `skipped ≠ passed`. Closes the Spike-6 hole: a cross
         because evaluate-on-read makes a GET a WRITE (fixed with `SERVICE_ROLE`, the same call the
         plan already made for alert delivery), and seeding a second org member by INSERT is
         shadowed by the personal `owner` membership `setUserPassword` creates.
-  - [x] **15.5** Identity core — DONE `2026-07-28` (PR #NN). 15.4 gave an org a role ladder; it did
+  - [x] **15.5** Identity core — DONE `2026-07-28` (PR #65). 15.4 gave an org a role ladder; it did
         not give it a way to acquire a SECOND HUMAN. This ships the identity core — **member CRUD**,
         **invite-by-email** over 13.5's SMTP transport, **password reset**, **gated self-signup** —
         and closes the **account pre-seeding primitive** (D-M15-8 / audit C.9), which is why it
