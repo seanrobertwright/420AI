@@ -1,6 +1,6 @@
 import { and, eq, isNull } from "drizzle-orm";
 import type { DbClient } from "../client.js";
-import { passwordResetTokens } from "../schema.js";
+import { passwordResetTokens, users } from "../schema.js";
 import { generateToken, hashToken } from "../tokens.js";
 
 /**
@@ -41,24 +41,33 @@ const DEFAULT_TTL_MS = 60 * 60 * 1000; // 1 hour
  * who requests twice, uses the second link, and later has the first scraped out of mail history
  * stays compromisable until that first token expires.
  *
- * The stamp and the insert are two statements; callers pass the pool handle, so they are not atomic
- * with each other. That is fine — the failure mode of a crash between them is ZERO live tokens (the
- * user re-requests), never two.
+ * The stamp and the insert run inside ONE transaction with a `FOR UPDATE` lock on the user row.
+ * The lock is what serialises the concurrency, not the transaction — a shared transaction alone
+ * does NOT stop two concurrent requests from each seeing zero live tokens under READ COMMITTED,
+ * just as `SELECT count(*)` took no locks in `members.ts` (CLAUDE.md 15.5 lesson). With the lock:
+ * the second request blocks until the first commits, then re-runs the UPDATE and consumes the
+ * token just minted by the first, and only then inserts its own. One live token survives.
  */
 export async function createPasswordReset(
   db: DbClient,
   userId: string,
   ttlMs: number = DEFAULT_TTL_MS,
 ): Promise<{ token: string; expiresAt: Date }> {
-  await db
-    .update(passwordResetTokens)
-    .set({ consumedAt: new Date() })
-    .where(and(eq(passwordResetTokens.userId, userId), isNull(passwordResetTokens.consumedAt)));
+  return db.transaction(async (tx) => {
+    // Lock the user row to serialise concurrent reset requests for the same user.
+    // FOR UPDATE gives ISOLATION; the transaction gives ATOMICITY (CLAUDE.md 15.5).
+    await tx.select({ id: users.id }).from(users).where(eq(users.id, userId)).for("update");
 
-  const token = generateToken();
-  const expiresAt = new Date(Date.now() + ttlMs);
-  await db.insert(passwordResetTokens).values({ userId, tokenHash: hashToken(token), expiresAt });
-  return { token, expiresAt };
+    await tx
+      .update(passwordResetTokens)
+      .set({ consumedAt: new Date() })
+      .where(and(eq(passwordResetTokens.userId, userId), isNull(passwordResetTokens.consumedAt)));
+
+    const token = generateToken();
+    const expiresAt = new Date(Date.now() + ttlMs);
+    await tx.insert(passwordResetTokens).values({ userId, tokenHash: hashToken(token), expiresAt });
+    return { token, expiresAt };
+  });
 }
 
 /**
@@ -90,10 +99,14 @@ export async function consumePasswordReset(
     throw new PasswordResetError("reset token expired", "expired");
   }
 
-  await tx
+  const stamped = await tx
     .update(passwordResetTokens)
     .set({ consumedAt: new Date() })
-    .where(eq(passwordResetTokens.id, row.id));
+    .where(and(eq(passwordResetTokens.id, row.id), isNull(passwordResetTokens.consumedAt)))
+    .returning({ id: passwordResetTokens.id });
+  // If two concurrent requests both pass the SELECT above (both see consumed_at IS NULL),
+  // only the first UPDATE succeeds; the second gets 0 rows and must fail rather than proceed.
+  if (stamped.length === 0) throw new PasswordResetError("reset token already used", "consumed");
 
   return { userId: row.userId };
 }
