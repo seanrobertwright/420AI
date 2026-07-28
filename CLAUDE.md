@@ -225,6 +225,45 @@ Three further 15.4 findings, each measured rather than assumed:
   owner. **Move** the existing membership instead. A multi-user fixture that has never existed
   before is exactly where this class of seeding bug hides.
 
+**A shared transaction is ATOMICITY, not isolation** (M15 15.5). A read-then-write guard is still
+racy inside one transaction, because `SELECT count(*)` takes **no locks** — under READ COMMITTED two
+concurrent callers both see the pre-state and both proceed. 15.5's last-owner guard shipped with a
+header comment asserting that sharing a transaction prevented exactly the race it described; it did
+not, and the comment was the real defect, because the next reader trusts it instead of re-deriving
+it. Lock the rows the decision depends on (`SELECT … FOR UPDATE`, hence rows-then-`length` — Postgres
+cannot apply `FOR UPDATE` to an aggregate): a blocked transaction re-evaluates the predicate after
+the lock releases (EvalPlanQual), so a row the winner mutated drops out of the loser's result set and
+the guard correctly refuses. No SERIALIZABLE and no retry loop needed. **Name the mechanism in the
+comment** — a lock, a unique index, or an isolation level. "It's in a transaction" almost never is.
+
+Corollary about TESTING such a fix, which cost more than the fix: **a concurrency test at the wrong
+LAYER cannot fail.** The first regression test for the above drove two concurrent HTTP requests and
+passed identically with and without the lock, because requests serialise on their own at that
+granularity — a green test advertising a guarantee nobody had checked. Only a repository-level test
+with two hand-held transactions, asserting the second is _still unsettled_ after a wait,
+discriminates. And **any test that holds a transaction open must release it in a `finally`**: when
+that assertion first failed it skipped the release, the held transaction kept its pooled connection,
+and five later tests in the file timed out at 10 s — one real failure wearing five fake ones.
+
+**An authorization ladder needs a CEILING AND A FLOOR** (M15 15.5). Gating on the _requested_ rung
+answers "may I grant this?" and leaves "may I act on this person?" unasked. 15.5 shipped
+`hasRole(principal.role, requestedRole)` on the member routes — faithful to its own decision, which
+was worded purely about granting — and an `admin` could therefore demote an `owner` to `viewer`
+(**200**) and `DELETE` an owner outright (**204**), because the requested rung was below the actor's
+own and the delete path compared no roles at all. The last-owner guard bounded the damage to "never
+zero owners", which is a **different and much weaker promise** that evaporates once a second owner
+exists. So any route mutating another principal's standing needs BOTH checks, and the DELETE variant
+needs the second one most precisely because it has no "requested role" to accidentally constrain it.
+Allow EQUAL rank (`hasRole` is `>=`), or a co-owner becomes unremovable.
+
+**`.env.example` ships keys with EMPTY values, so a documented env fallback MUST use `||`, never
+`??`** (M15 15.5). `??` only falls through on null/undefined, so `SMTP_URL=` (empty, as shipped)
+makes `process.env.SMTP_URL ?? process.env.ALERT_SMTP_URL` evaluate to `""` — and the fallback
+silently fails for exactly the upgrading operator it was written for, who pastes the new block and
+gets a disabled mailer that looks like a deliberate opt-out. `server.ts` already carried this rule
+for `RATE_LIMIT_WINDOW`/`ANALYSIS_BASE_URL`; copy env idioms from the file you are editing rather
+than from memory.
+
 ## Tooling gotchas (Windows)
 
 - The **Bash tool is Git Bash (POSIX sh)**. For multi-line commit messages / PR bodies use a
