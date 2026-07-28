@@ -95,14 +95,21 @@ export function isVersionConflict(e: unknown): boolean {
  * retry inside `withOrg` and attempt 2 dies on `current transaction is aborted`; wrap the route
  * instead and this receives a `Tx` where it needs a `Db` (a compile error — and forcing past it
  * reintroduces the same abort). The `Db` parameter is load-bearing. Do not "fix" it.
+ *
+ * M15 15.4 — `role` is threaded from the caller (ultimately `principal.role` at the generating
+ * route, which gates at `member`). It is NOT hardcoded and NOT `SERVICE_ROLE`: report generation
+ * is a user action on the user's behalf, so the 0016 restrictive INSERT policy is a genuine
+ * backstop here. It sits before `a` rather than inside it because `a` is spread into
+ * `.values()` — a `role` field there would try to insert a column that does not exist.
  */
 export async function insertReportArtifact(
   db: Db,
+  role: string,
   a: Omit<ReportArtifactRow, "id" | "version" | "generatedAt"> & { orgId: string },
 ): Promise<ReportArtifactRow> {
   for (let attempt = 1; attempt <= MAX_VERSION_ATTEMPTS; attempt++) {
     try {
-      return await withOrg(db, a.orgId, async (tx) => {
+      return await withOrg(db, a.orgId, role, async (tx) => {
         const [prev] = await tx
           .select({ v: sql<number>`coalesce(max(${reportArtifacts.version}), 0)::int` })
           .from(reportArtifacts)

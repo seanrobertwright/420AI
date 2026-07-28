@@ -12,7 +12,7 @@ import {
   patchProjectBodySchema,
   listProjectsQuerySchema,
 } from "../schemas.js";
-import { resolvePrincipal, isUuid } from "../auth.js";
+import { resolvePrincipal, isUuid, authorized } from "../auth.js";
 
 interface CreateProjectBody {
   name: string;
@@ -47,9 +47,11 @@ export default async function projectRoutes(app: FastifyInstance): Promise<void>
       if (!principal) {
         return reply.code(401).send({ error: "admin authorization required" });
       }
-      const userId = principal.userId;
-      const projects = await withOrg(app.db, principal.orgId, (tx) =>
-        listProjects(tx, userId, {
+      if (!authorized(principal, "viewer")) {
+        return reply.code(403).send({ error: "insufficient role" });
+      }
+      const projects = await withOrg(app.db, principal.orgId, principal.role, (tx) =>
+        listProjects(tx, principal.orgId, {
           limit: request.query.limit,
           offset: request.query.offset,
         }),
@@ -66,12 +68,15 @@ export default async function projectRoutes(app: FastifyInstance): Promise<void>
       if (!principal) {
         return reply.code(401).send({ error: "admin authorization required" });
       }
+      if (!authorized(principal, "member")) {
+        return reply.code(403).send({ error: "insufficient role" });
+      }
       const userId = principal.userId;
-      const { id } = await withOrg(app.db, principal.orgId, (tx) =>
-        createProject(tx, userId, request.body.name, request.body.gitRemote),
+      const { id } = await withOrg(app.db, principal.orgId, principal.role, (tx) =>
+        createProject(tx, principal.orgId, userId, request.body.name, request.body.gitRemote),
       );
       try {
-        await withOrg(app.db, principal.orgId, (tx) => indexProjectDoc(tx, id));
+        await withOrg(app.db, principal.orgId, principal.role, (tx) => indexProjectDoc(tx, id));
       } catch (err) {
         request.log.warn({ err }, "project search indexing failed");
       }
@@ -87,15 +92,18 @@ export default async function projectRoutes(app: FastifyInstance): Promise<void>
       if (!principal) {
         return reply.code(401).send({ error: "admin authorization required" });
       }
+      if (!authorized(principal, "member")) {
+        return reply.code(403).send({ error: "insufficient role" });
+      }
       if (!isUuid(request.params.id)) {
         return reply.code(404).send({ error: "project not found" });
       }
-      const row = await withOrg(app.db, principal.orgId, (tx) =>
+      const row = await withOrg(app.db, principal.orgId, principal.role, (tx) =>
         renameProject(tx, principal.orgId, request.params.id, request.body.name),
       );
       if (!row) return reply.code(404).send({ error: "project not found" });
       try {
-        await withOrg(app.db, principal.orgId, (tx) => indexProjectDoc(tx, row.id));
+        await withOrg(app.db, principal.orgId, principal.role, (tx) => indexProjectDoc(tx, row.id));
       } catch (err) {
         request.log.warn({ err }, "project search indexing failed");
       }
@@ -108,10 +116,13 @@ export default async function projectRoutes(app: FastifyInstance): Promise<void>
     if (!principal) {
       return reply.code(401).send({ error: "admin authorization required" });
     }
+    if (!authorized(principal, "viewer")) {
+      return reply.code(403).send({ error: "insufficient role" });
+    }
     if (!isUuid(request.params.id)) {
       return reply.code(404).send({ error: "project not found" });
     }
-    const summary = await withOrg(app.db, principal.orgId, (tx) =>
+    const summary = await withOrg(app.db, principal.orgId, principal.role, (tx) =>
       projectEventSummary(tx, principal.orgId, request.params.id),
     );
     return reply.code(200).send(summary);

@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { IngestBatch } from "@420ai/shared";
+import { SERVICE_ROLE } from "@420ai/shared";
 import { ingestBatch, getActiveCatalog, indexSessions, getMachineOrgId, withOrg } from "@420ai/db";
 import { ingestBodySchema } from "../schemas.js";
 
@@ -35,13 +36,13 @@ export default async function ingestRoutes(app: FastifyInstance): Promise<void> 
         return reply.code(401).send({ error: "machine has no organization" });
       }
       const active = await getActiveCatalog(app.db);
-      const result = await withOrg(app.db, orgId, (tx) =>
+      const result = await withOrg(app.db, orgId, SERVICE_ROLE, (tx) =>
         ingestBatch(tx, request.machineId, request.body, active),
       );
       const touched = [...new Set(request.body.records.map((r) => r.sessionId))];
       if (touched.length > 0) {
         try {
-          await withOrg(app.db, orgId, (tx) => indexSessions(tx, touched, orgId));
+          await withOrg(app.db, orgId, SERVICE_ROLE, (tx) => indexSessions(tx, touched, orgId));
         } catch (err) {
           request.log.warn({ err }, "incremental search indexing failed");
         }

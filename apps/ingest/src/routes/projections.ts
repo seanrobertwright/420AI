@@ -10,7 +10,7 @@ import {
   projectGitMetadata,
 } from "@420ai/db";
 import { usageOverTimeQuerySchema } from "../schemas.js";
-import { resolvePrincipal, isUuid } from "../auth.js";
+import { resolvePrincipal, isUuid, authorized } from "../auth.js";
 
 /**
  * M6 deterministic-projection read endpoints (PRD §16.1, D6). All admin-gated
@@ -37,10 +37,13 @@ export default async function projectionRoutes(app: FastifyInstance): Promise<vo
     if (!principal) {
       return reply.code(401).send({ error: "admin authorization required" });
     }
+    if (!authorized(principal, "viewer")) {
+      return reply.code(403).send({ error: "insufficient role" });
+    }
     if (!isUuid(request.params.id)) {
       return reply.code(404).send({ error: "project not found" });
     }
-    const result = await withOrg(app.db, principal.orgId, (tx) =>
+    const result = await withOrg(app.db, principal.orgId, principal.role, (tx) =>
       sessionProjections(tx, principal.orgId, request.params.id),
     );
     return reply.code(200).send(result);
@@ -51,10 +54,13 @@ export default async function projectionRoutes(app: FastifyInstance): Promise<vo
     if (!principal) {
       return reply.code(401).send({ error: "admin authorization required" });
     }
+    if (!authorized(principal, "viewer")) {
+      return reply.code(403).send({ error: "insufficient role" });
+    }
     if (!isUuid(request.params.id)) {
       return reply.code(404).send({ error: "project not found" });
     }
-    const result = await withOrg(app.db, principal.orgId, (tx) =>
+    const result = await withOrg(app.db, principal.orgId, principal.role, (tx) =>
       usageTotals(tx, principal.orgId, request.params.id),
     );
     return reply.code(200).send(result);
@@ -65,10 +71,13 @@ export default async function projectionRoutes(app: FastifyInstance): Promise<vo
     if (!principal) {
       return reply.code(401).send({ error: "admin authorization required" });
     }
+    if (!authorized(principal, "viewer")) {
+      return reply.code(403).send({ error: "insufficient role" });
+    }
     if (!isUuid(request.params.id)) {
       return reply.code(404).send({ error: "project not found" });
     }
-    const result = await withOrg(app.db, principal.orgId, (tx) =>
+    const result = await withOrg(app.db, principal.orgId, principal.role, (tx) =>
       usageByModel(tx, principal.orgId, request.params.id),
     );
     return reply.code(200).send(result);
@@ -82,11 +91,14 @@ export default async function projectionRoutes(app: FastifyInstance): Promise<vo
       if (!principal) {
         return reply.code(401).send({ error: "admin authorization required" });
       }
+      if (!authorized(principal, "viewer")) {
+        return reply.code(403).send({ error: "insufficient role" });
+      }
       if (!isUuid(request.params.id)) {
         return reply.code(404).send({ error: "project not found" });
       }
       const bucket = request.query.bucket ?? "day";
-      const result = await withOrg(app.db, principal.orgId, (tx) =>
+      const result = await withOrg(app.db, principal.orgId, principal.role, (tx) =>
         usageOverTime(tx, principal.orgId, request.params.id, bucket),
       );
       return reply.code(200).send(result);
@@ -98,10 +110,13 @@ export default async function projectionRoutes(app: FastifyInstance): Promise<vo
     if (!principal) {
       return reply.code(401).send({ error: "admin authorization required" });
     }
+    if (!authorized(principal, "viewer")) {
+      return reply.code(403).send({ error: "insufficient role" });
+    }
     if (!isUuid(request.params.id)) {
       return reply.code(404).send({ error: "project not found" });
     }
-    const result = await withOrg(app.db, principal.orgId, (tx) =>
+    const result = await withOrg(app.db, principal.orgId, principal.role, (tx) =>
       projectGitMetadata(tx, principal.orgId, request.params.id),
     );
     return reply.code(200).send(result);
@@ -112,8 +127,11 @@ export default async function projectionRoutes(app: FastifyInstance): Promise<vo
     if (!principal) {
       return reply.code(401).send({ error: "admin authorization required" });
     }
+    if (!authorized(principal, "viewer")) {
+      return reply.code(403).send({ error: "insufficient role" });
+    }
     // sessionId is a connector text id (NOT a uuid) — unknown → zeroed projection.
-    const result = await withOrg(app.db, principal.orgId, (tx) =>
+    const result = await withOrg(app.db, principal.orgId, principal.role, (tx) =>
       sessionDetail(tx, principal.orgId, request.params.sessionId),
     );
     return reply.code(200).send(result);
@@ -124,8 +142,12 @@ export default async function projectionRoutes(app: FastifyInstance): Promise<vo
     if (!principal) {
       return reply.code(401).send({ error: "admin authorization required" });
     }
-    const userId = principal.userId;
-    const result = await withOrg(app.db, principal.orgId, (tx) => connectorHealth(tx, userId));
+    if (!authorized(principal, "viewer")) {
+      return reply.code(403).send({ error: "insufficient role" });
+    }
+    const result = await withOrg(app.db, principal.orgId, principal.role, (tx) =>
+      connectorHealth(tx, principal.orgId),
+    );
     return reply.code(200).send(result);
   });
 }

@@ -19,6 +19,16 @@ import type { Connector } from "./connector.js";
  * withheld from capture until the user approves (`connectors.approve`). A "Capture
  * Surface Change" (docs/CONTEXT.md) is exactly such a drift.
  *
+ * D-15.4-5 — CONNECTOR APPROVAL IS **NOT** AN ORG-RBAC CONCERN, and this is the decision
+ * rather than an oversight. M15 15.4 made `memberships.role` load-bearing across all 45 HTTP
+ * gates and audit item B.7 asked whether connector approval should join them. It should not:
+ * approval is entirely collector-LOCAL (driven by `connectors.approve` over the M11 desktop
+ * control protocol — **there is no HTTP approval endpoint**), and it is a machine-local trust
+ * decision made by whoever physically runs that machine — the same person who could edit
+ * `~/.420ai/connector-config.json` directly, or point the collector at a different home with
+ * `--home`. Gating it on an org role would be security theatre: it would refuse a person who
+ * already holds the filesystem. Recorded in `docs/guide/operations.md` too.
+ *
  * Library file: it mirrors `connector-config.ts` — tolerant reads (absent/corrupt ⇒ a
  * safe default, never a throw), a `path` testability seam, and a `mode:0o600` write. It
  * never logs or exits, and every function is pure + `home`-injectable.

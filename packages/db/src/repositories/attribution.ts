@@ -206,7 +206,7 @@ export async function computeSessionGitSuggestions(
   const projectPath = await sessionProjectPath(db, orgId, sessionId);
   if (!end || !projectPath) return listSessionLinks(db, orgId, userId, sessionId);
 
-  const resolved = await resolveWorkspaceId(db, userId, projectPath);
+  const resolved = await resolveWorkspaceId(db, orgId, userId, projectPath);
   const projectId = resolved?.projectId ?? null;
 
   const endMs = new Date(end).getTime();

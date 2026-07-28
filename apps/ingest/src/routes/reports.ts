@@ -22,7 +22,7 @@ import {
   generateSessionReportBodySchema,
   listReportsQuerySchema,
 } from "../schemas.js";
-import { resolvePrincipal, isUuid } from "../auth.js";
+import { resolvePrincipal, isUuid, authorized } from "../auth.js";
 
 type ProjectReportType =
   | "project.cost_over_time"
@@ -64,6 +64,9 @@ export default async function reportRoutes(app: FastifyInstance): Promise<void> 
       if (!principal) {
         return reply.code(401).send({ error: "admin authorization required" });
       }
+      if (!authorized(principal, "member")) {
+        return reply.code(403).send({ error: "insufficient role" });
+      }
       if (!isUuid(request.params.id)) {
         return reply.code(404).send({ error: "project not found" });
       }
@@ -72,7 +75,7 @@ export default async function reportRoutes(app: FastifyInstance): Promise<void> 
       // missing project would raise an FK-violation 500 instead of a clean 404.
       // getProjectName returns undefined only when the project does not exist (an
       // existing-but-empty project still returns its name → D7 all-zero report).
-      const exists = await withOrg(app.db, principal.orgId, (tx) =>
+      const exists = await withOrg(app.db, principal.orgId, principal.role, (tx) =>
         getProjectName(tx, principal.orgId, request.params.id),
       );
       if (!exists) {
@@ -88,6 +91,7 @@ export default async function reportRoutes(app: FastifyInstance): Promise<void> 
             return generateProjectCostReport(
               app.db,
               principal.orgId,
+              principal.role,
               userId,
               request.params.id,
               bucket,
@@ -97,6 +101,7 @@ export default async function reportRoutes(app: FastifyInstance): Promise<void> 
             return generateToolModelComparisonReport(
               app.db,
               principal.orgId,
+              principal.role,
               userId,
               request.params.id,
               generatedAt,
@@ -105,6 +110,7 @@ export default async function reportRoutes(app: FastifyInstance): Promise<void> 
             return generateFailedToolCallsReport(
               app.db,
               principal.orgId,
+              principal.role,
               userId,
               request.params.id,
               bucket,
@@ -114,6 +120,7 @@ export default async function reportRoutes(app: FastifyInstance): Promise<void> 
             return generateContextWasteReport(
               app.db,
               principal.orgId,
+              principal.role,
               userId,
               request.params.id,
               generatedAt,
@@ -122,6 +129,7 @@ export default async function reportRoutes(app: FastifyInstance): Promise<void> 
             return generateProjectEfficiencyReport(
               app.db,
               principal.orgId,
+              principal.role,
               userId,
               request.params.id,
               generatedAt,
@@ -130,6 +138,7 @@ export default async function reportRoutes(app: FastifyInstance): Promise<void> 
             return generateTrendAnomaliesReport(
               app.db,
               principal.orgId,
+              principal.role,
               userId,
               request.params.id,
               bucket,
@@ -140,7 +149,7 @@ export default async function reportRoutes(app: FastifyInstance): Promise<void> 
       // 13.4: refresh the artifact's search doc best-effort (awaited-with-swallow,
       // the deliverFirings pattern — never fails the response).
       try {
-        await withOrg(app.db, principal.orgId, (tx) => indexReportDoc(tx, row.id));
+        await withOrg(app.db, principal.orgId, principal.role, (tx) => indexReportDoc(tx, row.id));
       } catch (err) {
         request.log.warn({ err }, "report search indexing failed");
       }
@@ -156,12 +165,16 @@ export default async function reportRoutes(app: FastifyInstance): Promise<void> 
       if (!principal) {
         return reply.code(401).send({ error: "admin authorization required" });
       }
+      if (!authorized(principal, "member")) {
+        return reply.code(403).send({ error: "insufficient role" });
+      }
       // sessionId is a connector text id (NOT a uuid) — ungated; unknown → zeroed autopsy.
       const userId = principal.userId;
       const generatedAt = new Date().toISOString();
       const row = await generateSessionAutopsyReport(
         app.db,
         principal.orgId,
+        principal.role,
         userId,
         request.params.sessionId,
         generatedAt,
@@ -169,7 +182,7 @@ export default async function reportRoutes(app: FastifyInstance): Promise<void> 
       // 13.4: refresh the artifact's search doc best-effort (awaited-with-swallow,
       // the deliverFirings pattern — never fails the response).
       try {
-        await withOrg(app.db, principal.orgId, (tx) => indexReportDoc(tx, row.id));
+        await withOrg(app.db, principal.orgId, principal.role, (tx) => indexReportDoc(tx, row.id));
       } catch (err) {
         request.log.warn({ err }, "report search indexing failed");
       }
@@ -182,10 +195,13 @@ export default async function reportRoutes(app: FastifyInstance): Promise<void> 
     if (!principal) {
       return reply.code(401).send({ error: "admin authorization required" });
     }
+    if (!authorized(principal, "viewer")) {
+      return reply.code(403).send({ error: "insufficient role" });
+    }
     if (!isUuid(request.params.id)) {
       return reply.code(404).send({ error: "report not found" });
     }
-    const row = await withOrg(app.db, principal.orgId, (tx) =>
+    const row = await withOrg(app.db, principal.orgId, principal.role, (tx) =>
       getReportArtifact(tx, principal.orgId, request.params.id),
     );
     if (!row) return reply.code(404).send({ error: "report not found" });
@@ -200,8 +216,11 @@ export default async function reportRoutes(app: FastifyInstance): Promise<void> 
       if (!principal) {
         return reply.code(401).send({ error: "admin authorization required" });
       }
+      if (!authorized(principal, "viewer")) {
+        return reply.code(403).send({ error: "insufficient role" });
+      }
       const userId = principal.userId;
-      const rows = await withOrg(app.db, principal.orgId, (tx) =>
+      const rows = await withOrg(app.db, principal.orgId, principal.role, (tx) =>
         listReportArtifacts(tx, principal.orgId, userId, {
           reportType: request.query.type,
           scopeId: request.query.scopeId,

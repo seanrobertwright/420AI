@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { GitCaptureRequest } from "@420ai/shared";
+import { SERVICE_ROLE } from "@420ai/shared";
 import {
   withOrg,
   getMachineOrgId,
@@ -21,7 +22,7 @@ import {
   manualLinkBodySchema,
   patchGitLinkBodySchema,
 } from "../schemas.js";
-import { resolvePrincipal, isUuid } from "../auth.js";
+import { resolvePrincipal, isUuid, authorized } from "../auth.js";
 
 /**
  * M10 Git Outcomes + Attribution (PRD §11.3, §11.4). Mirrors the workspaces.ts
@@ -48,7 +49,7 @@ export default async function gitRoutes(app: FastifyInstance): Promise<void> {
       if (!orgId) {
         return reply.code(401).send({ error: "machine has no organization" });
       }
-      const result = await withOrg(app.db, orgId, (tx) =>
+      const result = await withOrg(app.db, orgId, SERVICE_ROLE, (tx) =>
         recordGitCommits(tx, request.machineId, request.body),
       );
       return reply.code(200).send(result);
@@ -61,10 +62,13 @@ export default async function gitRoutes(app: FastifyInstance): Promise<void> {
     if (!principal) {
       return reply.code(401).send({ error: "admin authorization required" });
     }
+    if (!authorized(principal, "viewer")) {
+      return reply.code(403).send({ error: "insufficient role" });
+    }
     if (!isUuid(request.params.id)) {
       return reply.code(404).send({ error: "project not found" });
     }
-    const commits = await withOrg(app.db, principal.orgId, (tx) =>
+    const commits = await withOrg(app.db, principal.orgId, principal.role, (tx) =>
       gitCommitsByProject(tx, principal.orgId, request.params.id),
     );
     return reply.code(200).send(commits);
@@ -76,11 +80,14 @@ export default async function gitRoutes(app: FastifyInstance): Promise<void> {
     if (!principal) {
       return reply.code(401).send({ error: "admin authorization required" });
     }
+    if (!authorized(principal, "viewer")) {
+      return reply.code(403).send({ error: "insufficient role" });
+    }
     if (!isUuid(request.params.id)) {
       return reply.code(404).send({ error: "project not found" });
     }
     const userId = principal.userId;
-    const links = await withOrg(app.db, principal.orgId, (tx) =>
+    const links = await withOrg(app.db, principal.orgId, principal.role, (tx) =>
       listProjectLinks(tx, principal.orgId, userId, request.params.id),
     );
     return reply.code(200).send(links);
@@ -95,12 +102,15 @@ export default async function gitRoutes(app: FastifyInstance): Promise<void> {
       if (!principal) {
         return reply.code(401).send({ error: "admin authorization required" });
       }
+      if (!authorized(principal, "member")) {
+        return reply.code(403).send({ error: "insufficient role" });
+      }
       const { id } = request.params;
       if (!isUuid(id)) {
         return reply.code(404).send({ error: "project not found" });
       }
       // Existence-check the project so an unknown (well-formed) id is a 404, not a 500.
-      const exists = await withOrg(app.db, principal.orgId, (tx) =>
+      const exists = await withOrg(app.db, principal.orgId, principal.role, (tx) =>
         getProjectName(tx, principal.orgId, id),
       );
       if (!exists) {
@@ -111,7 +121,7 @@ export default async function gitRoutes(app: FastifyInstance): Promise<void> {
       // One transaction for the whole suggest pass: the session list and every per-session
       // heuristic read/write share it, so a mid-loop failure rolls the batch back rather than
       // leaving half the sessions with suggestions and half without.
-      const links = await withOrg(app.db, principal.orgId, async (tx) => {
+      const links = await withOrg(app.db, principal.orgId, principal.role, async (tx) => {
         const sessionIds = scoped ? [scoped] : await projectSessionIds(tx, principal.orgId, id);
         const acc = [];
         for (const sessionId of sessionIds) {
@@ -132,13 +142,21 @@ export default async function gitRoutes(app: FastifyInstance): Promise<void> {
       if (!principal) {
         return reply.code(401).send({ error: "admin authorization required" });
       }
+      if (!authorized(principal, "member")) {
+        return reply.code(403).send({ error: "insufficient role" });
+      }
       const userId = principal.userId;
-      const detail = await withOrg(app.db, principal.orgId, (tx) =>
-        gitCommitDetail(tx, userId, request.body.commitSha),
+      const detail = await withOrg(app.db, principal.orgId, principal.role, (tx) =>
+        gitCommitDetail(tx, principal.orgId, userId, request.body.commitSha),
       );
       if (!detail) return reply.code(404).send({ error: "commit not found" });
-      const projectId = await withOrg(app.db, principal.orgId, async (tx) => {
-        const resolved = await resolveWorkspaceId(tx, userId, detail.commit.repoRootPath);
+      const projectId = await withOrg(app.db, principal.orgId, principal.role, async (tx) => {
+        const resolved = await resolveWorkspaceId(
+          tx,
+          principal.orgId,
+          userId,
+          detail.commit.repoRootPath,
+        );
         const pid = resolved?.projectId ?? null;
         await addManualLink(tx, principal.orgId, userId, request.params.sessionId, detail.id, pid);
         return pid;
@@ -162,11 +180,14 @@ export default async function gitRoutes(app: FastifyInstance): Promise<void> {
       if (!principal) {
         return reply.code(401).send({ error: "admin authorization required" });
       }
+      if (!authorized(principal, "member")) {
+        return reply.code(403).send({ error: "insufficient role" });
+      }
       if (!isUuid(request.params.id)) {
         return reply.code(404).send({ error: "link not found" });
       }
       const userId = principal.userId;
-      const link = await withOrg(app.db, principal.orgId, (tx) =>
+      const link = await withOrg(app.db, principal.orgId, principal.role, (tx) =>
         setLinkStatus(tx, principal.orgId, userId, request.params.id, request.body.status),
       );
       if (!link) return reply.code(404).send({ error: "link not found" });

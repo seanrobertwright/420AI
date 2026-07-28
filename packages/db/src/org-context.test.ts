@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { SQL } from "drizzle-orm";
-import { APP_ROLE_NAME, ORG_SETTING, withOrg } from "./org-context.js";
+import { APP_ROLE_NAME, ORG_SETTING, ROLE_SETTING, withOrg } from "./org-context.js";
 import type { Db, Tx } from "./client.js";
 
 /**
@@ -55,13 +55,15 @@ function chunkText(q: SQL): string {
 }
 
 const ORG = "3f2b7c14-9d05-4a6e-8b21-6c0f5ad84e77";
+const ROLE = "member";
 
 describe("withOrg", () => {
   it("sets the org context via set_config with is_local = true", async () => {
     const f = fakeDb();
-    await withOrg(f.db, ORG, async () => "result");
+    await withOrg(f.db, ORG, ROLE, async () => "result");
 
-    expect(f.executed).toHaveLength(1);
+    // M15 15.4: TWO statements now — the org context, then the role context.
+    expect(f.executed).toHaveLength(2);
     const text = chunkText(f.executed[0]!);
     expect(text).toContain("set_config");
     expect(text).toContain(`'${ORG_SETTING}'`);
@@ -73,13 +75,13 @@ describe("withOrg", () => {
 
   it("NEVER emits `SET LOCAL` (Postgres rejects a bind param there — 15.0 Finding 4)", async () => {
     const f = fakeDb();
-    await withOrg(f.db, ORG, async () => undefined);
+    await withOrg(f.db, ORG, ROLE, async () => undefined);
     expect(chunkText(f.executed[0]!).toUpperCase()).not.toContain("SET LOCAL");
   });
 
   it("passes the org id as a BOUND PARAMETER, never interpolated into the SQL text", async () => {
     const f = fakeDb();
-    await withOrg(f.db, ORG, async () => undefined);
+    await withOrg(f.db, ORG, ROLE, async () => undefined);
     const q = f.executed[0]!;
 
     // The literal uuid must NOT appear in the statement's string chunks…
@@ -91,7 +93,7 @@ describe("withOrg", () => {
 
   it("opens exactly ONE transaction and returns the callback's value", async () => {
     const f = fakeDb();
-    const out = await withOrg(f.db, ORG, async (tx) => {
+    const out = await withOrg(f.db, ORG, ROLE, async (tx: unknown) => {
       expect(tx).toBeDefined();
       return { ok: 42 };
     });
@@ -102,13 +104,43 @@ describe("withOrg", () => {
   it("propagates a thrown callback (so the transaction — and the context — roll back)", async () => {
     const f = fakeDb();
     await expect(
-      withOrg(f.db, ORG, async () => {
+      withOrg(f.db, ORG, ROLE, async () => {
         throw new Error("boom");
       }),
     ).rejects.toThrow("boom");
-    // The context statement still ran; it is the ROLLBACK that discards it (pinned for real
+    // The context statements still ran; it is the ROLLBACK that discards them (pinned for real
     // against Postgres in rls.int.test.ts's containment test).
-    expect(f.executed).toHaveLength(1);
+    expect(f.executed).toHaveLength(2);
+  });
+
+  it("sets the ROLE context as a second, separately-bound set_config (M15 15.4)", async () => {
+    const f = fakeDb();
+    await withOrg(f.db, ORG, "viewer", async () => undefined);
+
+    expect(f.executed).toHaveLength(2);
+    const text = chunkText(f.executed[1]!);
+    expect(text).toContain("set_config");
+    expect(text).toContain(`'${ROLE_SETTING}'`);
+    expect(text).toContain("true"); // is_local — the role must die with the transaction too
+    // Bound, never interpolated — the same injection guard as the org id above.
+    expect(text).not.toContain("viewer");
+    expect(
+      JSON.stringify((f.executed[1] as unknown as { queryChunks: unknown[] }).queryChunks),
+    ).toContain("viewer");
+  });
+
+  it("REFUSES a blank role without opening a transaction (M15 15.4)", async () => {
+    // The mirror image of the blank-org rejection, and for a mirror-image reason: the 0016
+    // policies coalesce '' to 'member', which is PERMISSIVE. So a blank role does not fail
+    // closed — it silently grants write capability to a caller who may really be a viewer.
+    // Machine paths pass SERVICE_ROLE explicitly; nobody passes "".
+    for (const blank of ["", "   "]) {
+      const f = fakeDb();
+      await expect(withOrg(f.db, ORG, blank, async () => undefined)).rejects.toThrow(
+        /non-empty role/,
+      );
+      expect(f.transactions).toBe(0);
+    }
   });
 
   it("REFUSES a blank org id without opening a transaction", async () => {
@@ -117,7 +149,9 @@ describe("withOrg", () => {
     // fail closed — a half-open context that raises nothing. Reject it at the door instead.
     for (const blank of ["", "   "]) {
       const f = fakeDb();
-      await expect(withOrg(f.db, blank, async () => undefined)).rejects.toThrow(/non-empty orgId/);
+      await expect(withOrg(f.db, blank, ROLE, async () => undefined)).rejects.toThrow(
+        /non-empty orgId/,
+      );
       expect(f.transactions).toBe(0);
     }
   });
@@ -125,11 +159,11 @@ describe("withOrg", () => {
   it("sets the context BEFORE the callback runs", async () => {
     const f = fakeDb();
     let executedCountAtCallback = -1;
-    await withOrg(f.db, ORG, async () => {
+    await withOrg(f.db, ORG, ROLE, async () => {
       executedCountAtCallback = f.executed.length;
     });
     // A callback that queried before set_config would read with NO context — 0 rows, silently.
-    expect(executedCountAtCallback).toBe(1);
+    expect(executedCountAtCallback).toBe(2);
   });
 });
 
@@ -137,5 +171,6 @@ describe("shared constants", () => {
   it("spell the role and the setting once, for the migration, the CLI and the tests", () => {
     expect(APP_ROLE_NAME).toBe("420ai_app");
     expect(ORG_SETTING).toBe("app.current_org");
+    expect(ROLE_SETTING).toBe("app.current_role");
   });
 });

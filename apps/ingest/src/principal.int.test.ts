@@ -98,6 +98,9 @@ describe.skipIf(!TEST_URL)("M15 15.2 request principal (HTTP e2e via inject)", (
     app = buildApp({
       db: dbh.db,
       adminToken: SERVICE_TOKEN,
+      // M15 15.4: reconcile on EVERY tick, i.e. exactly pre-15.4 behaviour — tests that assert
+      // a firing appears on the first GET must not race the 30 s production throttle.
+      reconcileThrottleMs: 0,
       adminEmail: ADMIN_EMAIL,
       sessionSecret: SESSION_SECRET,
       analysisProvider: stubProvider,
@@ -287,7 +290,7 @@ describe.skipIf(!TEST_URL)("M15 15.2 request principal (HTTP e2e via inject)", (
   });
 
   it("GET /v1/reports/:id for ANOTHER org's report is 404 (never 403 — no existence leak)", async () => {
-    const row = await insertReportArtifact(dbh.db, {
+    const row = await insertReportArtifact(dbh.db, "member", {
       orgId: orgA,
       userId: userA,
       projectId: null,

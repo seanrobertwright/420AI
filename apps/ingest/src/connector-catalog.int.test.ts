@@ -65,6 +65,9 @@ describe.skipIf(!TEST_URL)("connector-catalog API (HTTP e2e via inject) — M12 
     app = buildApp({
       db: dbh.db,
       adminToken: ADMIN,
+      // M15 15.4: reconcile on EVERY tick, i.e. exactly pre-15.4 behaviour — tests that assert
+      // a firing appears on the first GET must not race the 30 s production throttle.
+      reconcileThrottleMs: 0,
       analysisProvider: stubProvider,
       connectorCatalogPublicKey: EPHEMERAL_PUB,
       logger: false,

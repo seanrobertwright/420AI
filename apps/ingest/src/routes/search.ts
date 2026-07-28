@@ -2,8 +2,9 @@ import type { FastifyInstance } from "fastify";
 import { searchDocuments, rebuildSearchIndex, listOrganizations, withOrg } from "@420ai/db";
 import type { ReindexCounts } from "@420ai/shared";
 import type { SearchEntityType } from "@420ai/shared";
+import { SERVICE_ROLE } from "@420ai/shared";
 import { searchQuerySchema } from "../schemas.js";
-import { resolvePrincipal, isUuid } from "../auth.js";
+import { resolvePrincipal, isUuid, authorized } from "../auth.js";
 
 /**
  * M12 §21 admin search endpoints. Both admin-gated (mirrors routes/projections.ts:
@@ -31,13 +32,16 @@ export default async function searchRoutes(app: FastifyInstance): Promise<void> 
     if (!principal) {
       return reply.code(401).send({ error: "admin authorization required" });
     }
+    if (!authorized(principal, "viewer")) {
+      return reply.code(403).send({ error: "insufficient role" });
+    }
     const { q, type, projectId, limit, offset } = request.query;
     // A project filter must be a well-formed uuid (else a PG uuid-cast 500) →
     // unknown/malformed id is 404, preserving the repo-wide invariant.
     if (projectId !== undefined && !isUuid(projectId)) {
       return reply.code(404).send({ error: "project not found" });
     }
-    const result = await withOrg(app.db, principal.orgId, (tx) =>
+    const result = await withOrg(app.db, principal.orgId, principal.role, (tx) =>
       searchDocuments(tx, {
         orgId: principal.orgId,
         q,
@@ -54,6 +58,9 @@ export default async function searchRoutes(app: FastifyInstance): Promise<void> 
     const principal = await resolvePrincipal(app, request);
     if (!principal) {
       return reply.code(401).send({ error: "admin authorization required" });
+    }
+    if (!authorized(principal, "admin")) {
+      return reply.code(403).send({ error: "insufficient role" });
     }
     // D-15.2-7: DELIBERATELY not org-scoped. Reindex is a deployment-wide maintenance
     // operation, and after 15.1 its writers already stamp the correct per-row `org_id`
@@ -72,7 +79,9 @@ export default async function searchRoutes(app: FastifyInstance): Promise<void> 
     const orgs = await listOrganizations(app.db);
     const totals: ReindexCounts = { reports: 0, projects: 0, sessions: 0, events: 0, total: 0 };
     for (const org of orgs) {
-      const counts = await withOrg(app.db, org.id, (tx) => rebuildSearchIndex(tx, org.id));
+      const counts = await withOrg(app.db, org.id, SERVICE_ROLE, (tx) =>
+        rebuildSearchIndex(tx, org.id),
+      );
       totals.reports += counts.reports;
       totals.projects += counts.projects;
       totals.sessions += counts.sessions;

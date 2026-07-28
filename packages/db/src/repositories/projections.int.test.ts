@@ -78,7 +78,7 @@ describe.skipIf(!TEST_URL)("projections repository (integration)", () => {
     });
     const proj = await findOrCreateProjectByRemote(dbh.db, userId, REMOTE, "420AI");
     projectId = proj.id;
-    await remapWorkspace(dbh.db, userId, ws.id, projectId);
+    await remapWorkspace(dbh.db, orgId, ws.id, projectId);
     await addWorkspaceKey(dbh.db, {
       userId,
       workspaceId: ws.id,
@@ -288,7 +288,7 @@ describe.skipIf(!TEST_URL)("projections repository (integration)", () => {
       projectPath: PROJECT_KEY,
       ts: "2026-06-14T00:09:00.000Z",
     });
-    const health = await connectorHealth(dbh.db, userId);
+    const health = await connectorHealth(dbh.db, orgId);
     const byConn = new Map(health.map((h) => [h.sourceConnector, h]));
     expect(byConn.get("claude-code")!.lastEventAt).toContain("2026-06-15");
     // toolCalls is the count of TERMINAL tool calls (completed + failed) — the M10 failure-ratio
@@ -359,14 +359,14 @@ describe.skipIf(!TEST_URL)("projections repository (integration)", () => {
 
     // A window boundary between the old and the recent events.
     const sinceIso = "2026-06-01T00:00:00.000Z";
-    const windowed = await connectorHealthWindowed(dbh.db, userId, sinceIso);
+    const windowed = await connectorHealthWindowed(dbh.db, orgId, sinceIso);
     const cc = windowed.find((h) => h.sourceConnector === "claude-code")!;
     expect(cc.toolCalls).toBe(5); // only the recent terminal calls
     expect(cc.toolsFailed).toBe(3); // 3/5 = 0.6 ≥ CONNECTOR_RATE_ALERT.ratio
     expect(cc.lastEventAt).toContain("2026-06-20");
 
     // The LIFETIME projection, by contrast, still counts the old failures too.
-    const lifetime = await connectorHealth(dbh.db, userId);
+    const lifetime = await connectorHealth(dbh.db, orgId);
     const ccLifetime = lifetime.find((h) => h.sourceConnector === "claude-code")!;
     expect(ccLifetime.toolCalls).toBe(9); // 4 old + 5 recent
     expect(ccLifetime.toolsFailed).toBe(7); // 4 old + 3 recent

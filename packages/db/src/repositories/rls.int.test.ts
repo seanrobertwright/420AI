@@ -86,6 +86,13 @@ async function expectRlsRejection(p: Promise<unknown>): Promise<void> {
   expect(errorChain(thrown)).toMatch(/row-level security policy/i);
 }
 
+/**
+ * M15 15.4 — the role this file's `withOrg` calls run under. Every assertion here is about
+ * TENANCY, not roles, so it uses a non-viewer role throughout: the 0016 restrictive policies
+ * must be invisible to these tests. `rbac.int.test.ts` is where the viewer path is proven.
+ */
+const WRITE_ROLE = "member";
+
 /** STRICT policy: unset context ⇒ 0 rows. These hold tenant content. */
 const STRICT_TABLES = [
   "raw_source_records",
@@ -100,6 +107,8 @@ const STRICT_TABLES = [
   "machine_heartbeats",
   "alert_firings",
   "search_documents",
+  // M15 15.4: a new tenant table with the same strict org policy as the other twelve.
+  "project_grants",
 ] as const;
 
 /** BOOTSTRAP-PERMISSIVE policy (D-15.3-3): enforced with a context, open without one. */
@@ -141,7 +150,7 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.3 RLS enforcement (two-role integ
     // TRUNCATE requires table OWNERSHIP — on the app handle this fails with a permissions
     // error, not an RLS error, which is a confusing way to discover the rule. Owner only.
     await owner.db.execute(
-      sql`TRUNCATE search_documents, session_git_links, git_commit_files, git_commits, alert_firings, machine_heartbeats, report_artifacts, workspace_keys, workspaces, projects, raw_source_records, events, ingest_tokens, pairing_codes, machines, memberships, organizations, users RESTART IDENTITY CASCADE`,
+      sql`TRUNCATE project_grants, search_documents, session_git_links, git_commit_files, git_commits, alert_firings, machine_heartbeats, report_artifacts, workspace_keys, workspaces, projects, raw_source_records, events, ingest_tokens, pairing_codes, machines, memberships, organizations, users RESTART IDENTITY CASCADE`,
     );
     const seeded = await owner.db
       .insert(users)
@@ -265,7 +274,7 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.3 RLS enforcement (two-role integ
       },
     ]);
 
-    const seen = await withOrg(appRole.db, orgA, async (tx) => ({
+    const seen = await withOrg(appRole.db, orgA, WRITE_ROLE, async (tx) => ({
       events: await tx.execute<{ n: number }>(sql`select count(*)::int as n from events`),
       reports: await tx.execute<{ n: number }>(
         sql`select count(*)::int as n from report_artifacts`,
@@ -282,7 +291,7 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.3 RLS enforcement (two-role integ
     expect(seen.docs.rows[0]!.body).toBe("org a body");
 
     // …and symmetrically for org B.
-    const bSees = await withOrg(appRole.db, orgB, (tx) =>
+    const bSees = await withOrg(appRole.db, orgB, WRITE_ROLE, (tx) =>
       tx.execute<{ n: number; body: string }>(
         sql`select count(*)::int as n, min(body) as body from search_documents`,
       ),
@@ -297,7 +306,7 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.3 RLS enforcement (two-role integ
     await ingestBatch(owner.db, machineA, convergingBatch("a"));
 
     // (a) after a COMMITted withOrg
-    await withOrg(appRole.db, orgA, async (tx) => {
+    await withOrg(appRole.db, orgA, WRITE_ROLE, async (tx) => {
       const inside = await tx.execute<{ n: number }>(sql`select count(*)::int as n from events`);
       expect(inside.rows[0]!.n).toBe(1);
     });
@@ -308,7 +317,7 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.3 RLS enforcement (two-role integ
 
     // (b) after a THROWN callback (drizzle rolls back; the setting must go with it)
     await expect(
-      withOrg(appRole.db, orgA, async (tx) => {
+      withOrg(appRole.db, orgA, WRITE_ROLE, async (tx) => {
         await tx.execute(sql`select 1`);
         throw new Error("boom");
       }),
@@ -330,7 +339,7 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.3 RLS enforcement (two-role integ
     // Assert the ERROR, not merely that it threw — a not-null or FK violation would also
     // "throw" and would mean the policy never ran. Hence `expectRlsRejection`.
     await expectRlsRejection(
-      withOrg(appRole.db, orgA, (tx) =>
+      withOrg(appRole.db, orgA, WRITE_ROLE, (tx) =>
         tx.insert(events).values({
           orgId: orgB, // ← org A's context, org B's row
           fingerprint: "rls-cross-write",
@@ -351,11 +360,15 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.3 RLS enforcement (two-role integ
   //      only `org_id`; `parser_version`/`tokens`/`cost`/`machine_id` all cross the boundary.
   it("a CROSS-ORG converging ingest is rejected, while a SAME-ORG one still upserts cleanly", async () => {
     // Org A ingests the fingerprint first (as org A, through the wrapper).
-    await withOrg(appRole.db, orgA, (tx) => ingestBatch(tx, machineA, convergingBatch("a")));
+    await withOrg(appRole.db, orgA, WRITE_ROLE, (tx) =>
+      ingestBatch(tx, machineA, convergingBatch("a")),
+    );
 
     // Org B converges on the same fingerprint → rejected, not silently overwritten.
     await expectRlsRejection(
-      withOrg(appRole.db, orgB, (tx) => ingestBatch(tx, machineB, convergingBatch("b"))),
+      withOrg(appRole.db, orgB, WRITE_ROLE, (tx) =>
+        ingestBatch(tx, machineB, convergingBatch("b")),
+      ),
     );
 
     // Org A's row is intact and still org A's.
@@ -367,7 +380,9 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.3 RLS enforcement (two-role integ
     // The POSITIVE case: a SAME-ORG converging re-ingest is unaffected — this must not have
     // become a general "converging ingest is broken" regression.
     await expect(
-      withOrg(appRole.db, orgA, (tx) => ingestBatch(tx, machineA, convergingBatch("a2"))),
+      withOrg(appRole.db, orgA, WRITE_ROLE, (tx) =>
+        ingestBatch(tx, machineA, convergingBatch("a2")),
+      ),
     ).resolves.toBeDefined();
     const afterSameOrg = await owner.db.select().from(events);
     expect(afterSameOrg).toHaveLength(1);
@@ -388,12 +403,14 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.3 RLS enforcement (two-role integ
     expect(allMachines.rows[0]!.n).toBe(2); // permissive with no context
 
     // WITH org A's context, org B's machine is invisible — the exemption is bounded.
-    const scoped = await withOrg(appRole.db, orgA, (tx) =>
+    const scoped = await withOrg(appRole.db, orgA, WRITE_ROLE, (tx) =>
       tx.execute<{ n: number }>(sql`select count(*)::int as n from machines`),
     );
     expect(scoped.rows[0]!.n).toBe(1);
 
-    const bHidden = await withOrg(appRole.db, orgA, () => findMachineIdByToken(appRole.db, tokenB));
+    const bHidden = await withOrg(appRole.db, orgA, WRITE_ROLE, () =>
+      findMachineIdByToken(appRole.db, tokenB),
+    );
     // NOTE: `findMachineIdByToken` above is deliberately given the POOL handle, not `tx` — it
     // therefore runs on a different connection with no context and still resolves. The scoped
     // count assertion is what pins the enforcement; this line pins that a call OUTSIDE the
@@ -403,34 +420,92 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.3 RLS enforcement (two-role integ
 
   // 8 ── THE POLICY INVENTORY IS EXACTLY AS DECIDED. Mirrors tenancy.int.test.ts's precedent
   //      of asserting a schema-level DECISION in a test, so the exemption cannot silently grow.
-  it("pg_policies contains exactly the 12 strict + 3 bootstrap policies and none elsewhere", async () => {
-    const rows = await owner.db.execute<{ tablename: string; qual: string }>(
-      sql`select tablename, qual from pg_policies where schemaname = 'public'`,
+  it("pg_policies contains exactly the org policies + the 15.4 role-write backstop", async () => {
+    // M15 15.4 — this query and its keying were BOTH changed, and the keying is the important
+    // half. It used to build `new Map(rows.map(r => [r.tablename, r.qual]))`. With three
+    // restrictive policies added per table that Map SILENTLY COLLAPSES four rows per table into
+    // one: `byTable.size` would still read 15 and the test would stay green while `qual` became
+    // whichever row the planner returned last. That is the same class of meaningless green as
+    // `skipped ≠ passed` and `bypassed ≠ enforced` — so the fix is to re-key on
+    // (tablename, policyname), NOT to bump the expected number.
+    const rows = await owner.db.execute<{
+      tablename: string;
+      policyname: string;
+      permissive: string;
+      cmd: string;
+      qual: string | null;
+      with_check: string | null;
+    }>(
+      sql`select tablename, policyname, permissive, cmd, qual, with_check
+          from pg_policies where schemaname = 'public'`,
     );
-    const byTable = new Map(rows.rows.map((r) => [r.tablename, r.qual]));
+    const all = rows.rows;
+    const byKey = new Map(all.map((r) => [`${r.tablename}.${r.policyname}`, r]));
+    // Nothing collapsed: one map entry per row.
+    expect(byKey.size).toBe(all.length);
 
-    expect(byTable.size).toBe(STRICT_TABLES.length + BOOTSTRAP_TABLES.length);
+    const org = all.filter((r) => r.permissive === "PERMISSIVE");
+    const restrictive = all.filter((r) => r.permissive === "RESTRICTIVE");
+
+    // ── the 15.3 tenancy layer, unchanged by 15.4 except for the one new tenant table ──
+    expect(org).toHaveLength(STRICT_TABLES.length + BOOTSTRAP_TABLES.length);
+    const orgByTable = new Map(org.map((r) => [r.tablename, r.qual!]));
+    expect(orgByTable.size).toBe(org.length); // exactly one org policy per table
 
     for (const t of STRICT_TABLES) {
-      const qual = byTable.get(t);
-      expect(qual, `${t} must carry a policy`).toBeTruthy();
+      const qual = orgByTable.get(t);
+      expect(qual, `${t} must carry an org policy`).toBeTruthy();
       // A strict policy has NO "IS NULL" escape hatch — that is what makes an unset context
       // read zero rows rather than everything.
       expect(qual!.toUpperCase(), `${t} must be STRICT`).not.toContain("IS NULL");
     }
     for (const t of BOOTSTRAP_TABLES) {
-      const qual = byTable.get(t);
-      expect(qual, `${t} must carry a policy`).toBeTruthy();
+      const qual = orgByTable.get(t);
+      expect(qual, `${t} must carry an org policy`).toBeTruthy();
       expect(qual!.toUpperCase(), `${t} must be BOOTSTRAP-PERMISSIVE`).toContain("IS NULL");
     }
     for (const t of NO_RLS_TABLES) {
-      expect(byTable.has(t), `${t} must have NO policy (D-15.3-4 / D-M15-9)`).toBe(false);
+      expect(orgByTable.has(t), `${t} must have NO policy (D-15.3-4 / D-M15-9)`).toBe(false);
     }
+
+    // ── the 15.4 role-write backstop: 3 per STRICT table, none anywhere else ──
+    expect(restrictive).toHaveLength(STRICT_TABLES.length * 3);
+    for (const t of STRICT_TABLES) {
+      const forTable = restrictive.filter((r) => r.tablename === t);
+      expect(forTable.map((r) => r.cmd).sort(), `${t} restrictive commands`).toEqual([
+        "DELETE",
+        "INSERT",
+        "UPDATE",
+      ]);
+      // INSERT/UPDATE carry the test in WITH CHECK, which makes a blocked write LOUD.
+      // DELETE has no WITH CHECK in Postgres, so it must be in USING — silently, unavoidably.
+      for (const r of forTable) {
+        if (r.cmd === "DELETE") {
+          expect(r.qual, `${t} DELETE must test in USING`).toContain("app.current_role");
+          expect(r.with_check).toBeNull();
+        } else {
+          expect(r.with_check, `${t} ${r.cmd} must test in WITH CHECK`).toContain(
+            "app.current_role",
+          );
+        }
+      }
+    }
+    // The BOOTSTRAP tables get NO role policy (D-15.4-3): machine/bootstrap writers have no
+    // principal and therefore no membership role.
+    for (const t of BOOTSTRAP_TABLES) {
+      expect(
+        restrictive.some((r) => r.tablename === t),
+        `${t} must have NO role policy`,
+      ).toBe(false);
+    }
+    // And NONE on SELECT, anywhere — a viewer is entitled to read their own org, so a role
+    // predicate there would buy nothing while making every read more expensive.
+    expect(restrictive.some((r) => r.cmd === "SELECT" || r.cmd === "ALL")).toBe(false);
   });
 
   // 9 ── FORCE, not merely ENABLE. Two distinct exemptions, two distinct switches: ENABLE
   //      turns the policy on, FORCE removes the TABLE-OWNER exemption (15.0 Finding 1).
-  it("all 15 tenant tables have relrowsecurity AND relforcerowsecurity", async () => {
+  it("all 16 tenant tables have relrowsecurity AND relforcerowsecurity", async () => {
     const all = [...STRICT_TABLES, ...BOOTSTRAP_TABLES];
     const rows = await owner.db.execute<{
       relname: string;

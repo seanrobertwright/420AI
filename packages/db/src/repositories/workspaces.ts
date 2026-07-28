@@ -9,7 +9,9 @@ import { getOrgIdForUser } from "./organizations.js";
  * Claude/Codex, projectHash for Gemini) to it. `resolveWorkspaceId` +
  * `projectEventSummary` are the D5 attribution building blocks M6 materializes.
  *
- * Silent library (CLAUDE.md): throws, never logs. Scope EVERY query by userId.
+ * Silent library (CLAUDE.md): throws, never logs. M15 15.4: scope EVERY query by `orgId`
+ * (the tenant boundary); add `userId` only where a row's identity is genuinely per-user —
+ * `resolveWorkspaceId` documents the one case in this file.
  */
 
 export interface WorkspaceRow {
@@ -120,33 +122,48 @@ export async function addWorkspaceKey(
     });
 }
 
-/** Repoint a workspace at a different project (the editable mapping, D4). */
+/**
+ * Repoint a workspace at a different project (the editable mapping, D4).
+ *
+ * M15 15.4 — `orgId` SECOND, REPLACING the `userId` predicate. This is a WRITE that was scoped
+ * by `userId` alone, so RLS was the only thing stopping a cross-tenant remap. It is org-scoped
+ * rather than (org,user)-scoped to stay consistent with `listWorkspaces`: a member who can SEE a
+ * colleague's workspace in the list must be able to act on it, or the UI offers a row that 404s.
+ */
 export async function remapWorkspace(
   db: DbClient,
-  userId: string,
+  orgId: string,
   workspaceId: string,
   projectId: string,
 ): Promise<WorkspaceRow | undefined> {
   const [row] = await db
     .update(workspaces)
     .set({ projectId })
-    .where(and(eq(workspaces.id, workspaceId), eq(workspaces.userId, userId)))
+    .where(and(eq(workspaces.id, workspaceId), eq(workspaces.orgId, orgId)))
     .returning(workspaceRowColumns);
   return row;
 }
 
-/** List a user's workspaces. */
-export async function listWorkspaces(db: DbClient, userId: string): Promise<WorkspaceRow[]> {
-  return db.select(workspaceRowColumns).from(workspaces).where(eq(workspaces.userId, userId));
+/** List an ORG's workspaces (M15 15.4 — org-scoped, `orgId` second; see `listProjects`). */
+export async function listWorkspaces(db: DbClient, orgId: string): Promise<WorkspaceRow[]> {
+  return db.select(workspaceRowColumns).from(workspaces).where(eq(workspaces.orgId, orgId));
 }
 
 /**
  * Resolve a raw connector `project_key` to its workspace + project (the D5
  * resolver). Returns `undefined` for an unknown key — events stay unattributed,
  * never throws (attribution is best-effort).
+ *
+ * M15 15.4 — `orgId` SECOND, and this one KEEPS its `userId` predicate where the visibility
+ * reads dropped theirs. It is not a UI read: it is the ingest/discover attribution resolver, and
+ * `workspace_keys`' unique index is `(user_id, project_key)`. Two users in one org can therefore
+ * legitimately hold the SAME `project_key` for different roots, and an org-wide lookup would
+ * return an arbitrary one of them — silently mis-attributing events. `project_key` is also a
+ * CONNECTOR-SUPPLIED string (the 15.2 lesson), so both sides of the join are org-scoped too.
  */
 export async function resolveWorkspaceId(
   db: DbClient,
+  orgId: string,
   userId: string,
   projectKey: string,
 ): Promise<{ workspaceId: string; projectId: string | null } | undefined> {
@@ -154,7 +171,14 @@ export async function resolveWorkspaceId(
     .select({ workspaceId: workspaceKeys.workspaceId, projectId: workspaces.projectId })
     .from(workspaceKeys)
     .innerJoin(workspaces, eq(workspaces.id, workspaceKeys.workspaceId))
-    .where(and(eq(workspaceKeys.userId, userId), eq(workspaceKeys.projectKey, projectKey)))
+    .where(
+      and(
+        eq(workspaceKeys.orgId, orgId),
+        eq(workspaces.orgId, orgId),
+        eq(workspaceKeys.userId, userId),
+        eq(workspaceKeys.projectKey, projectKey),
+      ),
+    )
     .limit(1);
   return row;
 }

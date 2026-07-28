@@ -32,8 +32,27 @@ import type { Db, Tx } from "./client.js";
  * the OUTER transaction. `DbClient.transaction()` *does* typecheck (drizzle types nested
  * savepoints), so the compiler will not catch that mistake — this parameter type is the only
  * guard.
+ *
+ * ---
+ *
+ * M15 15.4 — `role` is a REQUIRED fourth parameter (D-15.4-4), and required is the whole
+ * point. An OPTIONAL role would default to permissive at every site the executor forgot,
+ * silently. A required one makes `tsc` visit all 63 call sites — and unlike 15.2's
+ * `adminAuthorized` deletion (which reported one error per FILE, because a failed named
+ * import binds as an error type and stops re-reporting), an ARITY change on a
+ * successfully-imported function reports one error per CALL SITE.
+ *
+ * It sets a second transaction-local, `app.current_role`, which migration 0016's RESTRICTIVE
+ * policies read to block writes from a `viewer`. Callers with no membership role — machine-
+ * authed writes and the deployment-wide maintenance loops — pass `SERVICE_ROLE` from
+ * `@420ai/shared` explicitly.
  */
-export async function withOrg<T>(db: Db, orgId: string, fn: (tx: Tx) => Promise<T>): Promise<T> {
+export async function withOrg<T>(
+  db: Db,
+  orgId: string,
+  role: string,
+  fn: (tx: Tx) => Promise<T>,
+): Promise<T> {
   // A BLANK org id is the one input that quietly breaks the whole scheme, so it is rejected
   // here rather than defended against per-policy. `set_config` accepts '' happily, and the
   // policies then `nullif(…, '')` it straight back to NULL — which makes the 12 STRICT tables
@@ -44,11 +63,23 @@ export async function withOrg<T>(db: Db, orgId: string, fn: (tx: Tx) => Promise<
   if (!orgId.trim()) {
     throw new Error("withOrg requires a non-empty orgId — a blank org context is not scoping");
   }
+  // M15 15.4: a blank ROLE is rejected for the mirror-image reason a blank org is. The 0016
+  // policies coalesce '' to 'member' (permissive, so machine writes work), which means a blank
+  // role silently grants WRITE capability to a caller whose real role may be viewer. Callers
+  // with no membership role pass SERVICE_ROLE explicitly; nobody passes "".
+  if (!role.trim()) {
+    throw new Error("withOrg requires a non-empty role — pass SERVICE_ROLE for machine paths");
+  }
   return db.transaction(async (tx) => {
     // set_config(..., true) == SET LOCAL, but PARAMETERIZED.
     // `SET LOCAL app.current_org = ${orgId}` is REJECTED by Postgres (15.0 Finding 4.1) and
     // would require string interpolation — never write it that way.
+    //
+    // Two SEQUENTIALLY-awaited executes, never `Promise.all`. A transaction is ONE connection;
+    // node-postgres queues concurrent queries on it and emits a deprecation warning (removed in
+    // pg@9). Same lesson recorded at routes/monitor.ts:61-66.
     await tx.execute(sql`SELECT set_config('app.current_org', ${orgId}, true)`);
+    await tx.execute(sql`SELECT set_config('app.current_role', ${role}, true)`);
     return fn(tx);
   });
 }
@@ -64,3 +95,9 @@ export const APP_ROLE_NAME = "420ai_app";
 
 /** The transaction-local setting every RLS policy reads. Shared spelling; see `withOrg`. */
 export const ORG_SETTING = "app.current_org";
+
+/**
+ * M15 15.4 — the transaction-local ROLE setting the 0016 RESTRICTIVE write policies read.
+ * Shared spelling for `withOrg`, the tests and any future policy.
+ */
+export const ROLE_SETTING = "app.current_role";

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
+import { FORBIDDEN_SHORT } from "@/lib/mutation-error";
 
 /** The {id,name} pairs a workspace may be remapped to (passed from the server page). */
 export interface ProjectOption {
@@ -48,7 +49,9 @@ export function WorkspaceRemap({
             ? "not found"
             : res.status === 400
               ? "bad id"
-              : `failed (${res.status})`,
+              : res.status === 403
+                ? FORBIDDEN_SHORT
+                : `failed (${res.status})`,
         );
         return;
       }

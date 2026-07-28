@@ -88,6 +88,9 @@ const TENANT_TABLES = [
   "machine_heartbeats",
   "alert_firings",
   "search_documents",
+  // M15 15.4 — per-project capability grants. Carries `org_id` (not merely reachable via
+  // `project_id`) so it is coverable by the same one-column policy as every other tenant table.
+  "project_grants",
 ] as const;
 
 /** Tables that must NOT gain org_id — identities and deployment-global data (D-M15-9). */

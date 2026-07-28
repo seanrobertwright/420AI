@@ -8,7 +8,7 @@ import {
   generateSessionInterpretationBodySchema,
   generateProjectInterpretationBodySchema,
 } from "../schemas.js";
-import { resolvePrincipal, isUuid } from "../auth.js";
+import { resolvePrincipal, isUuid, authorized } from "../auth.js";
 
 interface GenerateSessionInterpretationBody {
   type?: "session.ai_interpretation";
@@ -40,9 +40,12 @@ export default async function interpretationRoutes(app: FastifyInstance): Promis
       if (!principal) {
         return reply.code(401).send({ error: "admin authorization required" });
       }
+      if (!authorized(principal, "member")) {
+        return reply.code(403).send({ error: "insufficient role" });
+      }
       // sessionId is a connector text id (NOT a uuid) — ungated. Empty/unknown → 404
       // BEFORE the (billable) provider call (D8).
-      const detail = await withOrg(app.db, principal.orgId, (tx) =>
+      const detail = await withOrg(app.db, principal.orgId, principal.role, (tx) =>
         sessionDetail(tx, principal.orgId, request.params.sessionId),
       );
       if (detail.eventCount === 0) {
@@ -54,6 +57,7 @@ export default async function interpretationRoutes(app: FastifyInstance): Promis
         app.db,
         app.analysisProvider,
         principal.orgId,
+        principal.role,
         userId,
         request.params.sessionId,
         generatedAt,
@@ -62,7 +66,7 @@ export default async function interpretationRoutes(app: FastifyInstance): Promis
       // 13.4: refresh the artifact's search doc best-effort (awaited-with-swallow,
       // the deliverFirings pattern — never fails the response).
       try {
-        await withOrg(app.db, principal.orgId, (tx) => indexReportDoc(tx, row.id));
+        await withOrg(app.db, principal.orgId, principal.role, (tx) => indexReportDoc(tx, row.id));
       } catch (err) {
         request.log.warn({ err }, "report search indexing failed");
       }
@@ -78,19 +82,22 @@ export default async function interpretationRoutes(app: FastifyInstance): Promis
       if (!principal) {
         return reply.code(401).send({ error: "admin authorization required" });
       }
+      if (!authorized(principal, "member")) {
+        return reply.code(403).send({ error: "insufficient role" });
+      }
       if (!isUuid(request.params.id)) {
         return reply.code(404).send({ error: "project not found" });
       }
       // Existence guard (M7 FK lesson) — a well-formed-but-missing project must 404
       // BEFORE the insert (report_artifacts.project_id FKs to projects.id).
-      const exists = await withOrg(app.db, principal.orgId, (tx) =>
+      const exists = await withOrg(app.db, principal.orgId, principal.role, (tx) =>
         getProjectName(tx, principal.orgId, request.params.id),
       );
       if (!exists) {
         return reply.code(404).send({ error: "project not found" });
       }
       // Empty project → 404 before the billable provider call (D8).
-      const totals = await withOrg(app.db, principal.orgId, (tx) =>
+      const totals = await withOrg(app.db, principal.orgId, principal.role, (tx) =>
         usageTotals(tx, principal.orgId, request.params.id),
       );
       if (totals.eventCount === 0) {
@@ -102,6 +109,7 @@ export default async function interpretationRoutes(app: FastifyInstance): Promis
         app.db,
         app.analysisProvider,
         principal.orgId,
+        principal.role,
         userId,
         request.params.id,
         generatedAt,
@@ -110,7 +118,7 @@ export default async function interpretationRoutes(app: FastifyInstance): Promis
       // 13.4: refresh the artifact's search doc best-effort (awaited-with-swallow,
       // the deliverFirings pattern — never fails the response).
       try {
-        await withOrg(app.db, principal.orgId, (tx) => indexReportDoc(tx, row.id));
+        await withOrg(app.db, principal.orgId, principal.role, (tx) => indexReportDoc(tx, row.id));
       } catch (err) {
         request.log.warn({ err }, "report search indexing failed");
       }

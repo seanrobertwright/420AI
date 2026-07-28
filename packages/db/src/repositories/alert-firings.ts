@@ -140,22 +140,30 @@ export async function reconcileAlertFirings(
     .set({ status: "resolved", resolvedAt: now })
     .where(
       and(
+        // M15 15.4: org AND user. The `orgId` predicate closes the 15.2 backlog — with two
+        // users in one org `userId` alone is no longer a proxy for the tenant, and RLS was
+        // the only thing scoping this UPDATE (D-M15-3 says that must be the other way round).
+        eq(alertFirings.orgId, orgId),
         eq(alertFirings.userId, userId),
         eq(alertFirings.status, "open"),
         notInArray(alertFirings.alertKey, keys),
       ),
     );
-  return listAlertFirings(db, userId, now);
+  return listAlertFirings(db, orgId, userId, now);
 }
 
 /**
  * The current firing surface: all OPEN firings plus firings RESOLVED within
  * ALERT_FIRINGS_RESOLVED_WINDOW_MS (a just-resolved alert lingers briefly as
  * confirmation). Ordered open&unacked → open&acked → resolved, then severity, then
- * oldest-first. Scoped by userId.
+ * oldest-first.
+ *
+ * M15 15.4 — scoped by org AND user (`orgId` second, the 15.2 convention). It was `userId`-only,
+ * which was correct only while every org held exactly one user — the property this slice ends.
  */
 export async function listAlertFirings(
   db: DbClient,
+  orgId: string,
   userId: string,
   now: Date,
 ): Promise<AlertFiring[]> {
@@ -165,6 +173,7 @@ export async function listAlertFirings(
     .from(alertFirings)
     .where(
       and(
+        eq(alertFirings.orgId, orgId),
         eq(alertFirings.userId, userId),
         or(
           eq(alertFirings.status, "open"),
@@ -238,17 +247,25 @@ export async function ackAlertFiring(
  *
  * The explicit `org_id` predicate is kept on every statement alongside the policy (D-M15-3:
  * RLS backstops application scoping, it does not replace it).
+ *
+ * M15 15.4 — `role` is threaded from the caller, never hardcoded here, and the route passes
+ * `SERVICE_ROLE` rather than `principal.role`. Delivery is triggered by whoever happens to load
+ * the monitor, but the ACTION belongs to the org. Passing a viewer's role would make the 0016
+ * restrictive UPDATE policy reject the `delivery_attempted_at` stamp, so an org whose only
+ * active user is a viewer would silently stop delivering every webhook and email — the exact
+ * bug class the paragraph above records.
  */
 export async function deliverPendingFirings(
   db: Db,
   orgId: string,
+  role: string,
   userId: string,
   deliverer: { deliver(firing: AlertFiring): Promise<void> } | null,
   now: Date,
   log?: (err: unknown) => void,
 ): Promise<void> {
   if (!deliverer) return; // delivery disabled — no query
-  const rows = await withOrg(db, orgId, (tx) =>
+  const rows = await withOrg(db, orgId, role, (tx) =>
     tx
       .select(firingColumns)
       .from(alertFirings)
@@ -269,7 +286,7 @@ export async function deliverPendingFirings(
       log?.(err);
     }
     // Stamp regardless of outcome — at-most-once attempt, no 3-second retry spam.
-    await withOrg(db, orgId, (tx) =>
+    await withOrg(db, orgId, role, (tx) =>
       tx
         .update(alertFirings)
         .set({ deliveryAttemptedAt: now })
@@ -291,17 +308,21 @@ export async function deliverPendingFirings(
  * M15 15.3: same `Db` + `orgId` + per-statement `withOrg` shape as `deliverPendingFirings` —
  * see that function's note for why the scoping is mandatory and why it is NOT one long
  * transaction around the deliverer call.
+ *
+ * M15 15.4: `role` is threaded from the caller (`SERVICE_ROLE` at the route) for the same
+ * reason as `deliverPendingFirings` — see its note.
  */
 export async function deliverResolvedFirings(
   db: Db,
   orgId: string,
+  role: string,
   userId: string,
   deliverer: { deliver(firing: AlertFiring): Promise<void> } | null,
   now: Date,
   log?: (err: unknown) => void,
 ): Promise<void> {
   if (!deliverer) return; // delivery disabled — no query
-  const rows = await withOrg(db, orgId, (tx) =>
+  const rows = await withOrg(db, orgId, role, (tx) =>
     tx
       .select(firingColumns)
       .from(alertFirings)
@@ -324,7 +345,7 @@ export async function deliverResolvedFirings(
       log?.(err);
     }
     // Stamp regardless of outcome — at-most-once resolve notice.
-    await withOrg(db, orgId, (tx) =>
+    await withOrg(db, orgId, role, (tx) =>
       tx
         .update(alertFirings)
         .set({ resolveDeliveredAt: now })

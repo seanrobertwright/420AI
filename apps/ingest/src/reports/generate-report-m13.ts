@@ -41,6 +41,7 @@ import {
 export async function generateToolModelComparisonReport(
   db: Db,
   orgId: string,
+  role: string,
   userId: string,
   projectId: string,
   generatedAt: string,
@@ -48,7 +49,7 @@ export async function generateToolModelComparisonReport(
   // Sequential inside the RLS transaction: a transaction is ONE connection, so `Promise.all`
   // here never overlapped — node-postgres queues the queries and warns that concurrent
   // client.query() is deprecated (removed in pg@9). See routes/monitor.ts for the full note.
-  const { rows, projectName } = await withOrg(db, orgId, async (tx) => ({
+  const { rows, projectName } = await withOrg(db, orgId, role, async (tx) => ({
     rows: await toolStatsByModel(tx, orgId, projectId),
     projectName: await getProjectName(tx, orgId, projectId),
   }));
@@ -58,7 +59,7 @@ export async function generateToolModelComparisonReport(
     generatedAt,
     ...metrics,
   });
-  return insertReportArtifact(db, {
+  return insertReportArtifact(db, role, {
     orgId,
     userId,
     projectId,
@@ -77,6 +78,7 @@ export async function generateToolModelComparisonReport(
 export async function generateFailedToolCallsReport(
   db: Db,
   orgId: string,
+  role: string,
   userId: string,
   projectId: string,
   bucket: "day" | "week",
@@ -85,7 +87,7 @@ export async function generateFailedToolCallsReport(
   // Sequential inside the RLS transaction: a transaction is ONE connection, so `Promise.all`
   // here never overlapped — node-postgres queues the queries and warns that concurrent
   // client.query() is deprecated (removed in pg@9). See routes/monitor.ts for the full note.
-  const { breakdown, series, projectName } = await withOrg(db, orgId, async (tx) => ({
+  const { breakdown, series, projectName } = await withOrg(db, orgId, role, async (tx) => ({
     breakdown: await failedToolBreakdown(tx, orgId, projectId),
     series: await failureSeries(tx, orgId, projectId, bucket),
     projectName: await getProjectName(tx, orgId, projectId),
@@ -97,7 +99,7 @@ export async function generateFailedToolCallsReport(
     bucket,
     ...metrics,
   });
-  return insertReportArtifact(db, {
+  return insertReportArtifact(db, role, {
     orgId,
     userId,
     projectId,
@@ -116,6 +118,7 @@ export async function generateFailedToolCallsReport(
 export async function generateContextWasteReport(
   db: Db,
   orgId: string,
+  role: string,
   userId: string,
   projectId: string,
   generatedAt: string,
@@ -123,7 +126,7 @@ export async function generateContextWasteReport(
   // Sequential inside the RLS transaction: a transaction is ONE connection, so `Promise.all`
   // here never overlapped — node-postgres queues the queries and warns that concurrent
   // client.query() is deprecated (removed in pg@9). See routes/monitor.ts for the full note.
-  const { sample, projectName } = await withOrg(db, orgId, async (tx) => ({
+  const { sample, projectName } = await withOrg(db, orgId, role, async (tx) => ({
     sample: await contextPathSample(tx, orgId, projectId),
     projectName: await getProjectName(tx, orgId, projectId),
   }));
@@ -136,7 +139,7 @@ export async function generateContextWasteReport(
     generatedAt,
     ...metrics,
   });
-  return insertReportArtifact(db, {
+  return insertReportArtifact(db, role, {
     orgId,
     userId,
     projectId,
@@ -155,6 +158,7 @@ export async function generateContextWasteReport(
 export async function generateProjectEfficiencyReport(
   db: Db,
   orgId: string,
+  role: string,
   userId: string,
   projectId: string,
   generatedAt: string,
@@ -162,7 +166,7 @@ export async function generateProjectEfficiencyReport(
   // Sequential inside the RLS transaction: a transaction is ONE connection, so `Promise.all`
   // here never overlapped — node-postgres queues the queries and warns that concurrent
   // client.query() is deprecated (removed in pg@9). See routes/monitor.ts for the full note.
-  const { totals, sessions, commits, projectName } = await withOrg(db, orgId, async (tx) => ({
+  const { totals, sessions, commits, projectName } = await withOrg(db, orgId, role, async (tx) => ({
     totals: await usageTotals(tx, orgId, projectId),
     sessions: await sessionProjections(tx, orgId, projectId),
     commits: await gitCommitsByProject(tx, orgId, projectId),
@@ -174,7 +178,7 @@ export async function generateProjectEfficiencyReport(
     generatedAt,
     ...metrics,
   });
-  return insertReportArtifact(db, {
+  return insertReportArtifact(db, role, {
     orgId,
     userId,
     projectId,
@@ -193,6 +197,7 @@ export async function generateProjectEfficiencyReport(
 export async function generateTrendAnomaliesReport(
   db: Db,
   orgId: string,
+  role: string,
   userId: string,
   projectId: string,
   bucket: "day" | "week",
@@ -201,11 +206,16 @@ export async function generateTrendAnomaliesReport(
   // Sequential inside the RLS transaction: a transaction is ONE connection, so `Promise.all`
   // here never overlapped — node-postgres queues the queries and warns that concurrent
   // client.query() is deprecated (removed in pg@9). See routes/monitor.ts for the full note.
-  const { costSeries, failureSeriesRows, projectName } = await withOrg(db, orgId, async (tx) => ({
-    costSeries: await usageOverTime(tx, orgId, projectId, bucket),
-    failureSeriesRows: await failureSeries(tx, orgId, projectId, bucket),
-    projectName: await getProjectName(tx, orgId, projectId),
-  }));
+  const { costSeries, failureSeriesRows, projectName } = await withOrg(
+    db,
+    orgId,
+    role,
+    async (tx) => ({
+      costSeries: await usageOverTime(tx, orgId, projectId, bucket),
+      failureSeriesRows: await failureSeries(tx, orgId, projectId, bucket),
+      projectName: await getProjectName(tx, orgId, projectId),
+    }),
+  );
   const costAnomalies = detectAnomalies(
     costSeries.map((r) => ({ bucket: r.bucket, value: r.costUsd })),
   );
@@ -228,7 +238,7 @@ export async function generateTrendAnomaliesReport(
     bucket,
     ...metrics,
   });
-  return insertReportArtifact(db, {
+  return insertReportArtifact(db, role, {
     orgId,
     userId,
     projectId,

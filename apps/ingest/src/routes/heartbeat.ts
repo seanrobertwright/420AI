@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { HeartbeatRequest, HeartbeatResponse } from "@420ai/shared";
+import { SERVICE_ROLE } from "@420ai/shared";
 import { recordHeartbeat, getMachineOrgId, withOrg } from "@420ai/db";
 import { heartbeatBodySchema } from "../schemas.js";
 
@@ -22,7 +23,7 @@ export default async function heartbeatRoutes(app: FastifyInstance): Promise<voi
       if (!orgId) {
         return reply.code(401).send({ error: "machine has no organization" });
       }
-      await withOrg(app.db, orgId, (tx) =>
+      await withOrg(app.db, orgId, SERVICE_ROLE, (tx) =>
         recordHeartbeat(tx, request.machineId, {
           queuePending: request.body.queuePending,
           queueInflight: request.body.queueInflight,

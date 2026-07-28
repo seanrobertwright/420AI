@@ -90,7 +90,7 @@ describe.skipIf(!TEST_URL)("git repository (integration)", () => {
       gitRemote: REMOTE,
     });
     const { id: projectId } = await findOrCreateProjectByRemote(dbh.db, userId, REMOTE, "420AI");
-    await remapWorkspace(dbh.db, userId, ws.id, projectId);
+    await remapWorkspace(dbh.db, orgId, ws.id, projectId);
     await addWorkspaceKey(dbh.db, {
       userId,
       workspaceId: ws.id,
@@ -110,19 +110,21 @@ describe.skipIf(!TEST_URL)("git repository (integration)", () => {
     expect((commits[0] as unknown as { message?: unknown }).message).toBeUndefined();
   });
 
-  it("gitCommitDetail resolves by SHA (scoped to the user) and returns its files", async () => {
+  it("gitCommitDetail resolves by SHA (scoped to org AND user) and returns its files", async () => {
     await recordGitCommits(dbh.db, machineId, sampleReq("detailsha"));
-    const detail = await gitCommitDetail(dbh.db, userId, "detailsha");
+    const detail = await gitCommitDetail(dbh.db, orgId, userId, "detailsha");
     expect(detail).toBeDefined();
     expect(detail!.commit.commitSha).toBe("detailsha");
     expect(detail!.files).toHaveLength(2);
-    // a different user cannot see it
+    // a different org+user cannot see it (M15 15.4 — this read keeps BOTH predicates; see
+    // the repo comment for why it is not part of the org-widening)
     const [other] = await dbh.db
       .insert(users)
       .values({ email: "other@example.com" })
       .returning({ id: users.id });
-    await ensurePersonalOrg(dbh.db, other!.id, "other@example.com");
-    const miss = await gitCommitDetail(dbh.db, other!.id, "detailsha");
+    const otherOrg = await ensurePersonalOrg(dbh.db, other!.id, "other@example.com");
+    // The other user queries under their OWN org: cross-org AND cross-user isolation.
+    const miss = await gitCommitDetail(dbh.db, otherOrg, other!.id, "detailsha");
     expect(miss).toBeUndefined();
   });
 

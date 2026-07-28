@@ -122,6 +122,9 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.3 RLS through the HTTP surface", 
     app = buildApp({
       db: appRole.db,
       adminToken: SERVICE_TOKEN,
+      // M15 15.4: reconcile on EVERY tick, i.e. exactly pre-15.4 behaviour — tests that assert
+      // a firing appears on the first GET must not race the 30 s production throttle.
+      reconcileThrottleMs: 0,
       adminEmail: ADMIN_EMAIL,
       sessionSecret: SESSION_SECRET,
       analysisProvider: stubProvider,
@@ -417,6 +420,9 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.3 RLS through the HTTP surface", 
     const deliveryApp = buildApp({
       db: appRole.db,
       adminToken: SERVICE_TOKEN,
+      // M15 15.4: reconcile on EVERY tick, i.e. exactly pre-15.4 behaviour — tests that assert
+      // a firing appears on the first GET must not race the 30 s production throttle.
+      reconcileThrottleMs: 0,
       adminEmail: ADMIN_EMAIL,
       sessionSecret: SESSION_SECRET,
       analysisProvider: stubProvider,

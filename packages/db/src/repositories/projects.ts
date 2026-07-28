@@ -70,19 +70,25 @@ export async function findOrCreateProjectByRemote(
   return { id: existing!.id, created: false };
 }
 
-/** Create a project unconditionally (the remote-less / explicit-admin path). */
+/**
+ * Create a project unconditionally (the remote-less / explicit-admin path).
+ *
+ * M15 15.4 — `orgId` is now an explicit SECOND parameter rather than a `getOrgIdForUser`
+ * lookup inside the function. The only caller is the machine-authed
+ * POST /v1/workspaces/discover, which resolves the org ONCE at the route and passes it here —
+ * one query instead of one per project, and it retires another 15.1 seam.
+ *
+ * `getOrgIdForUser` is NOT deleted: `findOrCreateProjectByRemote`, `upsertWorkspace` and
+ * `addWorkspaceKey` still need it, and `createPairingCode` must keep it (D-15.2-5 — it writes
+ * a row for a TARGET user who may not be the caller).
+ */
 export async function createProject(
   db: DbClient,
+  orgId: string,
   userId: string,
   name: string,
   gitRemote?: string,
 ): Promise<{ id: string }> {
-  // M15 15.2: this write is reached ONLY from the MACHINE-authed
-  // POST /v1/workspaces/discover, where there is no request principal to take an
-  // org from — the caller is a collector bearing a machine token. `getOrgIdForUser`
-  // therefore SURVIVES here by design; D-M15-7 (slice 15.9) is where the machine
-  // credential tier gets its own org resolution.
-  const orgId = await getOrgIdForUser(db, userId);
   const [row] = await db
     .insert(projects)
     .values({ orgId, userId, name, gitRemote: gitRemote ?? null })
@@ -91,23 +97,28 @@ export async function createProject(
 }
 
 /**
- * List a user's non-archived projects, newest first. Optionally paged (M13
+ * List an ORG's non-archived projects, newest first. Optionally paged (M13
  * 13.4): `limit`/`offset` apply ONLY when provided — an omitted limit returns
  * the FULL list, because several consumers depend on completeness (the project
  * detail page's existence authority, the workspace-remap picker, the
  * collector's mapping flows). The paged dashboard list passes an explicit
  * limit. `createdAt` then `id` orders deterministically so offset pages never
  * duplicate/drop a row.
+ *
+ * M15 15.4 — `orgId` SECOND, and it REPLACES the `userId` predicate rather than joining it.
+ * D-15.4-2 is explicit: every org member sees every project in the org. Keeping `user_id` would
+ * have left RLS as the sole tenant boundary (the inverse of D-M15-3) AND hidden a colleague's
+ * projects from a legitimate member.
  */
 export async function listProjects(
   db: DbClient,
-  userId: string,
+  orgId: string,
   page?: { limit?: number; offset?: number },
 ): Promise<ProjectRow[]> {
   const query = db
     .select(projectRowColumns)
     .from(projects)
-    .where(and(eq(projects.userId, userId), isNull(projects.archivedAt)))
+    .where(and(eq(projects.orgId, orgId), isNull(projects.archivedAt)))
     .orderBy(desc(projects.createdAt), desc(projects.id))
     .$dynamic();
   if (page?.limit !== undefined) query.limit(page.limit);

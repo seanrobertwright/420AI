@@ -86,7 +86,7 @@ describe.skipIf(!TEST_URL)("monitor repository (integration)", () => {
       collectorVersion: "0.9.0",
       now: NOW,
     });
-    const rows = await machineStatuses(dbh.db, userId);
+    const rows = await machineStatuses(dbh.db, orgId);
     expect(rows).toHaveLength(1);
     const m = rows[0]!;
     expect(m.id).toBe(machineId);
@@ -105,7 +105,7 @@ describe.skipIf(!TEST_URL)("monitor repository (integration)", () => {
   });
 
   it("machine with no heartbeat yet → null heartbeat columns, never crashes", async () => {
-    const rows = await machineStatuses(dbh.db, userId);
+    const rows = await machineStatuses(dbh.db, orgId);
     expect(rows).toHaveLength(1);
     const m = rows[0]!;
     expect(m.lastHeartbeatAt).toBeNull();
@@ -122,7 +122,7 @@ describe.skipIf(!TEST_URL)("monitor repository (integration)", () => {
     await seedSession();
 
     // since = 15 min before the last event → included
-    const within = await activeSessions(dbh.db, userId, "2026-06-14T11:45:00.000Z");
+    const within = await activeSessions(dbh.db, orgId, "2026-06-14T11:45:00.000Z");
     expect(within).toHaveLength(1);
     const s = within[0]!;
     expect(s.sessionId).toBe(SESSION);
@@ -135,18 +135,21 @@ describe.skipIf(!TEST_URL)("monitor repository (integration)", () => {
     expect(s.lastEventAt).toBe(LAST_EVENT);
 
     // since = AFTER the last event → excluded
-    const after = await activeSessions(dbh.db, userId, "2026-06-14T12:30:00.000Z");
+    const after = await activeSessions(dbh.db, orgId, "2026-06-14T12:30:00.000Z");
     expect(after).toEqual([]);
   });
 
-  it("activeSessions is scoped to the user (another user's events do not leak)", async () => {
+  it("activeSessions is scoped to the ORG (another org's events do not leak)", async () => {
     await seedSession();
     const [u2] = await dbh.db
       .insert(users)
       .values({ email: "other@example.com" })
       .returning({ id: users.id });
-    await ensurePersonalOrg(dbh.db, u2!.id, "other@example.com");
-    const other = await activeSessions(dbh.db, u2!.id, "2026-06-14T11:45:00.000Z");
+    const org2 = await ensurePersonalOrg(dbh.db, u2!.id, "other@example.com");
+    // M15 15.4: these reads are now ORG-scoped, not user-scoped (D-15.4-2 — every org member
+    // sees every machine/session in their org). So the other user is queried under their OWN
+    // org, which is what the assertion now proves: cross-ORG isolation.
+    const other = await activeSessions(dbh.db, org2, "2026-06-14T11:45:00.000Z");
     expect(other).toEqual([]);
   });
 
@@ -172,7 +175,7 @@ describe.skipIf(!TEST_URL)("monitor repository (integration)", () => {
     expect(samples[0]!.queueInflight).toBe(1);
     expect(samples[0]!.ts.toISOString()).toBe(NOW.toISOString());
     // The machine latest columns are still updated (M9 read path unchanged).
-    const rows = await machineStatuses(dbh.db, userId);
+    const rows = await machineStatuses(dbh.db, orgId);
     expect(rows[0]!.queuePending).toBe(42);
     expect(rows[0]!.lastHeartbeatAt).toBe(NOW.toISOString());
   });
@@ -199,7 +202,7 @@ describe.skipIf(!TEST_URL)("monitor repository (integration)", () => {
     });
 
     const since = new Date(NOW.getTime() - 10 * 60_000);
-    const byMachine = await recentBacklogSamples(dbh.db, userId, since);
+    const byMachine = await recentBacklogSamples(dbh.db, orgId, since);
     const list = byMachine.get(machineId)!;
     expect(list).toHaveLength(3);
     // Sorted ascending by ts; queuePending in insertion order.
@@ -208,7 +211,7 @@ describe.skipIf(!TEST_URL)("monitor repository (integration)", () => {
     expect(list[2]!.ts).toBe(NOW.toISOString());
 
     // A `since` after all samples excludes them.
-    const empty = await recentBacklogSamples(dbh.db, userId, new Date(NOW.getTime() + 60_000));
+    const empty = await recentBacklogSamples(dbh.db, orgId, new Date(NOW.getTime() + 60_000));
     expect(empty.get(machineId)).toBeUndefined();
 
     // Another user's view does not leak this machine's samples.
@@ -216,8 +219,9 @@ describe.skipIf(!TEST_URL)("monitor repository (integration)", () => {
       .insert(users)
       .values({ email: "other@example.com" })
       .returning({ id: users.id });
-    await ensurePersonalOrg(dbh.db, u2!.id, "other@example.com");
-    const other = await recentBacklogSamples(dbh.db, u2!.id, since);
+    const org2 = await ensurePersonalOrg(dbh.db, u2!.id, "other@example.com");
+    // Own org context — ORG isolation, see the activeSessions sibling above.
+    const other = await recentBacklogSamples(dbh.db, org2, since);
     expect(other.get(machineId)).toBeUndefined();
   });
 

@@ -268,7 +268,7 @@ describe.skipIf(!TEST_URL)("M15 15.2 request principal + org-scoped reads (integ
 
   // 5 ── getReportArtifact fetched any report by uuid with no owner check.
   it("getReportArtifact returns undefined for ANOTHER org's report id (404, never 403)", async () => {
-    const row = await insertReportArtifact(dbh.db, {
+    const row = await insertReportArtifact(dbh.db, "member", {
       orgId: orgA,
       userId: userA,
       projectId: null,
@@ -292,7 +292,7 @@ describe.skipIf(!TEST_URL)("M15 15.2 request principal + org-scoped reads (integ
   // 6 ── audit B.3: the version bump raced and 500ed under concurrency.
   it("8 concurrent generations for one scope all succeed with contiguous versions", async () => {
     const make = (i: number) =>
-      insertReportArtifact(dbh.db, {
+      insertReportArtifact(dbh.db, "member", {
         orgId: orgA,
         userId: userA,
         projectId: null,

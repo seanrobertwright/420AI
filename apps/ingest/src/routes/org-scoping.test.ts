@@ -54,6 +54,15 @@ const ALLOWED_WITHOUT_WITHORG: Record<string, string> = {
   "metrics.ts": "no tenant DB access",
 };
 
+/**
+ * M15 15.4 — files that resolve a principal but legitimately carry NO `authorized()` gate.
+ * Deliberately tiny: everything else, including every read, gates at least at `viewer`.
+ */
+const ALLOWED_WITHOUT_ROLE_GATE: Record<string, string> = {
+  // `health.ts` has no principal at all; listed for symmetry with the withOrg allow-list.
+  "health.ts": "unauthenticated liveness probe — no principal to gate",
+};
+
 function routeFiles(): string[] {
   return readdirSync(ROUTES_DIR)
     .filter((f) => f.endsWith(".ts"))
@@ -115,6 +124,38 @@ describe("every route that touches tenant data is org-scoped", () => {
     expect(missing).toEqual([]);
   });
 
+  it("every principal-authed handler file also calls the M15 15.4 role gate", () => {
+    // The 15.4 sibling of the check above, and it exists for the same reason: `tsc` cannot see
+    // a MISSING call. `authorized()` is an ordinary function — forgetting it at a handler is not
+    // a type error, it is a route anyone in the org may hit at full power.
+    //
+    // SAME KNOWN LIMIT as the `withOrg` check, and it is file-granular for the same unfixable
+    // reason: ONE `authorized(` anywhere exempts the whole file, so a file with four handlers
+    // and one gate passes. That is precisely the `monitor.ts` blind spot the header documents.
+    // The behavioural counterpart is `apps/ingest/src/rbac.int.test.ts`, which drives real HTTP
+    // requests as a real viewer and a real member. Treat this as the cheap net, never as proof.
+    const missing: string[] = [];
+    for (const file of routeFiles()) {
+      const src = readFileSync(join(ROUTES_DIR, file), "utf8");
+      if (!src.includes("resolvePrincipal")) continue;
+      if (src.includes("authorized(")) continue;
+      if (file in ALLOWED_WITHOUT_ROLE_GATE) continue;
+      missing.push(file);
+    }
+    expect(
+      missing,
+      `these route files resolve a principal but never gate on its role — add the ` +
+        `authorized(...) check, or add an entry to ALLOWED_WITHOUT_ROLE_GATE with a reason`,
+    ).toEqual([]);
+  });
+
+  it("the role-gate allow-list has no stale entries", () => {
+    const files = new Set(routeFiles());
+    for (const allowed of Object.keys(ALLOWED_WITHOUT_ROLE_GATE)) {
+      expect(files.has(allowed), `allow-list names ${allowed}, which no longer exists`).toBe(true);
+    }
+  });
+
   it("machine-authed write routes resolve the org before wrapping", () => {
     // These have no request principal, so `withOrg` alone is not enough — they must derive the
     // org from `machines` first (which is why `machines` is bootstrap-permissive, D-15.3-3).
@@ -138,8 +179,12 @@ describe("every route that touches tenant data is org-scoped", () => {
     expect(src, "deliverFirings must take an orgId").toMatch(
       /deliverFirings\(\s*app,\s*[\w.]*[Oo]rgId/,
     );
-    expect(src).toMatch(/deliverPendingFirings\(app\.db,\s*orgId,/);
-    expect(src).toMatch(/deliverResolvedFirings\(app\.db,\s*orgId,/);
+    // M15 15.4 added the role argument. It must be SERVICE_ROLE, never `principal.role`:
+    // delivery is TRIGGERED by whoever opened the monitor but the ACTION belongs to the org,
+    // and a viewer's role would make the 0016 restrictive UPDATE policy silently reject the
+    // `delivery_attempted_at` stamp — reviving this exact bug one layer down.
+    expect(src).toMatch(/deliverPendingFirings\(\s*app\.db,\s*orgId,\s*SERVICE_ROLE,/);
+    expect(src).toMatch(/deliverResolvedFirings\(\s*app\.db,\s*orgId,\s*SERVICE_ROLE,/);
   });
 
   it("the deployment-wide maintenance ops iterate per org rather than escaping the policy", () => {

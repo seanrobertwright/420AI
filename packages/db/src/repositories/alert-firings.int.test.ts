@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from "vitest";
 import { and, eq, sql } from "drizzle-orm";
 import type { AlertFiring, OperationalAlert } from "@420ai/shared";
+import { SERVICE_ROLE } from "@420ai/shared";
 import { createDb } from "../index.js";
 import { users, machines, alertFirings } from "../schema.js";
 import {
@@ -117,7 +118,7 @@ describe.skipIf(!TEST_URL)("alert-firings repository (integration)", () => {
     await reconcileAlertFirings(dbh.db, orgId, userId, [offlineAlert()], t3); // re-fire
     // Two rows now exist for the key: the resolved one + the new open one.
     expect(await keyCount(`collector.offline:${machineId}`)).toBe(2);
-    const current = await listAlertFirings(dbh.db, userId, t3);
+    const current = await listAlertFirings(dbh.db, orgId, userId, t3);
     const open = current.find(
       (x) => x.alertKey === `collector.offline:${machineId}` && x.status === "open",
     )!;
@@ -152,12 +153,17 @@ describe.skipIf(!TEST_URL)("alert-firings repository (integration)", () => {
     await reconcileAlertFirings(dbh.db, orgId, userId, [], t2);
     // A `now` far past the resolved window (> 1h after t2) drops the resolved firing.
     const farLater = new Date(t2.getTime() + 2 * 60 * 60_000);
-    const listed = await listAlertFirings(dbh.db, userId, farLater);
+    const listed = await listAlertFirings(dbh.db, orgId, userId, farLater);
     expect(listed.find((x) => x.alertKey === `collector.offline:${machineId}`)).toBeUndefined();
 
     // A still-open firing is always listed regardless of `now`.
     await reconcileAlertFirings(dbh.db, orgId, userId, [offlineAlert()], farLater);
-    const withOpen = await listAlertFirings(dbh.db, userId, new Date(farLater.getTime() + 60_000));
+    const withOpen = await listAlertFirings(
+      dbh.db,
+      orgId,
+      userId,
+      new Date(farLater.getTime() + 60_000),
+    );
     expect(
       withOpen.find((x) => x.alertKey === `collector.offline:${machineId}` && x.status === "open"),
     ).toBeDefined();
@@ -169,23 +175,23 @@ describe.skipIf(!TEST_URL)("alert-firings repository (integration)", () => {
 
     // Open + deliver the open firing (stamps delivery_attempted_at).
     await reconcileAlertFirings(dbh.db, orgId, userId, [offlineAlert()], t0);
-    await deliverPendingFirings(dbh.db, orgId, userId, deliverer, t1);
+    await deliverPendingFirings(dbh.db, orgId, SERVICE_ROLE, userId, deliverer, t1);
     expect(deliverer.deliver).toHaveBeenCalledTimes(1);
     expect(delivered[0]!.status).toBe("open");
 
     // A resolve-delivery pass BEFORE resolution is a no-op (nothing resolved yet).
-    await deliverResolvedFirings(dbh.db, orgId, userId, deliverer, t1);
+    await deliverResolvedFirings(dbh.db, orgId, SERVICE_ROLE, userId, deliverer, t1);
     expect(deliverer.deliver).toHaveBeenCalledTimes(1);
 
     // Resolve the firing (reconcile with []) then deliver the resolve notice — once.
     await reconcileAlertFirings(dbh.db, orgId, userId, [], t2);
-    await deliverResolvedFirings(dbh.db, orgId, userId, deliverer, t3);
+    await deliverResolvedFirings(dbh.db, orgId, SERVICE_ROLE, userId, deliverer, t3);
     expect(deliverer.deliver).toHaveBeenCalledTimes(2);
     expect(delivered[1]!.status).toBe("resolved");
     expect(delivered[1]!.resolvedAt).toBe(t2.toISOString());
 
     // A SECOND resolve-delivery pass is a no-op — resolve_delivered_at is now stamped.
-    await deliverResolvedFirings(dbh.db, orgId, userId, deliverer, t4);
+    await deliverResolvedFirings(dbh.db, orgId, SERVICE_ROLE, userId, deliverer, t4);
     expect(deliverer.deliver).toHaveBeenCalledTimes(2);
 
     // The resolve_delivered_at marker is set exactly once (at t3).
@@ -201,7 +207,7 @@ describe.skipIf(!TEST_URL)("alert-firings repository (integration)", () => {
     // Open then resolve WITHOUT ever calling deliverPendingFirings — delivery_attempted_at stays null.
     await reconcileAlertFirings(dbh.db, orgId, userId, [offlineAlert()], t0);
     await reconcileAlertFirings(dbh.db, orgId, userId, [], t2);
-    await deliverResolvedFirings(dbh.db, orgId, userId, deliverer, t3);
+    await deliverResolvedFirings(dbh.db, orgId, SERVICE_ROLE, userId, deliverer, t3);
     // No resolve notice for a firing that never emitted an open notice (no lone "resolved").
     expect(deliverer.deliver).not.toHaveBeenCalled();
   });
@@ -214,10 +220,19 @@ describe.skipIf(!TEST_URL)("alert-firings repository (integration)", () => {
     };
     const logged: unknown[] = [];
     await reconcileAlertFirings(dbh.db, orgId, userId, [offlineAlert()], t0);
-    await deliverPendingFirings(dbh.db, orgId, userId, { deliver: vi.fn(async () => {}) }, t1);
+    await deliverPendingFirings(
+      dbh.db,
+      orgId,
+      SERVICE_ROLE,
+      userId,
+      { deliver: vi.fn(async () => {}) },
+      t1,
+    );
     await reconcileAlertFirings(dbh.db, orgId, userId, [], t2);
     // The throw is caught + logged, not propagated; the marker is still stamped (at-most-once).
-    await deliverResolvedFirings(dbh.db, orgId, userId, deliverer, t3, (e) => logged.push(e));
+    await deliverResolvedFirings(dbh.db, orgId, SERVICE_ROLE, userId, deliverer, t3, (e) =>
+      logged.push(e),
+    );
     expect(logged).toHaveLength(1);
     const [row] = await dbh.db
       .select({ resolveDeliveredAt: alertFirings.resolveDeliveredAt })
@@ -225,7 +240,9 @@ describe.skipIf(!TEST_URL)("alert-firings repository (integration)", () => {
       .where(and(eq(alertFirings.userId, userId), eq(alertFirings.status, "resolved")));
     expect(row!.resolveDeliveredAt).not.toBeNull();
     // A re-run does NOT retry the failed delivery (marker already set).
-    await deliverResolvedFirings(dbh.db, orgId, userId, deliverer, t4, (e) => logged.push(e));
+    await deliverResolvedFirings(dbh.db, orgId, SERVICE_ROLE, userId, deliverer, t4, (e) =>
+      logged.push(e),
+    );
     expect(deliverer.deliver).toHaveBeenCalledTimes(1);
   });
 

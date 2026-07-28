@@ -87,35 +87,54 @@ describe.skipIf(!TEST_URL)("migration rollback (rollbackLast, integration)", () 
     return r.rows[0]?.indexdef ?? "";
   }
 
-  it("rolls back the latest migration (0015 RLS) and a re-migrate restores it", async () => {
-    // M15 15.3 milestone Risk 4 drill, run in CI rather than by hand: `db:rollback` must
-    // cleanly reverse the RLS backstop, and `db:migrate` must put it back. Ordering matters in
-    // the down SQL — a role cannot be DROPped while it still holds privileges, so REVOKE first.
-    expect(await trackedCount()).toBe(16);
-    expect(await policyCount()).toBe(15);
+  /** Does `project_grants` exist? 0016 creates it; its down drops it. */
+  async function projectGrantsExists(): Promise<boolean> {
+    const r = await pool.query(
+      "select 1 from information_schema.tables where table_name = 'project_grants'",
+    );
+    return r.rowCount === 1;
+  }
+
+  /** How many RESTRICTIVE policies exist (the 15.4 role-write backstop; 0 before 0016). */
+  async function restrictivePolicyCount(): Promise<number> {
+    const r = await pool.query<{ n: string }>(
+      "select count(*) as n from pg_policies where schemaname = 'public' and permissive = 'RESTRICTIVE'",
+    );
+    return Number(r.rows[0]!.n);
+  }
+
+  it("rolls back the latest migration (0016 RBAC) and a re-migrate restores it", async () => {
+    // M15 15.4 D-M15-13 drill, run in CI rather than by hand. The load-bearing assertion is NOT
+    // that 0016 reverses cleanly — it is that reversing it leaves 15.3's TENANCY layer entirely
+    // alone. 0016 never modified the 15 permissive policies (restrictive policies AND with them
+    // rather than replacing them), so its down must not either.
+    expect(await trackedCount()).toBe(17);
+    expect(await policyCount()).toBe(55); // 15 org + 1 new org + 39 restrictive
+    expect(await restrictivePolicyCount()).toBe(39);
+    expect(await projectGrantsExists()).toBe(true);
     expect(await appRoleHasPrivileges()).toBe(true);
     expect(await eventsRlsFlags()).toEqual({ enabled: true, forced: true });
 
     const result = await rollbackLast(TEST_URL!, { downDir, journalPath });
-    expect(result).toEqual({ rolledBack: "0015_shiny_iron_man" });
-    expect(await trackedCount()).toBe(15);
-    // Every policy dropped, RLS disabled AND un-forced.
-    expect(await policyCount()).toBe(0);
-    expect(await eventsRlsFlags()).toEqual({ enabled: false, forced: false });
-    // Privilege-less, not absent — dropping a CLUSTER-wide role from a PER-DATABASE migration
-    // would fail (the other database's grants depend on it) and, if it somehow succeeded, would
-    // break a different database's running server.
-    expect(await appRoleHasPrivileges()).toBe(false);
-    // 0014's tenancy schema is untouched by 0015 in either direction — the org_id columns and
-    // the org-scoped search index survive an RLS rollback, which is the point: rolling back the
-    // BACKSTOP must not touch the data model the PRIMARY defence depends on.
+    expect(result).toEqual({ rolledBack: "0016_strong_magus" });
+    expect(await trackedCount()).toBe(16);
+    // Exactly 0015's 15 policies remain — the role backstop is gone, tenancy is untouched.
+    expect(await policyCount()).toBe(15);
+    expect(await restrictivePolicyCount()).toBe(0);
+    expect(await projectGrantsExists()).toBe(false);
+    expect(await eventsRlsFlags()).toEqual({ enabled: true, forced: true });
+    expect(await appRoleHasPrivileges()).toBe(true);
+    // …and 0014's tenancy schema likewise. Rolling back RBAC must not touch either the data
+    // model the PRIMARY defence depends on, or the backstop below it.
     expect(await orgIdColumnExists()).toBe(true);
     expect(await searchEntityIndexColumns()).toContain("(org_id, entity_type, entity_id)");
 
-    // Re-apply: idempotent re-migrate brings 0015 back + restores the tracking row.
+    // Re-apply: an idempotent re-migrate brings 0016 back + restores the tracking row.
     await runMigrations(TEST_URL!);
-    expect(await trackedCount()).toBe(16);
-    expect(await policyCount()).toBe(15);
+    expect(await trackedCount()).toBe(17);
+    expect(await policyCount()).toBe(55);
+    expect(await restrictivePolicyCount()).toBe(39);
+    expect(await projectGrantsExists()).toBe(true);
     expect(await appRoleHasPrivileges()).toBe(true);
     expect(await eventsRlsFlags()).toEqual({ enabled: true, forced: true });
     await restoreAppRole();

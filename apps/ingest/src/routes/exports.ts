@@ -16,7 +16,7 @@ import {
   type ExportManifest,
   type RedactionFinding,
 } from "@420ai/shared";
-import { resolvePrincipal, isUuid } from "../auth.js";
+import { resolvePrincipal, isUuid, authorized } from "../auth.js";
 import { eventsToParquetBuffer } from "../exports-parquet.js";
 import {
   exportEventsQuerySchema,
@@ -154,6 +154,9 @@ export default async function exportRoutes(app: FastifyInstance): Promise<void> 
       if (!principal) {
         return reply.code(401).send({ error: "admin authorization required" });
       }
+      if (!authorized(principal, "viewer")) {
+        return reply.code(403).send({ error: "insufficient role" });
+      }
       const { format, projectId, sessionId, connector } = request.query;
       // Malformed project id → 404 (a well-formed-unknown id yields an empty export,
       // matching the M6 read semantics); malformed never reaches a Postgres cast 500.
@@ -176,7 +179,7 @@ export default async function exportRoutes(app: FastifyInstance): Promise<void> 
       // M15 15.3: the RLS context wraps ONLY the DB read — redaction, serialization and the
       // Parquet encode stay outside it. Holding a transaction open across a CPU-bound encode
       // of up to EXPORT_MAX_ROWS would pin a pooled connection for the whole export.
-      const { rows, truncated } = await withOrg(app.db, principal.orgId, (tx) =>
+      const { rows, truncated } = await withOrg(app.db, principal.orgId, principal.role, (tx) =>
         exportEvents(tx, principal.orgId, principal.userId, {
           projectId,
           sessionId,
@@ -233,10 +236,13 @@ export default async function exportRoutes(app: FastifyInstance): Promise<void> 
       if (!principal) {
         return reply.code(401).send({ error: "admin authorization required" });
       }
+      if (!authorized(principal, "viewer")) {
+        return reply.code(403).send({ error: "insufficient role" });
+      }
       if (!isUuid(request.params.id)) {
         return reply.code(404).send({ error: "report not found" });
       }
-      const row = await withOrg(app.db, principal.orgId, (tx) =>
+      const row = await withOrg(app.db, principal.orgId, principal.role, (tx) =>
         getReportArtifact(tx, principal.orgId, request.params.id),
       );
       if (!row) return reply.code(404).send({ error: "report not found" });
@@ -297,11 +303,14 @@ export default async function exportRoutes(app: FastifyInstance): Promise<void> 
       if (!principal) {
         return reply.code(401).send({ error: "admin authorization required" });
       }
+      if (!authorized(principal, "viewer")) {
+        return reply.code(403).send({ error: "insufficient role" });
+      }
       // sessionId is a connector text id (NOT a uuid) — ungated; unknown → empty transcript.
       const { sessionId } = request.params;
       const { format } = request.query;
       // Decrypt-and-fetch inside the RLS context; redaction + serialization stay outside.
-      const { entries, truncated } = await withOrg(app.db, principal.orgId, (tx) =>
+      const { entries, truncated } = await withOrg(app.db, principal.orgId, principal.role, (tx) =>
         sessionTranscript(tx, principal.orgId, sessionId),
       );
 

@@ -9,7 +9,7 @@ import {
   getActiveConnectorCatalog,
 } from "@420ai/db";
 import { connectorCatalogUploadBodySchema } from "../schemas.js";
-import { resolvePrincipal, isUuid } from "../auth.js";
+import { resolvePrincipal, isUuid, authorized } from "../auth.js";
 
 interface ConnectorCatalogUploadBody {
   version: string;
@@ -45,6 +45,9 @@ export default async function connectorCatalogRoutes(app: FastifyInstance): Prom
       if (!principal) {
         return reply.code(401).send({ error: "admin authorization required" });
       }
+      if (!authorized(principal, "admin")) {
+        return reply.code(403).send({ error: "insufficient role" });
+      }
       const { version, payload, signature } = request.body;
       // Verify against the INJECTED public key — production uses the bundled constant;
       // tests swap an ephemeral key. A bad signature is a clean 400 (never a 500).
@@ -61,6 +64,9 @@ export default async function connectorCatalogRoutes(app: FastifyInstance): Prom
     if (!principal) {
       return reply.code(401).send({ error: "admin authorization required" });
     }
+    if (!authorized(principal, "viewer")) {
+      return reply.code(403).send({ error: "insufficient role" });
+    }
     return reply.code(200).send(await listConnectorCatalogs(app.db));
   });
 
@@ -71,10 +77,19 @@ export default async function connectorCatalogRoutes(app: FastifyInstance): Prom
       if (!principal) {
         return reply.code(401).send({ error: "admin authorization required" });
       }
+      if (!authorized(principal, "admin")) {
+        return reply.code(403).send({ error: "insufficient role" });
+      }
       if (!isUuid(request.params.id)) {
         return reply.code(404).send({ error: "pending connector catalog not found" });
       }
-      const row = await approveConnectorCatalog(app.db, request.params.id, "admin", new Date());
+      // M15 15.4 (audit B.6) — the real approver, not the literal `"admin"`. See catalog.ts.
+      const row = await approveConnectorCatalog(
+        app.db,
+        request.params.id,
+        principal.email,
+        new Date(),
+      );
       if (!row) return reply.code(404).send({ error: "pending connector catalog not found" });
       return reply.code(200).send(row);
     },
@@ -86,6 +101,9 @@ export default async function connectorCatalogRoutes(app: FastifyInstance): Prom
       const principal = await resolvePrincipal(app, request);
       if (!principal) {
         return reply.code(401).send({ error: "admin authorization required" });
+      }
+      if (!authorized(principal, "admin")) {
+        return reply.code(403).send({ error: "insufficient role" });
       }
       if (!isUuid(request.params.id)) {
         return reply.code(404).send({ error: "pending connector catalog not found" });

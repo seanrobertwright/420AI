@@ -3,7 +3,7 @@ import type { ModelPricing } from "@420ai/shared";
 import { verifyCatalogSignature } from "@420ai/shared";
 import { insertPendingCatalog, listCatalogs, approveCatalog, rejectCatalog } from "@420ai/db";
 import { catalogUploadBodySchema } from "../schemas.js";
-import { resolvePrincipal, isUuid } from "../auth.js";
+import { resolvePrincipal, isUuid, authorized } from "../auth.js";
 
 interface CatalogUploadBody {
   version: string;
@@ -38,6 +38,9 @@ export default async function catalogRoutes(app: FastifyInstance): Promise<void>
       if (!principal) {
         return reply.code(401).send({ error: "admin authorization required" });
       }
+      if (!authorized(principal, "admin")) {
+        return reply.code(403).send({ error: "insufficient role" });
+      }
       const { version, payload, signature } = request.body;
       // Verify against the INJECTED public key (D4) — production uses the bundled
       // constant; tests swap an ephemeral key. A bad signature is a clean 400.
@@ -54,6 +57,9 @@ export default async function catalogRoutes(app: FastifyInstance): Promise<void>
     if (!principal) {
       return reply.code(401).send({ error: "admin authorization required" });
     }
+    if (!authorized(principal, "viewer")) {
+      return reply.code(403).send({ error: "insufficient role" });
+    }
     return reply.code(200).send(await listCatalogs(app.db));
   });
 
@@ -62,10 +68,16 @@ export default async function catalogRoutes(app: FastifyInstance): Promise<void>
     if (!principal) {
       return reply.code(401).send({ error: "admin authorization required" });
     }
+    if (!authorized(principal, "admin")) {
+      return reply.code(403).send({ error: "insufficient role" });
+    }
     if (!isUuid(request.params.id)) {
       return reply.code(404).send({ error: "pending catalog not found" });
     }
-    const row = await approveCatalog(app.db, request.params.id, "admin", new Date());
+    // M15 15.4 (audit B.6): the REAL approver, not the hardcoded literal `"admin"` this used
+    // to record. The row is an audit trail; "admin" identified nobody. The gate above is what
+    // makes the recorded identity meaningful.
+    const row = await approveCatalog(app.db, request.params.id, principal.email, new Date());
     if (!row) return reply.code(404).send({ error: "pending catalog not found" });
     return reply.code(200).send(row);
   });
@@ -74,6 +86,9 @@ export default async function catalogRoutes(app: FastifyInstance): Promise<void>
     const principal = await resolvePrincipal(app, request);
     if (!principal) {
       return reply.code(401).send({ error: "admin authorization required" });
+    }
+    if (!authorized(principal, "admin")) {
+      return reply.code(403).send({ error: "insufficient role" });
     }
     if (!isUuid(request.params.id)) {
       return reply.code(404).send({ error: "pending catalog not found" });

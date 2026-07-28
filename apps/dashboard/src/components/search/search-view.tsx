@@ -8,6 +8,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { splitSnippet } from "@/lib/snippet";
+import { FORBIDDEN_MESSAGE } from "@/lib/mutation-error";
 
 /** Page size for search results — matches the server default; offset paging appends. */
 const SEARCH_PAGE = 20;
@@ -147,7 +148,7 @@ export function SearchView() {
     try {
       const res = await fetch("/api/search/reindex", { method: "POST" });
       if (!res.ok) {
-        setReindexMsg(`Reindex failed (${res.status}).`);
+        setReindexMsg(res.status === 403 ? FORBIDDEN_MESSAGE : `Reindex failed (${res.status}).`);
         return;
       }
       const c = (await res.json()) as ReindexCounts;

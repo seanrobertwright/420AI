@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { resolvePrincipal } from "../auth.js";
+import { resolvePrincipal, authorized } from "../auth.js";
 
 /**
  * GET /v1/metrics — admin-gated server self-observability (M12 12.4b). A readable JSON
@@ -12,6 +12,9 @@ export default async function metricsRoutes(app: FastifyInstance): Promise<void>
     const principal = await resolvePrincipal(app, request);
     if (!principal) {
       return reply.code(401).send({ error: "admin authorization required" });
+    }
+    if (!authorized(principal, "admin")) {
+      return reply.code(403).send({ error: "insufficient role" });
     }
     const m = app.metrics;
     return reply.code(200).send({
