@@ -445,3 +445,94 @@ export const searchQuerySchema = {
     offset: { type: "integer", minimum: 0 },
   },
 } as const;
+
+// --- M15 15.5 identity core ---
+//
+// Every schema below carries `additionalProperties: false` and lists each field in `required`, so a
+// missing or unexpected field is a 400 via app.ts's `err.validation` branch BEFORE the handler
+// runs — which matters more here than anywhere else, because these bodies carry credentials.
+//
+// The `role` enums are the literal four strings from `ROLES` in `packages/shared/src/roles.ts:11`.
+// A Fastify JSON-schema enum cannot reference a TypeScript const, so THEY ARE KEPT IN SYNC BY HAND:
+// adding a fifth rung means editing `ROLES`, `RANK`, and both enums below.
+//
+// `password` is `minLength: 12` on every credential-SETTING route (accept-invite, signup, reset
+// confirm, change) but `minLength: 1` on LOGIN — login must keep accepting an ADMIN_PASSWORD seeded
+// before this rule existed, whereas a password chosen through one of these routes is new and can be
+// held to the higher bar.
+const MIN_NEW_PASSWORD_LENGTH = 12;
+
+/** POST /v1/members/invite body — the invitee's email + the rung to grant them. */
+export const inviteMemberBodySchema = {
+  type: "object",
+  required: ["email", "role"],
+  additionalProperties: false,
+  properties: {
+    email: { type: "string", minLength: 3, maxLength: 320 },
+    role: { type: "string", enum: ["viewer", "member", "admin", "owner"] },
+  },
+} as const;
+
+/** PATCH /v1/members/:userId body — the member's new rung. */
+export const patchMemberRoleBodySchema = {
+  type: "object",
+  required: ["role"],
+  additionalProperties: false,
+  properties: {
+    role: { type: "string", enum: ["viewer", "member", "admin", "owner"] },
+  },
+} as const;
+
+/** POST /v1/auth/invites/accept body — the invite token + the password the invitee chooses. */
+export const acceptInviteBodySchema = {
+  type: "object",
+  required: ["token", "password"],
+  additionalProperties: false,
+  properties: {
+    token: { type: "string", minLength: 1 },
+    password: { type: "string", minLength: MIN_NEW_PASSWORD_LENGTH, maxLength: 256 },
+  },
+} as const;
+
+/** POST /v1/auth/signup body — gated behind SELF_SIGNUP_ENABLED (D-15.5-5), off by default. */
+export const signupBodySchema = {
+  type: "object",
+  required: ["email", "password"],
+  additionalProperties: false,
+  properties: {
+    email: { type: "string", minLength: 3, maxLength: 320 },
+    password: { type: "string", minLength: MIN_NEW_PASSWORD_LENGTH, maxLength: 256 },
+  },
+} as const;
+
+/** POST /v1/auth/password-reset body — the address to mail a reset link to (always 202). */
+export const passwordResetRequestBodySchema = {
+  type: "object",
+  required: ["email"],
+  additionalProperties: false,
+  properties: {
+    email: { type: "string", minLength: 3, maxLength: 320 },
+  },
+} as const;
+
+/** POST /v1/auth/password-reset/confirm body — the mailed token + the new password. */
+export const passwordResetConfirmBodySchema = {
+  type: "object",
+  required: ["token", "password"],
+  additionalProperties: false,
+  properties: {
+    token: { type: "string", minLength: 1 },
+    password: { type: "string", minLength: MIN_NEW_PASSWORD_LENGTH, maxLength: 256 },
+  },
+} as const;
+
+/** POST /v1/auth/password body — session-gated change of one's OWN password. */
+export const changePasswordBodySchema = {
+  type: "object",
+  required: ["currentPassword", "newPassword"],
+  additionalProperties: false,
+  properties: {
+    currentPassword: { type: "string", minLength: 1 },
+    newPassword: { type: "string", minLength: MIN_NEW_PASSWORD_LENGTH, maxLength: 256 },
+  },
+} as const;

@@ -2,13 +2,14 @@ import { randomBytes } from "node:crypto";
 import Fastify, { type FastifyError, type FastifyInstance } from "fastify";
 import rateLimit from "@fastify/rate-limit";
 import type { Db } from "@420ai/db";
-import { PairingError } from "@420ai/db";
+import { PairingError, InviteError, MemberError, PasswordResetError } from "@420ai/db";
 import { createMetrics, registerMetricsHook } from "./metrics.js";
 import authPlugin from "./plugins/auth.js";
 import authRoutes from "./routes/auth.js";
 import healthRoutes from "./routes/health.js";
 import metricsRoutes from "./routes/metrics.js";
 import pairingCodeRoutes from "./routes/pairing-codes.js";
+import memberRoutes from "./routes/members.js";
 import pairRoutes from "./routes/pair.js";
 import ingestRoutes from "./routes/ingest.js";
 import projectRoutes from "./routes/projects.js";
@@ -28,6 +29,7 @@ import searchRoutes from "./routes/search.js";
 import { CATALOG_PUBLIC_KEY, CONNECTOR_CATALOG_PUBLIC_KEY } from "@420ai/shared";
 import { AnalysisProviderError, type AnalysisProvider } from "./analysis/provider.js";
 import type { AlertDeliverer } from "./delivery/alert-deliverer.js";
+import type { Mailer } from "./delivery/mailer.js";
 
 const DEFAULT_ANALYSIS_MAX_OUTPUT_TOKENS = 4096;
 const DEFAULT_MONITOR_STREAM_INTERVAL_MS = 3000;
@@ -80,6 +82,14 @@ export interface BuildAppOptions {
   /** M12 12.6 injected alert deliverer. Omitted → null → delivery disabled (mirrors rateLimit
    * opt-in): every existing buildApp caller is unchanged; only server.ts builds a webhook one. */
   alertDeliverer?: AlertDeliverer | null;
+  /** M15 15.5 injected transactional mailer (invites, password resets). Omitted → null → the
+   * invite route returns the token in its response (D-15.5-10) and the reset route 503s. Same
+   * opt-in shape as `alertDeliverer`, so no existing caller changes and no test opens SMTP. */
+  mailer?: Mailer | null;
+  /** M15 15.5 (D-M15-6) self-signup. Omitted → FALSE, and that default is the single most
+   * consequential one in the slice: `true` would turn every existing test caller — and every
+   * deployment that upgrades without touching `.env` — into an open-signup box. */
+  selfSignupEnabled?: boolean;
 }
 
 /**
@@ -136,6 +146,10 @@ export function buildApp(opts: BuildAppOptions): FastifyInstance {
   // M12 12.6 alert delivery: omitted → null → disabled (no webhook). The monitor route's
   // deliverFirings early-returns when null, so the default no-webhook path adds no query.
   app.decorate("alertDeliverer", opts.alertDeliverer ?? null);
+  // M15 15.5 identity core. Both decorated BEFORE the route registrations below, like every other
+  // decoration, so `app.mailer` / `app.selfSignupEnabled` resolve inside the handlers.
+  app.decorate("mailer", opts.mailer ?? null);
+  app.decorate("selfSignupEnabled", opts.selfSignupEnabled ?? false);
 
   // M12 12.4b metrics: decorate the store BEFORE registering the hook (the hook reads
   // app.metrics) and the route. Default-on so the 7 existing callers get counters for free;
@@ -168,6 +182,7 @@ export function buildApp(opts: BuildAppOptions): FastifyInstance {
   app.register(authRoutes);
   app.register(healthRoutes);
   app.register(pairingCodeRoutes);
+  app.register(memberRoutes);
   app.register(pairRoutes);
   app.register(ingestRoutes);
   app.register(projectRoutes);
@@ -189,6 +204,20 @@ export function buildApp(opts: BuildAppOptions): FastifyInstance {
   app.setErrorHandler((err: FastifyError, request, reply) => {
     if (err instanceof PairingError) {
       return reply.code(410).send({ error: err.message });
+    }
+    // M15 15.5 — an invite token and a reset token are the same KIND of thing as a pairing code: a
+    // short-lived single-use credential. 410 Gone for all three, and the typed `reason` rides along
+    // so a client can tell "expired" from "already used" without parsing the message.
+    if (err instanceof InviteError || err instanceof PasswordResetError) {
+      return reply.code(410).send({ error: err.message, reason: err.reason });
+    }
+    // A membership mutation refused by the repository. `last_owner` is a CONFLICT with the org's
+    // current state (409); `not_a_member` is a missing subject (404). Mapped by reason rather than
+    // collapsed, because "you cannot do that" and "that does not exist" are different answers.
+    if (err instanceof MemberError) {
+      return reply
+        .code(err.reason === "not_a_member" ? 404 : 409)
+        .send({ error: err.message, reason: err.reason });
     }
     // Provider failures (non-200/timeout/parse → 502; not-configured → 503). Placed
     // BEFORE the status>=500 masking branch, which would otherwise hide the message.

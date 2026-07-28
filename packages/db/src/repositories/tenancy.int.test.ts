@@ -71,7 +71,7 @@ function convergingBatch(machineTag: string): IngestBatch {
   };
 }
 
-/** The 15 tables that MUST carry a NOT NULL org_id (plan Task 2). */
+/** The tables that MUST carry a NOT NULL org_id (plan Task 2; grown by 15.4 and 15.5). */
 const TENANT_TABLES = [
   "machines",
   "pairing_codes",
@@ -91,11 +91,18 @@ const TENANT_TABLES = [
   // M15 15.4 — per-project capability grants. Carries `org_id` (not merely reachable via
   // `project_id`) so it is coverable by the same one-column policy as every other tenant table.
   "project_grants",
+  // M15 15.5 — an invitation is ORG-OWNED (it grants a rung in ONE org), so it is a tenant table
+  // like any other. Its SIBLING, `password_reset_tokens`, is deliberately NOT here: a reset token
+  // belongs to an IDENTITY, not an org, and appears in GLOBAL_TABLES below (D-15.5-1).
+  "invites",
 ] as const;
 
 /** Tables that must NOT gain org_id — identities and deployment-global data (D-M15-9). */
 const GLOBAL_TABLES = [
   "users",
+  // M15 15.5 (D-15.5-1): keyed by `user_id`, read before any org context exists. If this ever
+  // gains an `org_id` the two-table split has been undone and D-15.3-4 needs revisiting.
+  "password_reset_tokens",
   "pricing_catalogs",
   "connector_catalogs",
   "ingest_auth_failures",
@@ -333,7 +340,7 @@ describe.skipIf(!TEST_URL)("M15 tenancy invariants (integration)", () => {
   });
 
   // 3b ── the tenant/global split is exactly what the milestone decided.
-  it("the 15 tenant tables carry NOT NULL org_id + an FK; the 4 global tables do not", async () => {
+  it("every tenant table carries NOT NULL org_id + an FK; the global tables do not", async () => {
     const cols = (
       await dbh.db.execute(sql`
         SELECT table_name, is_nullable

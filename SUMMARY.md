@@ -241,7 +241,7 @@ through the deferral-audit + scope conversation that produced M12/M13/M14. Full 
   fixed roles + per-project grants (D-M15-4), all four identity paths + reset + MFA (D-M15-5),
   `ADMIN_TOKEN` retired to a bootstrap-only seed (D-M15-7). Slices: **15.0** ✅ Truth + RLS spike ·
   **15.1** ✅ Tenancy schema · **15.2** ✅ Request principal · **15.3** ✅ RLS enforcement · **15.4** ✅ RBAC ·
-  **15.5** Identity core · **15.6** Sessions + revocation · **15.7** SSO (Google + GitHub) ·
+  **15.5** ✅ Identity core · **15.6** Sessions + revocation · **15.7** SSO (Google + GitHub) ·
   **15.8** MFA · **15.9** API keys + retire `ADMIN_TOKEN` · **15.10** Team surfaces + audit table.
   **15.0 gates 15.3**; 15.5 gates 15.7.
 - **M16 — Cloud-hosted SaaS.** Multi-tenancy, managed archive, quotas/rate limits beyond 12.4,
@@ -471,9 +471,50 @@ enforced`, the sibling of `skipped ≠ passed`. Closes the Spike-6 hole: a cross
         because evaluate-on-read makes a GET a WRITE (fixed with `SERVICE_ROLE`, the same call the
         plan already made for alert delivery), and seeding a second org member by INSERT is
         shadowed by the personal `owner` membership `setUserPassword` creates.
-  - [ ] **15.5** Identity core · **15.6** Sessions + revocation · **15.7** SSO ·
-        **15.8** MFA · **15.9** API keys + retire `ADMIN_TOKEN` · **15.10** Team surfaces + audit
-        table.
+  - [x] **15.5** Identity core — DONE `2026-07-28` (PR #65). 15.4 gave an org a role ladder; it did
+        not give it a way to acquire a SECOND HUMAN. This ships the identity core — **member CRUD**,
+        **invite-by-email** over 13.5's SMTP transport, **password reset**, **gated self-signup** —
+        and closes the **account pre-seeding primitive** (D-M15-8 / audit C.9), which is why it
+        GATES 15.7: pre-seeding plus SSO auto-link-by-email is an account-takeover chain, and 15.7
+        is where the second link lands. `POST /v1/pairing-codes` no longer upserts a `users` row
+        from a caller-supplied email; it resolves an EXISTING member of the caller's org and 404s
+        otherwise, so the route creates nothing (proven by a `count(*)` assertion, not a status
+        code, and by a repo-wide `insert(users)` grep that now finds only `repositories/users.ts`).
+        Migration `0017` adds two tables on OPPOSITE sides of D-15.3-4's line (D-15.5-1): `invites`
+        is ORG-owned and `password_reset_tokens` is IDENTITY-owned, so the first gets policies and
+        the second gets none. `invites` is the first table in the repo needing **both axes at
+        once** — bootstrap-permissive on ORG (the accept path reads the row IN ORDER TO discover
+        the org) and RESTRICTIVE on ROLE (an invite GRANTS PRIVILEGE, so a viewer minting
+        `role:'owner'` is exactly what the 15.4 backstop is for). Postgres makes that sound rather
+        than contradictory — RESTRICTIVE combines with `AND`, PERMISSIVE with `OR` — and it earns a
+        THIRD classification constant in `rls.int.test.ts` rather than being forced into an
+        existing one, where it would have been silently exempted from both checks. 0017 also
+        **lowercases every `users.email`** and `normalizeEmail` now guards every boundary
+        (D-15.5-3): a spike proved `users_email_unique` is a plain btree on `email`, so
+        `Foo@x.com` and `foo@x.com` were two accounts — the other half of the same takeover chain,
+        since 15.7 links identity by email. Guards: **never grant above your own rung**
+        (D-15.5-11, route layer — RLS only ever asks "is this a viewer?"), a **last-owner** guard
+        counting owners inside the mutating transaction (D-15.5-12, repository layer so it holds
+        for any future caller), self-signup **OFF unless `SELF_SIGNUP_ENABLED=true`** and creating
+        a NEW personal org rather than joining one (D-15.5-6), an always-202 reset request
+        (D-15.5-7, OWASP: a 404 would be a user-enumeration oracle), and an asymmetry with no
+        mailer configured (D-15.5-10) — the admin-gated invite returns its token, the
+        UNAUTHENTICATED reset **503s**, because handing a reset token to an anonymous caller is a
+        complete takeover primitive. The hardest boundary is D-15.5-9: an invite to an email that
+        already has a user is **409**, not a second membership, because `findPrincipalByEmail`
+        resolves the FIRST membership by `(created_at, id)` and every existing user already owns a
+        personal org that predates any invite — the row would be permanently shadowed. That same
+        trap is why the accept path calls `createUserWithPassword` (the ONE users-insert that skips
+        `ensurePersonalOrg`) and **never** `setUserPassword`; `identity.int.test.ts` pins it with a
+        membership-COUNT assertion that was CONFIRMED to fail under the wrong call before being
+        left green. Sessions are deliberately NOT invalidated on password change — they are
+        stateless HMACs until 15.6 (D-M15-12), and half-revocation would be indistinguishable from
+        working revocation. Proven by two new **two-role** suites (24 HTTP + 11 repository tests):
+        the HTTP one validates the primary defence, the repository one the predicates — and there
+        the split matters more than usual, because `memberships`/`users` carry **no RLS at all**,
+        so a forgotten `orgId` predicate has no backstop behind it.
+  - [ ] **15.6** Sessions + revocation · **15.7** SSO · **15.8** MFA ·
+        **15.9** API keys + retire `ADMIN_TOKEN` · **15.10** Team surfaces + audit table.
 
 - [ ] **M16–M19 remain committed scope, unsequenced** (§3, PRD §25). Each still needs its own
       deferral-audit + scope conversation before it is executable.

@@ -1,0 +1,91 @@
+
+=== 0. health ===
+{"status":"ok","time":"2026-07-28T10:45:26.490Z"}
+[200]
+
+=== 1. log in as the bootstrap admin ===
+{"token":"eyJzdWIiOiJ1YXQtYWRtaW5AdGVzdC5sb2NhbCIsImlhdCI6MTc4NTIzNTUyNiwiZXhwIjoxNzg1ODQwMzI2fQ.n9Jlj6aa9OyH8G7dReRSMM8mqtFY-r93MoIIwNY2zvQ","expiresAt":"2026-08-04T10:45:26.000Z"}
+[200]
+
+=== 2. invite a colleague — NO SMTP configured, so the token comes back in the body (D-15.5-10) ===
+{"invite":{"id":"4fa913f1-14cb-46cb-ad98-25f61269b747","email":"uat-colleague@example.com","role":"member","invitedByUserId":"ba579956-8a6a-4bb6-a835-95def82b0b48","expiresAt":"2026-08-04T10:45:27.724Z","acceptedAt":null,"createdAt":"2026-07-28T10:45:27.722Z"},"mailed":false,"token":"l2W-YLpmXonK_t_jX9nUEHJNxCHLyQBZ_u32XFOr3PM"}
+[200]
+
+=== 2b. a second invite for the same PENDING address is 409, not a duplicate token ===
+{"error":"an invite for this address is already pending"}
+[409]
+
+=== 3. preview the invite (unauthenticated) — note the LOWERCASED email (D-15.5-3) ===
+{"email":"uat-colleague@example.com","role":"member","orgName":"uat-admin@test.local","expiresAt":"2026-08-04T10:45:27.724Z"}
+[200]
+
+=== 4. accept it — returns a session, so the invitee is already logged in ===
+{"token":"eyJzdWIiOiJ1YXQtY29sbGVhZ3VlQGV4YW1wbGUuY29tIiwiaWF0IjoxNzg1MjM1NTI4LCJleHAiOjE3ODU4NDAzMjh9.wh20yG_2-lwjgStnKQLDf4n0_TrHqTP88aqmAQTkDkQ","expiresAt":"2026-08-04T10:45:28.000Z"}
+[200]
+
+=== 4b. …and that session identifies the INVITEE (the GOTCHA-1 check: the inviting org, not a new one) ===
+{"email":"uat-colleague@example.com"}
+[200]
+
+=== 4c. the MIXED-CASE spelling logs in to the SAME account (D-15.5-3) ===
+{"token":"eyJzdWIiOiJ1YXQtY29sbGVhZ3VlQGV4YW1wbGUuY29tIiwiaWF0IjoxNzg1MjM1NTMwLCJleHAiOjE3ODU4NDAzMzB9.da7_ZAAA5H8iAc93zastB-WlG3shQONc6INEnqKQpdQ","expiresAt":"2026-08-04T10:45:30.000Z"}
+[200]
+
+=== 5. the org now holds TWO people ===
+{"members":[{"userId":"ba579956-8a6a-4bb6-a835-95def82b0b48","email":"uat-admin@test.local","role":"owner","joinedAt":"2026-07-28T10:45:25.426Z"},{"userId":"8cc7935f-0e5b-4924-a3b7-820f4b54cda8","email":"uat-colleague@example.com","role":"member","joinedAt":"2026-07-28T10:45:28.819Z"}]}
+[200]
+
+=== 6. escalation guard: the OWNER may invite an owner… ===
+{"invite":{"id":"9e6ebf79-ccba-431c-821b-e0a44ca28699","email":"uat-owner2@example.com","role":"owner","invitedByUserId":"ba579956-8a6a-4bb6-a835-95def82b0b48","expiresAt":"2026-08-04T10:45:30.945Z","acceptedAt":null,"createdAt":"2026-07-28T10:45:30.943Z"},"mailed":false,"token":"gCtuHpyGACxnFCQUaiZGfrk3VZgTiT7sbBBU-gpkjuQ"}
+[200]
+
+=== 6b. …but the new MEMBER cannot invite at all (403 — needs admin) ===
+{"error":"insufficient role"}
+[403]
+
+=== 7. last-owner guard: removing the sole owner is 409 (D-15.5-12) ===
+{"members":[{"userId":"ba579956-8a6a-4bb6-a835-95def82b0b48","email":"uat-admin@test.local","role":"owner","joinedAt":"2026-07-28T10:45:25.426Z"},{"userId":"8cc7935f-0e5b-4924-a3b7-820f4b54cda8","email":"uat-colleague@example.com","role":"member","joinedAt":"2026-07-28T10:45:28.819Z"}]}
+[200]
+{"error":"cannot remove the organization's last owner","reason":"last_owner"}
+[409]
+
+=== 8. signup is refused by default (D-M15-6 / D-15.5-5) — 403, not 404 ===
+{"error":"self-signup is disabled"}
+[403]
+
+=== 9. password reset with NO mailer is 503, and returns no token (D-15.5-10) ===
+{"error":"password reset is unavailable — no mail transport is configured"}
+[503]
+
+=== 10. THE CLOSED PRIMITIVE (D-M15-8) — pairing code for a non-member email is 404 ===
+{"error":"no such member in this organization"}
+[404]
+
+=== 10b. …and for a genuine colleague it still issues a code ===
+{"code":"VPXc9_r4xrU","expiresAt":"2026-07-28T11:00:33.758Z"}
+[200]
+
+=== 11. change own password: a wrong current password is 401… ===
+{"error":"invalid email or password"}
+[401]
+
+=== 11b. …the right one is 204, and the new password then logs in ===
+
+[204]
+{"token":"eyJzdWIiOiJ1YXQtY29sbGVhZ3VlQGV4YW1wbGUuY29tIiwiaWF0IjoxNzg1MjM1NTM0LCJleHAiOjE3ODU4NDAzMzR9.FlBS4W-JP0DY_gdKKDoDi-mUmCMCd_E0IxqbS3_Iu0g","expiresAt":"2026-08-04T10:45:34.000Z"}
+[200]
+
+=== 12. and the OLD password no longer works ===
+{"error":"invalid email or password"}
+[401]
+
+=== DONE ===
+users where email=stranger@nowhere.test : 0
+users with mixed-case email       : 0
+all users: uat-admin@test.local, uat-colleague@example.com
+
+=== D-M15-8 closure, verified at the DATABASE ===
+users where email=stranger@nowhere.test : 0   <- the count IS the assertion
+users with mixed-case email             : 0   <- D-15.5-3 holds end to end
+all users: uat-admin@test.local, uat-colleague@example.com  <- ONE account for the invitee,
+           created by ACCEPTING the invite; the 404 paths created nothing.

@@ -1,6 +1,7 @@
 import { asc, eq } from "drizzle-orm";
 import type { DbClient } from "../client.js";
 import { memberships, users } from "../schema.js";
+import { normalizeEmail } from "./users.js";
 
 /**
  * Request-principal resolution (M15 15.2, PRD §24). The principal is "who is this
@@ -40,6 +41,11 @@ export interface Principal {
  *
  * Explicit column list, never a bare `select()` — CLAUDE.md's 15.1 lesson. The
  * principal is not sent on the wire today, but the habit is the rule.
+ *
+ * M15 15.5 (D-15.5-3): the lookup normalizes through `normalizeEmail`, because this is the READ
+ * half of the same key the write paths in `users.ts` normalize. A session token's `sub` is
+ * whatever string the login body carried, so without this a user who typed `Foo@corp.com` at
+ * login would get a valid session that resolves to no principal at all (a blanket 401).
  */
 export async function findPrincipalByEmail(
   db: DbClient,
@@ -54,7 +60,7 @@ export async function findPrincipalByEmail(
     })
     .from(users)
     .innerJoin(memberships, eq(memberships.userId, users.id))
-    .where(eq(users.email, email))
+    .where(eq(users.email, normalizeEmail(email)))
     .orderBy(asc(memberships.createdAt), asc(memberships.id))
     .limit(1);
   return row;
