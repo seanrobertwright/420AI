@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from "vitest";
+import { createHash } from "node:crypto";
 import { eq, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import {
@@ -397,6 +398,54 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.5 identity core (two-role, multi-
 
     expect(await owner.db.select().from(invites)).toHaveLength(0);
     expect(sent).toHaveLength(0);
+  });
+
+  it("TWO pending invites for one email still yield exactly ONE membership", async () => {
+    // THE INVARIANT THE ROUTE ACTUALLY RELIES ON, pinned because the invite route does NOT enforce
+    // single-pending-invite. Its three checks share one transaction, which buys atomicity but NOT
+    // isolation: under READ COMMITTED two overlapping invites both pass the pending check and both
+    // insert (measured during the PR review). `invites.email` is deliberately not unique, so nothing
+    // at that layer catches it.
+    //
+    // What keeps that benign is HERE, one layer down — the ACCEPT path's own `findUserIdByEmail`
+    // check with `users.email`'s unique index behind it. This test is therefore the thing standing
+    // between a duplicate pending invite and a duplicate account, which is why it exists rather than
+    // a partial unique index on `invites`.
+    const admin = await login("admin@example.com");
+    const tokenA = await inviteAndCollect(admin, "new@example.com", "member");
+
+    // Simulate the losing half of the race: a SECOND pending invite for the same address, inserted
+    // the way an overlapping transaction would have.
+    const secondPlain = "second-invite-token-for-the-same-email";
+    await owner.db.insert(invites).values({
+      orgId: orgA,
+      email: "new@example.com",
+      role: "admin", // deliberately a HIGHER rung, so a wrongly-redeemed second token would be visible
+      tokenHash: createHash("sha256").update(secondPlain).digest("hex"),
+      invitedByUserId: userAdmin,
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+
+    const accept = (token: string) =>
+      app.inject({
+        method: "POST",
+        url: "/v1/auth/invites/accept",
+        headers: { "content-type": "application/json" },
+        payload: { token, password: NEW_PASSWORD },
+      });
+
+    expect((await accept(tokenA)).statusCode).toBe(200);
+    // The loser cannot create a second account, and specifically cannot smuggle in the `admin` rung.
+    const second = await accept(secondPlain);
+    expect(second.statusCode).toBe(409);
+
+    const rows = await owner.db.execute<{ n: number; role: string }>(
+      sql`select count(*)::int as n, min(m.role) as role from memberships m
+          join users u on u.id = m.user_id where u.email = 'new@example.com'`,
+    );
+    expect(rows.rows[0]!.n).toBe(1);
+    expect(rows.rows[0]!.role).toBe("member"); // the FIRST invite's rung, not the second's
+    expect(await userCount("new@example.com")).toBe(1);
   });
 
   it("a second invite for the same PENDING address is 409 rather than a duplicate token", async () => {

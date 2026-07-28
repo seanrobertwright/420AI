@@ -114,12 +114,27 @@ export default async function memberRoutes(app: FastifyInstance): Promise<void> 
       // existing user already owns a personal org that predates any invite. A second membership
       // would therefore be permanently shadowed. Multi-org membership + an org switcher is 15.10.
       //
-      // ALL THREE CHECKS AND THE INSERT SHARE ONE TRANSACTION. They were three round trips across
-      // two transactions until this was reviewed, which left two check-then-act windows: a
-      // concurrent accept could turn the target into a member between the member check and the
-      // insert, and two simultaneous invites could both pass the pending check and mint two live
-      // tokens for one colleague (`invites.email` is deliberately not unique, so nothing downstream
-      // catches that). One transaction closes both and costs one fewer round trip.
+      // All three checks and the insert share ONE transaction — they were three round trips across
+      // two transactions until the 15.5 review — and BE PRECISE ABOUT WHAT THAT BUYS, because the
+      // first version of this comment got it wrong in exactly the way CLAUDE.md warns about:
+      //
+      //   IT BUYS ATOMICITY AND ONE FEWER ROUND TRIP. IT DOES NOT BUY ISOLATION. Under READ
+      //   COMMITTED two overlapping invites both run `findPendingInviteByEmail`, neither sees the
+      //   other's uncommitted row, and BOTH insert — measured, not theorised. `invites.email` is
+      //   deliberately not unique (a revoked invite must not block re-inviting an address), so
+      //   nothing at this layer catches it either.
+      //
+      // That residue is BENIGN, and it is worth naming what makes it benign rather than assuming it:
+      // a second pending invite cannot produce a second account or a second membership, because the
+      // ACCEPT path checks `findUserIdByEmail` before creating anything and `users.email` is unique
+      // behind it. So whichever token is redeemed first wins and the other answers 409 — pinned by
+      // "two pending invites for one email yield exactly ONE membership" in identity.int.test.ts,
+      // since that test is now the thing standing between this and a duplicate account.
+      //
+      // Enforcing single-pending-invite properly would need a partial unique index on
+      // `(org_id, email) WHERE accepted_at IS NULL AND revoked_at IS NULL`. Deliberately NOT added:
+      // it would trade a harmless duplicate row for a new failure mode on the onboarding path, to
+      // enforce an invariant nothing depends on.
       const result = await withOrg(app.db, principal.orgId, principal.role, async (tx) => {
         if (await findMemberByEmail(tx, principal.orgId, email)) return "already_member" as const;
         // `users` carries no RLS, so this read is unaffected by the org context — it is in here for
