@@ -120,6 +120,13 @@
       "when": 1785147390458,
       "tag": "0016_strong_magus",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1785233501221,
+      "tag": "0017_aromatic_maximus",
+      "breakpoints": true
     }
   ]
 }

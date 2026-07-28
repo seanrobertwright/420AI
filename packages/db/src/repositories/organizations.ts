@@ -88,6 +88,24 @@ export async function listOrganizations(db: DbClient): Promise<{ id: string }[]>
 }
 
 /**
+ * An organization's display name, or `undefined` when no such org exists.
+ *
+ * M15 15.5: exists for the invite PREVIEW (`GET /v1/auth/invites/:token`), which must tell an
+ * invitee which org they are about to join BEFORE they have any identity — so this read, like the
+ * invite lookup beside it, runs with no org context. `organizations` carries no RLS (D-15.3-4), so
+ * that works. The name is the only field the preview exposes; nothing else about the org leaks to
+ * a holder of an invite token.
+ */
+export async function getOrgName(db: DbClient, orgId: string): Promise<string | undefined> {
+  const [row] = await db
+    .select({ name: organizations.name })
+    .from(organizations)
+    .where(eq(organizations.id, orgId))
+    .limit(1);
+  return row?.name;
+}
+
+/**
  * Find-or-create the user's personal organization, returning its id (IDEMPOTENT).
  * Returns the existing membership's org when there is one; otherwise inserts an
  * `organizations` row (`is_personal: true`) plus an `owner` membership (D-M15-4/D-M15-11).

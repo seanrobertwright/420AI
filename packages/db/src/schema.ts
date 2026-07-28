@@ -160,6 +160,63 @@ export const pairingCodes = pgTable(
   (t) => [index("pairing_codes_by_org").on(t.orgId)],
 );
 
+/**
+ * M15 15.5 — an outstanding invitation to join an organization (D-M15-5). Same lifecycle as
+ * `pairing_codes`: short-lived, single-use, and REDEEMED BEFORE ANY ORG CONTEXT EXISTS — which
+ * is why 0017 gives it the bootstrap-permissive org policy (D-15.3-3) rather than a strict one.
+ *
+ * UNLIKE `pairing_codes` it also carries the 15.4 RESTRICTIVE role-write policies: an invite is a
+ * PRIVILEGE-GRANTING row, so a viewer minting `role: 'owner'` is precisely the escalation the
+ * backstop exists for (D-15.5-2).
+ *
+ * `role` is TEXT with no CHECK, matching `memberships.role` — the four legal values live in
+ * `@420ai/shared`'s ROLES and the route schema's enum, not in a migration.
+ */
+export const invites = pgTable(
+  "invites",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organizations.id),
+    // Lowercased at every boundary by `normalizeEmail` (D-15.5-3). NOT unique: a revoked or
+    // expired invite for an address must not block re-inviting it.
+    email: text("email").notNull(),
+    role: text("role").notNull().default("member"),
+    // sha256 hex of the plaintext token (tokens.ts `hashToken`). The plaintext is returned once
+    // and never stored — same discipline as `ingest_tokens.token_hash`.
+    tokenHash: text("token_hash").notNull().unique(),
+    invitedByUserId: uuid("invited_by_user_id")
+      .notNull()
+      .references(() => users.id),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("invites_by_org").on(t.orgId), index("invites_by_email").on(t.email)],
+);
+
+/**
+ * M15 15.5 — a single-use password-reset token (D-M15-5). An IDENTITY table: no `org_id`, and
+ * therefore NO RLS at all, for the same reason `users`/`organizations`/`memberships` carry none
+ * (D-15.3-4) — it is read at the one moment before any identity is established.
+ */
+export const passwordResetTokens = pgTable(
+  "password_reset_tokens",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
+    tokenHash: text("token_hash").notNull().unique(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("password_reset_tokens_by_user").on(t.userId)],
+);
+
 export const ingestTokens = pgTable(
   "ingest_tokens",
   {

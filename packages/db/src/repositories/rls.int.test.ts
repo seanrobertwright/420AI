@@ -114,11 +114,32 @@ const STRICT_TABLES = [
 /** BOOTSTRAP-PERMISSIVE policy (D-15.3-3): enforced with a context, open without one. */
 const BOOTSTRAP_TABLES = ["machines", "ingest_tokens", "pairing_codes"] as const;
 
+/**
+ * M15 15.5 (D-15.5-2) — a THIRD classification, and it exists because `invites` is the first table
+ * in the repo that needs both halves at once:
+ *
+ *   - BOOTSTRAP-PERMISSIVE on the ORG axis, exactly like `pairing_codes`: accepting an invite reads
+ *     the row IN ORDER TO discover the org, so a strict policy reads zero rows under the app role.
+ *   - RESTRICTIVE on the ROLE axis, unlike all three bootstrap tables: those are written by machine
+ *     paths with no membership role, whereas an invite is written by a principal and GRANTS
+ *     PRIVILEGE. A viewer minting `role: 'owner'` is precisely the escalation the 15.4 backstop is
+ *     for.
+ *
+ * Postgres makes the combination sound rather than contradictory: RESTRICTIVE policies combine with
+ * AND, PERMISSIVE ones with OR, so the two layer instead of fighting. The classification is its own
+ * constant rather than being forced into one of the existing two, because the inventory test below
+ * asserts a DIFFERENT expectation for each axis.
+ */
+const ROLE_GATED_BOOTSTRAP_TABLES = ["invites"] as const;
+
 /** No policy at all: identity tables (D-15.3-4) + deployment-global tables (D-M15-9). */
 const NO_RLS_TABLES = [
   "users",
   "organizations",
   "memberships",
+  // M15 15.5 (D-15.5-1): keyed by `user_id`, no `org_id`. Read at the one moment before any
+  // identity — and therefore any org context — is established, exactly like the three above.
+  "password_reset_tokens",
   "pricing_catalogs",
   "connector_catalogs",
   "ingest_auth_failures",
@@ -150,7 +171,7 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.3 RLS enforcement (two-role integ
     // TRUNCATE requires table OWNERSHIP — on the app handle this fails with a permissions
     // error, not an RLS error, which is a confusing way to discover the rule. Owner only.
     await owner.db.execute(
-      sql`TRUNCATE project_grants, search_documents, session_git_links, git_commit_files, git_commits, alert_firings, machine_heartbeats, report_artifacts, workspace_keys, workspaces, projects, raw_source_records, events, ingest_tokens, pairing_codes, machines, memberships, organizations, users RESTART IDENTITY CASCADE`,
+      sql`TRUNCATE invites, password_reset_tokens, project_grants, search_documents, session_git_links, git_commit_files, git_commits, alert_firings, machine_heartbeats, report_artifacts, workspace_keys, workspaces, projects, raw_source_records, events, ingest_tokens, pairing_codes, machines, memberships, organizations, users RESTART IDENTITY CASCADE`,
     );
     const seeded = await owner.db
       .insert(users)
@@ -447,8 +468,10 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.3 RLS enforcement (two-role integ
     const org = all.filter((r) => r.permissive === "PERMISSIVE");
     const restrictive = all.filter((r) => r.permissive === "RESTRICTIVE");
 
-    // ── the 15.3 tenancy layer, unchanged by 15.4 except for the one new tenant table ──
-    expect(org).toHaveLength(STRICT_TABLES.length + BOOTSTRAP_TABLES.length);
+    // ── the 15.3 tenancy layer, unchanged by 15.4/15.5 except for the new tenant tables ──
+    expect(org).toHaveLength(
+      STRICT_TABLES.length + BOOTSTRAP_TABLES.length + ROLE_GATED_BOOTSTRAP_TABLES.length,
+    );
     const orgByTable = new Map(org.map((r) => [r.tablename, r.qual!]));
     expect(orgByTable.size).toBe(org.length); // exactly one org policy per table
 
@@ -459,18 +482,23 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.3 RLS enforcement (two-role integ
       // read zero rows rather than everything.
       expect(qual!.toUpperCase(), `${t} must be STRICT`).not.toContain("IS NULL");
     }
-    for (const t of BOOTSTRAP_TABLES) {
+    for (const t of [...BOOTSTRAP_TABLES, ...ROLE_GATED_BOOTSTRAP_TABLES]) {
       const qual = orgByTable.get(t);
       expect(qual, `${t} must carry an org policy`).toBeTruthy();
+      // M15 15.5: `invites` is asserted here, with the bootstrap tables, because it is PERMISSIVE
+      // on the ORG axis — the "IS NULL" escape hatch is what lets the accept path discover the org.
+      // Its restrictive ROLE policies are asserted in the restrictive block below.
       expect(qual!.toUpperCase(), `${t} must be BOOTSTRAP-PERMISSIVE`).toContain("IS NULL");
     }
     for (const t of NO_RLS_TABLES) {
       expect(orgByTable.has(t), `${t} must have NO policy (D-15.3-4 / D-M15-9)`).toBe(false);
     }
 
-    // ── the 15.4 role-write backstop: 3 per STRICT table, none anywhere else ──
-    expect(restrictive).toHaveLength(STRICT_TABLES.length * 3);
-    for (const t of STRICT_TABLES) {
+    // ── the 15.4 role-write backstop: 3 per STRICT table, plus (15.5) 3 on `invites` ──
+    expect(restrictive).toHaveLength(
+      (STRICT_TABLES.length + ROLE_GATED_BOOTSTRAP_TABLES.length) * 3,
+    );
+    for (const t of [...STRICT_TABLES, ...ROLE_GATED_BOOTSTRAP_TABLES]) {
       const forTable = restrictive.filter((r) => r.tablename === t);
       expect(forTable.map((r) => r.cmd).sort(), `${t} restrictive commands`).toEqual([
         "DELETE",
@@ -490,8 +518,10 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.3 RLS enforcement (two-role integ
         }
       }
     }
-    // The BOOTSTRAP tables get NO role policy (D-15.4-3): machine/bootstrap writers have no
-    // principal and therefore no membership role.
+    // The three original BOOTSTRAP tables get NO role policy (D-15.4-3): machine/bootstrap writers
+    // have no principal and therefore no membership role. `invites` is the deliberate exception
+    // (D-15.5-2) and is asserted above — which is exactly why it is a separate constant rather than
+    // an extra entry in this list, where it would have been silently exempted from both checks.
     for (const t of BOOTSTRAP_TABLES) {
       expect(
         restrictive.some((r) => r.tablename === t),
@@ -505,8 +535,10 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.3 RLS enforcement (two-role integ
 
   // 9 ── FORCE, not merely ENABLE. Two distinct exemptions, two distinct switches: ENABLE
   //      turns the policy on, FORCE removes the TABLE-OWNER exemption (15.0 Finding 1).
-  it("all 16 tenant tables have relrowsecurity AND relforcerowsecurity", async () => {
-    const all = [...STRICT_TABLES, ...BOOTSTRAP_TABLES];
+  it("all 17 tenant tables have relrowsecurity AND relforcerowsecurity", async () => {
+    // The count in the title is 17 as of 15.5 (`invites`). A number in a title that disagrees with
+    // the arrays is precisely the drift this file exists to prevent — keep them in step.
+    const all = [...STRICT_TABLES, ...BOOTSTRAP_TABLES, ...ROLE_GATED_BOOTSTRAP_TABLES];
     const rows = await owner.db.execute<{
       relname: string;
       relrowsecurity: boolean;

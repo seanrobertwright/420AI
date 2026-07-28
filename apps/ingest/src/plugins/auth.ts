@@ -39,6 +39,14 @@ declare module "fastify" {
     rateLimitLogin: { max: number; timeWindow: string } | false;
     /** M12 12.6 injected alert deliverer (webhook in server.ts; spy in tests); null = delivery off. */
     alertDeliverer: import("../delivery/alert-deliverer.js").AlertDeliverer | null;
+    /** M15 15.5 transactional mail for invites + password resets; null = no SMTP configured.
+     * Callers branch on null ASYMMETRICALLY (D-15.5-10): the admin-gated invite route hands the
+     * token back in its response, while the UNAUTHENTICATED reset route 503s — returning a reset
+     * token to an anonymous caller would be a complete account-takeover primitive. */
+    mailer: import("../delivery/mailer.js").Mailer | null;
+    /** M15 15.5 (D-M15-6) whether POST /v1/auth/signup accepts anyone. FALSE unless the operator
+     * sets SELF_SIGNUP_ENABLED=true; invite-only is the default posture for EVERY deployment. */
+    selfSignupEnabled: boolean;
     /** preHandler that 401s unless a valid bearer token resolves to a machine. */
     authenticate: preHandlerHookHandler;
   }

@@ -48,7 +48,13 @@ const ALLOWED_WITHOUT_WITHORG: Record<string, string> = {
   "auth.ts": "reads `users` to ESTABLISH identity; users/organizations/memberships carry no RLS",
   // The BOOTSTRAP paths (D-15.3-3) — circular with respect to tenancy by construction.
   "pair.ts": "redeems the pairing code IN ORDER TO discover the org (bootstrap-permissive)",
-  "pairing-codes.ts": "writes a row for a TARGET user whose org is not the caller's (D-15.2-5)",
+  // M15 15.5 REMOVED `pairing-codes.ts`. Its exemption read "writes a row for a TARGET user whose
+  // org is not the caller's (D-15.2-5)", and D-M15-8 made that false: the route now resolves an
+  // EXISTING MEMBER of the caller's org and 404s otherwise, so every row it writes is same-org by
+  // construction and it is `withOrg`-wrapped like any other principal-authed handler. The entry was
+  // deleted rather than re-worded — the "no stale entries" test below only catches an allow-listed
+  // file that no longer EXISTS, never one whose stated reason has quietly stopped being true, so an
+  // obsolete justification would sit here as a hole for the next reader to widen.
   // No DB access at all.
   "health.ts": "no tenant DB access",
   "metrics.ts": "no tenant DB access",

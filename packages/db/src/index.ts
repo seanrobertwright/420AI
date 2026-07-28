@@ -6,6 +6,9 @@ export {
   users,
   machines,
   pairingCodes,
+  // M15 15.5 identity core: an org-owned invitation and an identity-owned reset token.
+  invites,
+  passwordResetTokens,
   ingestTokens,
   rawSourceRecords,
   events,
@@ -44,6 +47,8 @@ export {
   getOrgIdForUser,
   findOrgIdByUserId,
   listOrganizations,
+  // M15 15.5: the invite preview names the org an invitee is about to join.
+  getOrgName,
 } from "./repositories/organizations.js";
 export { findPrincipalByEmail } from "./repositories/principal.js";
 export type { Principal } from "./repositories/principal.js";
@@ -61,7 +66,41 @@ export {
   ensureUserByEmail,
   findAdminCredential,
   setUserPassword,
+  // M15 15.5 (D-15.5-3): THE email boundary. Every path that keys on an email normalizes here.
+  normalizeEmail,
+  // M15 15.5 (GOTCHA-1): creates a user WITHOUT a personal org — the invite-accept path's insert.
+  createUserWithPassword,
+  updatePasswordHash,
 } from "./repositories/users.js";
+// M15 15.5 organization invitations (D-M15-5). Same lifecycle as `pairing_codes`; unlike it, an
+// invite GRANTS PRIVILEGE, hence the 15.4 restrictive role-write policies on the table.
+export {
+  createInvite,
+  findInviteByToken,
+  acceptInvite,
+  listInvites,
+  revokeInvite,
+  findPendingInviteByEmail,
+  InviteError,
+} from "./repositories/invites.js";
+export type { InviteRow } from "./repositories/invites.js";
+// M15 15.5 single-use password-reset tokens (D-M15-5). An IDENTITY table — no org_id, no RLS.
+export {
+  createPasswordReset,
+  consumePasswordReset,
+  PasswordResetError,
+} from "./repositories/password-resets.js";
+// M15 15.5 org member management. `memberships`/`users` carry NO RLS, so the explicit orgId
+// predicate in each of these is the ONLY tenancy boundary — there is no backstop behind it.
+export {
+  listMembers,
+  findMemberByEmail,
+  findMemberByUserId,
+  setMemberRole,
+  removeMember,
+  MemberError,
+} from "./repositories/members.js";
+export type { MemberRow } from "./repositories/members.js";
 export { issueIngestToken, findMachineIdByToken } from "./repositories/tokens.js";
 export { ingestBatch } from "./repositories/ingest.js";
 export {

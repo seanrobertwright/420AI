@@ -53,7 +53,7 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.4 project grants (two-role integr
 
   beforeEach(async () => {
     await owner.db.execute(
-      sql`TRUNCATE project_grants, projects, memberships, organizations, users RESTART IDENTITY CASCADE`,
+      sql`TRUNCATE invites, password_reset_tokens, project_grants, projects, memberships, organizations, users RESTART IDENTITY CASCADE`,
     );
     const seeded = await owner.db
       .insert(users)

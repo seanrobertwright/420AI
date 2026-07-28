@@ -6,6 +6,7 @@ import { hashPassword } from "./password.js";
 import { createAnalysisProvider, type AnalysisProviderConfig } from "./analysis/provider.js";
 import { createWebhookDeliverer } from "./delivery/alert-deliverer.js";
 import { createSmtpDeliverer, createFanoutDeliverer } from "./delivery/smtp-deliverer.js";
+import { createMailer } from "./delivery/mailer.js";
 
 // Load the repo-root .env (this runs from apps/ingest/ via npm -w).
 config({ path: fileURLToPath(new URL("../../../.env", import.meta.url)) });
@@ -131,6 +132,35 @@ const smtpDeliverer = createSmtpDeliverer(
 );
 const alertDeliverer = createFanoutDeliverer([webhookDeliverer, smtpDeliverer]);
 
+// M15 15.5 transactional mail (invites, password resets). Reuses 13.5's SMTP config when a
+// dedicated one is not given, so an existing deployment gets invites with zero new env. Note this
+// needs only URL + FROM — unlike the alert deliverer there is no fixed recipient; each message goes
+// to the invitee or the account holder.
+const smtpUrl = process.env.SMTP_URL ?? process.env.ALERT_SMTP_URL;
+const mailFrom = process.env.MAIL_FROM ?? process.env.ALERT_EMAIL_FROM;
+const mailer = createMailer(
+  smtpUrl && mailFrom
+    ? {
+        url: smtpUrl,
+        from: mailFrom,
+        // `next dev`'s default port — apps/dashboard's script is a bare `next dev` with no -p.
+        appBaseUrl: process.env.APP_BASE_URL ?? "http://localhost:3000",
+      }
+    : null,
+);
+
+// D-M15-6: invite-only is the default posture for EVERY deployment, self-hosted and hosted.
+// STRICT equality — any value other than the literal "true" leaves signup closed, so a typo
+// (`SELF_SIGNUP_ENABLED=yes`) fails safe rather than opening the box.
+const selfSignupEnabled = process.env.SELF_SIGNUP_ENABLED === "true";
+if (selfSignupEnabled) {
+  // The warn belongs HERE and nowhere else: server.ts is an entrypoint (CLAUDE.md's logging
+  // boundary — libraries throw, entrypoints log).
+  console.warn(
+    "SELF_SIGNUP_ENABLED=true — anyone who can reach this server can create an account.",
+  );
+}
+
 // The server's ONLY connection is the non-owner app role — there is no privileged handle
 // anywhere in the request path (D-15.3-5: "the ingest server can never see across orgs").
 const { db } = createDb(appDatabaseUrl);
@@ -167,6 +197,8 @@ const app = buildApp({
   logLevel,
   rateLimit,
   alertDeliverer,
+  mailer,
+  selfSignupEnabled,
 });
 
 await app.listen({ port: Number(process.env.INGEST_PORT ?? 8420), host: "0.0.0.0" });
