@@ -7,6 +7,22 @@
  */
 export const SSO_FLOW_COOKIE = "ai_sso";
 
+/**
+ * THE COOKIE'S PATH, AND IT MUST BE PASSED TO `delete` AS WELL AS TO `set`.
+ *
+ * Scoping the cookie to the SSO routes is deliberate — it carries a PKCE verifier and has no
+ * business riding along on every request to the app. But browsers key cookies by
+ * `(name, domain, path)`, so `cookies().delete("ai_sso")` — which defaults to `Path=/` — does NOT
+ * remove a cookie stored at this path. It emits a second, unrelated expired cookie and leaves the
+ * real one live for its full `Max-Age`.
+ *
+ * That shipped once (review finding 1: the callback's own comment promised the cookie was cleared
+ * on every path while `Path=/` was going out on the wire, so the verifier and `state` survived
+ * every refused attempt for ten minutes). The constant exists so the two call sites cannot drift
+ * again, and `callback/route.test.ts` asserts the delete carries it.
+ */
+export const SSO_FLOW_PATH = "/api/auth/sso";
+
 /** Ten minutes — long enough to read a consent screen, short enough that a stale one expires. */
 export const SSO_FLOW_MAX_AGE_SECONDS = 600;
 

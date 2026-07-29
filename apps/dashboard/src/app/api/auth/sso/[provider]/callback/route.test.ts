@@ -17,6 +17,11 @@ import { NextRequest } from "next/server";
 const calls = vi.hoisted(() => ({
   order: [] as string[],
   cookieSet: null as { name: string; value: string; opts: Record<string, unknown> } | null,
+  // The ARGUMENT the delete was called with, not merely that it was called. The first version of
+  // this mock recorded the name only, and that is exactly why the `Path=/` bug shipped green: the
+  // test asserted the CALL and not the EFFECT, so it passed with the right path, the wrong path,
+  // or none at all.
+  cookieDeleted: null as { name: string; path?: string } | null,
   flow: null as string | null,
 }));
 
@@ -27,8 +32,10 @@ vi.mock("next/headers", () => ({
       calls.order.push(`cookie.set:${name}`);
       calls.cookieSet = { name, value, opts };
     },
-    delete: (name: string) => {
-      calls.order.push(`cookie.delete:${name}`);
+    delete: (arg: string | { name: string; path?: string }) => {
+      const parsed = typeof arg === "string" ? { name: arg } : arg;
+      calls.order.push(`cookie.delete:${parsed.name}`);
+      calls.cookieDeleted = parsed;
     },
   }),
 }));
@@ -66,6 +73,7 @@ function callbackRequest(query: string): NextRequest {
 afterEach(() => {
   calls.order.length = 0;
   calls.cookieSet = null;
+  calls.cookieDeleted = null;
   calls.flow = null;
   upstream.ok = true;
   upstream.status = 200;
@@ -86,7 +94,10 @@ describe("GET /api/auth/sso/[provider]/callback", () => {
     expect(calls.order.filter((c) => c.startsWith("fetch:"))).toEqual([]);
     expect(calls.order.filter((c) => c.startsWith("proxyJson:"))).toEqual([]);
     // The flow cookie is cleared even on refusal — a surviving PKCE verifier is a replay window.
-    expect(calls.order).toContain("cookie.delete:ai_sso");
+    // ASSERTED WITH ITS PATH: `delete("ai_sso")` emits `Path=/`, which does not match the cookie
+    // stored at `/api/auth/sso`, so the bare form clears NOTHING. This assertion is the difference
+    // between testing that the line ran and testing that it worked.
+    expect(calls.cookieDeleted).toEqual({ name: "ai_sso", path: "/api/auth/sso" });
   });
 
   it("refuses when the flow cookie is ABSENT entirely", async () => {

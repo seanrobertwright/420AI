@@ -24,7 +24,22 @@ const SSO_ERRORS: Record<string, string> = {
   sso_denied: "The sign-in was cancelled at the provider.",
   sso_unavailable: "Single sign-on is not available right now.",
   unreachable: "Archive unreachable.",
+  // The callback's SESSION_SECRET guard (D.3). It exists to make a misconfiguration LOUD, so
+  // leaving it without copy — as the first version of this map did — made the loud failure silent.
+  config: "Sign-in is misconfigured on the server. Contact your administrator.",
+  failed: "Sign-in failed. Please try again.",
 };
+
+/**
+ * Never render a blank form for a refusal we have no copy for. The map above must be kept in step
+ * with the callback's `refuse(...)` codes, and it already fell behind once (`config` and `failed`
+ * were emitted with no entry, so the page showed nothing at all). A generic fallback makes the
+ * next such gap a vague message rather than an invisible one.
+ */
+function ssoErrorMessage(code: string | null): string | null {
+  if (!code) return null;
+  return SSO_ERRORS[code] ?? "Sign-in failed. Please try again.";
+}
 
 /**
  * M12 12.3 login form — a client island. POSTs {email,password} JSON to the same-origin
@@ -41,8 +56,8 @@ export function LoginForm() {
   const [busy, setBusy] = useState(false);
   // M15 15.7: seeded from `?error=` so a callback refusal is explained on the form the user lands
   // back on, rather than lost in a redirect.
-  const [error, setError] = useState<string | null>(
-    () => SSO_ERRORS[searchParams.get("error") ?? ""] ?? null,
+  const [error, setError] = useState<string | null>(() =>
+    ssoErrorMessage(searchParams.get("error")),
   );
   const [providers, setProviders] = useState<string[]>([]);
 

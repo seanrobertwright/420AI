@@ -144,6 +144,53 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.7 sso_identities (two-role, repos
     expect(await findUserIdBySsoIdentity(appRole.db, "google", "g-5")).toBe(userA);
   });
 
+  /**
+   * THE LINK RACE, at the only layer that can see it. Review finding 2.
+   *
+   * The original guard was a `SELECT` followed by an unguarded upsert. `SELECT` takes no locks, so
+   * two concurrent linkers both passed the read and the loser's `ON CONFLICT DO UPDATE` updated
+   * THE WINNER'S ROW, returning its id — a FALSE SUCCESS, with the route answering 204 to a user
+   * who was not linked. Sequential calls could never show it (the read sees the committed row), so
+   * this needs the interleaving spelled out.
+   *
+   * The fix makes the UNIQUE INDEX the mechanism via `setWhere`, so no lock is involved here — but
+   * the test still has to hold a transaction open to create the window.
+   */
+  it("refuses a CONCURRENT link of the same identity to a different user", async () => {
+    const t1 = await appRole.pool.connect();
+    let outcome: string;
+    try {
+      await t1.query("BEGIN");
+      // T1 claims the identity for userA but does not commit.
+      await t1.query(
+        "insert into sso_identities (user_id, provider, subject) values ($1, 'google', 'g-race2')",
+        [userA],
+      );
+
+      // T2 runs the real repository function for userB. Its INSERT blocks on the unique index.
+      const t2 = linkSsoIdentity(appRole.db, userB, {
+        provider: "google",
+        subject: "g-race2",
+      }).then(
+        () => "SUCCEEDED",
+        (e: unknown) => `THREW:${e instanceof SsoIdentityError ? e.reason : String(e)}`,
+      );
+      await new Promise((r) => setTimeout(r, 300));
+      await t1.query("COMMIT");
+      outcome = await t2;
+    } finally {
+      // Released in a `finally` — a held connection starves the pool and turns one real failure
+      // into a string of fake timeouts in later tests (CLAUDE.md 15.5).
+      t1.release();
+    }
+
+    expect(outcome, "the losing linker must be refused, not silently told it succeeded").toBe(
+      "THREW:identity_taken",
+    );
+    // …and the row still belongs to the WINNER. A refusal that re-pointed it would be the takeover.
+    expect(await findUserIdBySsoIdentity(appRole.db, "google", "g-race2")).toBe(userA);
+  });
+
   // 4 ── THE LAST-CREDENTIAL GUARD, in BOTH directions. The negative half alone would pass for an
   // implementation that refuses everything.
   it("refuses to unlink the ONLY credential of a password-less account", async () => {

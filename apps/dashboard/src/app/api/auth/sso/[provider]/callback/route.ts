@@ -4,7 +4,7 @@ import { ingestUrl } from "@/lib/ingest";
 import { proxyJson } from "@/lib/proxy";
 import { safeNext } from "@/lib/safe-next";
 import { SESSION_COOKIE, sessionConfigError } from "@/lib/session";
-import { parseSsoFlow, SSO_FLOW_COOKIE } from "@/lib/sso-flow";
+import { parseSsoFlow, SSO_FLOW_COOKIE, SSO_FLOW_PATH } from "@/lib/sso-flow";
 
 /**
  * M15 15.7 — the provider's redirect target. Validates `state`, exchanges the code through ingest,
@@ -30,7 +30,13 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ prov
   const flow = parseSsoFlow(jar.get(SSO_FLOW_COOKIE)?.value);
   // Deleted IMMEDIATELY after reading, before any await that could fail — one authorization code,
   // one attempt. Every `return` below therefore leaves no verifier behind.
-  jar.delete(SSO_FLOW_COOKIE);
+  //
+  // WITH THE PATH, and that is not a detail: `jar.delete(name)` defaults to `Path=/`, which does
+  // NOT match a cookie stored at `/api/auth/sso` (browsers key on name+domain+path). The bare form
+  // shipped here and quietly did nothing — the expiry went out for a different cookie while the
+  // real one, carrying the PKCE verifier and `state`, stayed live for its full 10-minute Max-Age.
+  // The sentence above it was already promising otherwise, which is the part that made it dangerous.
+  jar.delete({ name: SSO_FLOW_COOKIE, path: SSO_FLOW_PATH });
 
   const q = req.nextUrl.searchParams;
   const code = q.get("code");

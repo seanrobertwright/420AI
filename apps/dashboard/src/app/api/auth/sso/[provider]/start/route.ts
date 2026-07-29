@@ -2,7 +2,12 @@ import { cookies } from "next/headers";
 import { NextResponse, type NextRequest } from "next/server";
 import { ingestUrl } from "@/lib/ingest";
 import { proxyJson } from "@/lib/proxy";
-import { SSO_FLOW_COOKIE, SSO_FLOW_MAX_AGE_SECONDS, type SsoFlowState } from "@/lib/sso-flow";
+import {
+  SSO_FLOW_COOKIE,
+  SSO_FLOW_MAX_AGE_SECONDS,
+  SSO_FLOW_PATH,
+  type SsoFlowState,
+} from "@/lib/sso-flow";
 
 /**
  * M15 15.7 — begin an SSO authorization request and bounce the browser to the provider.
@@ -68,8 +73,9 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ prov
     // working perfectly in any same-site test.
     sameSite: "lax",
     // Scoped to the SSO routes: this cookie carries a PKCE verifier and has no business riding
-    // along on every request to the app.
-    path: "/api/auth/sso",
+    // along on every request to the app. THE CALLBACK MUST PASS THE SAME PATH TO `delete` — see
+    // `SSO_FLOW_PATH`, which is a shared constant precisely because that mismatch shipped once.
+    path: SSO_FLOW_PATH,
     maxAge: SSO_FLOW_MAX_AGE_SECONDS,
     secure: process.env.NODE_ENV === "production",
   });

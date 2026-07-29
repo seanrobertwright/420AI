@@ -70,8 +70,20 @@ export async function findUserIdBySsoIdentity(
 
 /**
  * Link a provider identity to a user. Throws `identity_taken` when that (provider, subject) is
- * already bound to somebody else — which the unique index would raise anyway, but as an opaque
- * 500. Catching it here turns the race into a clean 409 at every call site.
+ * already bound to somebody else.
+ *
+ * THE MECHANISM IS THE UNIQUE INDEX, NOT THE READ (CLAUDE.md 15.5 — "name the mechanism: a lock, a
+ * unique index, or an isolation level"). An earlier version of this function guarded with a
+ * `SELECT` and then upserted, and its comment claimed that "turns the race into a clean 409 at
+ * every call site". It did not, and the claim was the worse half: `SELECT` takes no locks, so two
+ * concurrent linkers both passed the read, and the loser's unguarded `ON CONFLICT DO UPDATE`
+ * updated THE WINNER'S ROW and returned its id — reporting success to a user who was not linked.
+ * Measured with two hand-held transactions, not theorised.
+ *
+ * The fix is `setWhere`: the update fires only when the conflicting row ALREADY belongs to this
+ * user (the double-click case, which must stay a no-op success), and otherwise matches nothing, so
+ * `returning()` comes back EMPTY and that emptiness is the conflict signal. One statement, no
+ * lock, no retry — Postgres resolves the race at the index.
  */
 export async function linkSsoIdentity(
   db: DbClient,
@@ -79,10 +91,6 @@ export async function linkSsoIdentity(
   identity: { provider: string; subject: string; email?: string | null },
 ): Promise<{ id: string }> {
   const email = identity.email ? normalizeEmail(identity.email) : null;
-  const existing = await findUserIdBySsoIdentity(db, identity.provider, identity.subject);
-  if (existing && existing !== userId) {
-    throw new SsoIdentityError("identity already linked to another account", "identity_taken");
-  }
   const [row] = await db
     .insert(ssoIdentities)
     .values({ userId, provider: identity.provider, subject: identity.subject, email })
@@ -91,9 +99,16 @@ export async function linkSsoIdentity(
     .onConflictDoUpdate({
       target: [ssoIdentities.provider, ssoIdentities.subject],
       set: { email },
+      // The whole guard. Without it the conflicting row is updated no matter who owns it.
+      setWhere: eq(ssoIdentities.userId, userId),
     })
     .returning({ id: ssoIdentities.id });
-  return row!;
+  if (!row) {
+    // `setWhere` matched nothing ⇒ the row exists and belongs to somebody else. Note this cannot
+    // be confused with "insert affected nothing" — an unconflicted insert always returns its row.
+    throw new SsoIdentityError("identity already linked to another account", "identity_taken");
+  }
+  return row;
 }
 
 /** A user's linked identities, newest first. Explicit columns; rows reach the wire. */
