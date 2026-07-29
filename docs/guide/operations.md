@@ -663,3 +663,109 @@ restore pre-15.4 behaviour (every tick reconciles) — that is what the integrat
 | `withOrg requires a non-empty role`                       | A caller passed `""`. Machine paths must pass `SERVICE_ROLE` explicitly; a blank role would be coalesced to the permissive default.                                                               |
 | A user has two memberships and resolves to the wrong role | `findPrincipalByEmail` takes the FIRST by `(created_at, id)`. `setUserPassword` auto-creates a personal `owner` membership, so **move** an invited user's membership rather than adding a second. |
 | A viewer's `GET /v1/monitor` 500s                         | The snapshot's reconcile write is running under `principal.role` instead of `SERVICE_ROLE`. See the table above.                                                                                  |
+
+## 15.6 — Sessions & revocation
+
+Sessions are **server-side rows** as of migration `0018` (D-M15-12). Before it, a session was a
+stateless HMAC with no record anywhere, so the only way to invalidate one was rotating
+`SESSION_SECRET` — which signs out every user on the deployment at once.
+
+**Rotating `SESSION_SECRET` is no longer the revocation mechanism.** Use the endpoints:
+
+```bash
+# list your live sessions. Returns:
+#   {"sessions":[{"id":"…","createdAt":"…Z","expiresAt":"…Z","userAgent":"…","current":true}]}
+curl.exe -s localhost:8420/v1/auth/sessions -H "Authorization: Bearer $TOKEN"
+
+# sign one device out → 204. 404 if the id is unknown OR not yours (deliberately
+# indistinguishable, so this is not an enumeration oracle); 400 if it is not a UUID.
+curl.exe -s -X DELETE localhost:8420/v1/auth/sessions/<id> -H "Authorization: Bearer $TOKEN"
+
+# end the current session        → 204 (204 for an ADMIN_TOKEN caller too: nothing to revoke)
+curl.exe -s -X POST localhost:8420/v1/auth/logout -H "Authorization: Bearer $TOKEN"
+
+# sign out EVERYWHERE, this device included → 200 {"revoked": n}
+curl.exe -s -X POST localhost:8420/v1/auth/sessions/revoke-all -H "Authorization: Bearer $TOKEN"
+```
+
+Revocation also happens automatically, at three triggers:
+
+| Trigger                                | Scope                           | Why                                                                                                               |
+| -------------------------------------- | ------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `POST /v1/auth/password-reset/confirm` | **All** sessions, sparing none  | OWASP Forgot-Password. The caller is unauthenticated and the flow exists because someone else may hold a session. |
+| `POST /v1/auth/password` (change)      | All **except** the caller's own | The caller just re-proved their current password; logging them out of that tab is a tax with no security gain.    |
+| `DELETE /v1/members/:userId`           | All of the removed member's     | In the same transaction as the membership delete.                                                                 |
+
+**An open Live Monitor stream dies too.** `GET /v1/monitor/stream` holds its socket open and serves
+snapshots on a timer, so a connect-time check alone would have kept streaming to a revoked — or
+removed — user indefinitely. It now re-checks the session every tick and tears the stream down with
+an `event: error` frame carrying `{"error":"session revoked"}`, within roughly one poll interval.
+`ADMIN_TOKEN` streams are exempt: that tier has no session row (D-M15-7 retires it in 15.9).
+
+`PATCH /v1/members/:userId` (a role change) deliberately does **not** revoke: `role` is re-resolved
+from `memberships` on every request, so a demotion is already live on the target's next call.
+
+**Rotating `ADMIN_PASSWORD` does NOT revoke** — the one credential change that cannot. The boot-time
+seed re-hashes on every restart, and scrypt re-salts each time, so the server cannot tell a rotation
+from an ordinary restart; revoking there would sign the admin out on every boot. If you are rotating
+because the password LEAKED, call revoke-all explicitly afterwards:
+
+```bash
+TOKEN=$(curl.exe -s localhost:8420/v1/auth/login -H 'content-type: application/json'   --data-binary @login.json | jq -r .token)
+curl.exe -s -X POST localhost:8420/v1/auth/sessions/revoke-all -H "Authorization: Bearer $TOKEN"
+```
+
+### Upgrading to 0018 signs everyone out, once (D-15.6-5)
+
+A token minted before 0018 has no `sid` claim, and it is **rejected rather than grandfathered**. A
+grace period would be a window in which revocation silently does not apply, which is the one failure
+this slice exists to remove. Expect every logged-in user to log in again after the upgrade; nothing
+else is affected, and no account, org or membership is touched.
+
+**Rolling `0018` back is NOT the same cost in the other direction**, and the difference matters.
+It drops the table and with it every revocation record — the pre-0018 verifier never looks a session
+up, so tokens keep authenticating and **any session you had revoked becomes live again**. Nobody is
+signed out. Roll the CODE back with it: 15.6 code against a dropped `sessions` table makes
+`findLiveSession` query a missing relation, so every authenticated request 500s.
+
+### The dashboard-shell residual (D-15.6-4) — real, and named on purpose
+
+`apps/dashboard/src/middleware.ts` verifies the session cookie's MAC on the **Edge runtime, with no
+database access**, so it _cannot_ see revocation. It remains a MAC+expiry UX gate.
+
+**Consequence:** for up to 7 days (the token TTL) a revoked-but-unexpired cookie still renders the
+dashboard **shell**, while **every data fetch through it 401s from ingest**. The user sees a
+logged-in-looking page with errors instead of a redirect to `/login`.
+
+This is deliberate. The security boundary is ingest, not Next: no data is served. Closing the gap
+would mean calling ingest from middleware — a network hop on **every navigation** — for no security
+gain. Do not "fix" the middleware. If the user-visible behaviour matters for a deployment, the lever
+is a shorter session TTL — which today means editing `SESSION_TTL_SECONDS` in
+`apps/ingest/src/session.ts` and restarting. It is deliberately **not** an env var yet, so do not go
+looking for it in `.env.example`.
+
+### Troubleshooting
+
+| Symptom                                                          | Cause                                                                                                                                                                                                                                                                                            |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Everyone was signed out after a deploy                           | Expected once, immediately after `0018`. Pre-0018 tokens carry no `sid` and are rejected (D-15.6-5).                                                                                                                                                                                             |
+| The dashboard renders but every panel errors                     | The D-15.6-4 residual: the cookie's MAC is still valid, its session row is not. Log out and back in; the cookie expires on its own within 7 days.                                                                                                                                                |
+| `DELETE /v1/auth/sessions/:id` returns 404 for an id you can see | It belongs to another user. The route collapses "unknown" and "not yours" so it cannot become an enumeration oracle.                                                                                                                                                                             |
+| An `ADMIN_TOKEN` caller's session list looks wrong               | The service token has no session row of its own, so nothing is flagged `current`. Any rows listed are the bootstrap admin USER's own browser logins — empty unless that human has also used `/v1/auth/login`. Its `logout` is a no-op 204 and it keeps working until D-M15-7 retires it in 15.9. |
+
+### Session rows are never purged (known residual, deliberate for 15.6)
+
+A `sessions` row is **stamped**, never deleted — revocation sets `revoked_at`, and expiry is a
+predicate rather than a cleanup. So the table grows by one row per login, forever.
+
+That is intentional at this slice: revocation history is the audit trail 15.10's audit table will
+want, `findLiveSession` is a primary-key probe (growth costs nothing on the hot path), and
+`listSessions` filters to live rows, so nothing user-visible degrades. For a self-hosted deployment
+the volume is negligible.
+
+If a deployment ever needs it, the purge is a one-liner and safe to run at any time — a row past its
+`expires_at` can never authenticate again:
+
+```sql
+DELETE FROM sessions WHERE expires_at < now() - interval '30 days';
+```

@@ -45,7 +45,16 @@ const ALLOWED_WITHOUT_WITHORG: Record<string, string> = {
   "catalog.ts": "pricing_catalogs is deployment-global — no org_id, no policy",
   "connector-catalog.ts": "connector_catalogs is deployment-global — no org_id, no policy",
   // Identity tables the org resolution itself reads — a policy here would be circular.
-  "auth.ts": "reads `users` to ESTABLISH identity; users/organizations/memberships carry no RLS",
+  // M15 15.6 EXTENDS this reason rather than leaving it to quietly under-describe the file — the
+  // comment two entries down explains why a stale justification here is worse than a missing one.
+  // `auth.ts` now also reads and WRITES `sessions`, which is likewise an identity table with no
+  // `org_id` and no policy (D-15.6-3), and for the same circularity: `resolvePrincipal` reads that
+  // row at the one moment before any org context exists, because resolving it is part of what
+  // establishes the context. A session is owned by a USER, not an org, so `userId` — not `orgId` —
+  // is the scoping predicate on every call.
+  "auth.ts":
+    "reads `users` to ESTABLISH identity and `sessions` to establish the request context; " +
+    "users/organizations/memberships/sessions carry no RLS",
   // The BOOTSTRAP paths (D-15.3-3) — circular with respect to tenancy by construction.
   "pair.ts": "redeems the pairing code IN ORDER TO discover the org (bootstrap-permissive)",
   // M15 15.5 REMOVED `pairing-codes.ts`. Its exemption read "writes a row for a TARGET user whose

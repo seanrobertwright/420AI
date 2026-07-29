@@ -1,9 +1,11 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from "vitest";
+import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import type { IngestBatch } from "@420ai/shared";
 import {
   createDb,
+  createSession,
   ensurePersonalOrg,
   indexSessions,
   ingestBatch,
@@ -336,7 +338,15 @@ describe.skipIf(!TEST_URL)("M15 15.2 request principal (HTTP e2e via inject)", (
   it("a session token whose sub has NO user row is 401 (the intended fail-closed change)", async () => {
     // `adminAuthorized` returned true here — a validly-signed token for a since-deleted
     // user acted as the admin. resolvePrincipal fails closed instead.
-    const { token } = signSession("ghost@example.com", SESSION_SECRET, 3600);
+    //
+    // M15 15.6 RE-LAYERS this test, and the re-layering is worth naming rather than papering over.
+    // A token now carries a `sid`, and `sessions.user_id` has an FK to `users` — so "a LIVE session
+    // whose sub has no user row" is not constructible any more; the database forbids the row. What
+    // a forger CAN still present for a ghost is a valid MAC over a well-formed `sid` naming no
+    // session, which fails closed one layer EARLIER (at `findLiveSession`) for the same reason.
+    // That is what this now asserts. The reachable half of the original claim — user exists,
+    // membership does not — moves to the next test, which mints a real session for it.
+    const { token } = signSession("ghost@example.com", SESSION_SECRET, 3600, randomUUID());
     const res = await app.inject({ method: "GET", url: "/v1/auth/me", headers: asUser(token) });
     expect(res.statusCode).toBe(401);
     expect(res.json()).toEqual({ error: "admin authorization required" });
@@ -348,7 +358,11 @@ describe.skipIf(!TEST_URL)("M15 15.2 request principal (HTTP e2e via inject)", (
       .values({ email: "orphan@example.com" })
       .returning({ id: users.id });
     expect(orphan).toBeDefined();
-    const { token } = signSession("orphan@example.com", SESSION_SECRET, 3600);
+    // M15 15.6: a REAL session row, so the 401 below still proves what this test claims. With a
+    // fabricated `sid` the request would be rejected at the session lookup and never reach
+    // `findPrincipalByEmail` — the test would pass while the membership check went unexercised.
+    const { id: sid } = await createSession(dbh.db, orphan!.id, new Date(Date.now() + 3600 * 1000));
+    const { token } = signSession("orphan@example.com", SESSION_SECRET, 3600, sid);
     const res = await app.inject({ method: "GET", url: "/v1/auth/me", headers: asUser(token) });
     expect(res.statusCode).toBe(401);
   });

@@ -9,6 +9,8 @@ export {
   // M15 15.5 identity core: an org-owned invitation and an identity-owned reset token.
   invites,
   passwordResetTokens,
+  // M15 15.6: a stateful user session (D-M15-12). Identity-owned — no org_id, no RLS.
+  sessions,
   ingestTokens,
   rawSourceRecords,
   events,
@@ -90,6 +92,16 @@ export {
   consumePasswordReset,
   PasswordResetError,
 } from "./repositories/password-resets.js";
+// M15 15.6 stateful sessions (D-M15-12). An IDENTITY table — no org_id, no RLS — so nothing here
+// takes an `orgId`; `userId` is the second parameter wherever scoping is needed.
+export {
+  createSession,
+  findLiveSession,
+  listSessions,
+  revokeAllSessions,
+  revokeSession,
+} from "./repositories/sessions.js";
+export type { SessionRow } from "./repositories/sessions.js";
 // M15 15.5 org member management. `memberships`/`users` carry NO RLS, so the explicit orgId
 // predicate in each of these is the ONLY tenancy boundary — there is no backstop behind it.
 export {

@@ -55,6 +55,16 @@ declare module "fastify" {
     /** M15 15.2 — the resolved caller (user + org + role), or null before/without resolution.
      *  Set by resolvePrincipal(); read by handlers that need it after their own gate. */
     principal: import("@420ai/db").Principal | null;
+    /** M15 15.6 — the caller's `sessions` row id, or null for an ADMIN_TOKEN caller (which has
+     *  no session) and before resolution. Set by resolvePrincipal() alongside `principal`.
+     *
+     *  STASHED RATHER THAN RE-DERIVED. The handlers that need it (logout, revoke-all sparing the
+     *  current session, the `current: true` flag, the SSE stream's per-tick re-check) all run
+     *  strictly AFTER a successful resolvePrincipal, which has already parsed the bearer, verified
+     *  the MAC and validated the id as a uuid. Re-deriving it meant a second Bearer parse and a
+     *  second HMAC per request — and, worse, a second place the parsing could drift from this one.
+     *  A stashed value cannot drift. */
+    sessionId: string | null;
   }
 }
 
@@ -71,6 +81,8 @@ export default fp(async function authPlugin(app) {
   // M15 15.2: `null`, never an object literal — Fastify shares a reference-type decorator
   // default across every request, so a per-request assignment is the only safe form.
   app.decorateRequest("principal", null);
+  // M15 15.6 — same rule: a primitive default is safe to share, an object literal would not be.
+  app.decorateRequest("sessionId", null);
 
   app.decorate(
     "authenticate",

@@ -1,15 +1,20 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
+import type { DbClient } from "@420ai/db";
 import {
   acceptInvite,
   consumePasswordReset,
   createPasswordReset,
+  createSession,
   createUserWithPassword,
   ensurePersonalOrg,
   findAdminCredential,
   findInviteByToken,
   findUserIdByEmail,
   getOrgName,
+  listSessions,
   normalizeEmail,
+  revokeAllSessions,
+  revokeSession,
   updatePasswordHash,
 } from "@420ai/db";
 import {
@@ -22,7 +27,7 @@ import {
 } from "../schemas.js";
 import { hashPassword, verifyPassword } from "../password.js";
 import { signSession, SESSION_TTL_SECONDS } from "../session.js";
-import { resolvePrincipal, authorized } from "../auth.js";
+import { resolvePrincipal, authorized, isUuid } from "../auth.js";
 
 interface LoginBody {
   email: string;
@@ -48,11 +53,50 @@ interface ChangePasswordBody {
   newPassword: string;
 }
 
+// ── module-private helpers ────────────────────────────────────────────────────────────────────
+
+/**
+ * M15 15.6 — mint a `sessions` row AND the token that carries its id (D-M15-12). The three places
+ * that log a user in (login, invite-accept, signup) all go through here.
+ *
+ * The row's `expires_at` and the token's `exp` come from THE SAME `SESSION_TTL_SECONDS`, in one
+ * place, deliberately: computed independently at three call sites the constant would eventually
+ * drift, and a token that outlives its row (or vice versa) is a 401 nobody can explain. (The two
+ * read the clock a moment apart — the insert's round trip sits between them, and `exp` floors to
+ * whole seconds — so they agree on the TTL, not on the exact instant. Sub-second on a 7-day
+ * lifetime; worth stating precisely rather than claiming an exactness that is not there.)
+ *
+ * `userId` and `email` arrive in an OPTIONS OBJECT rather than as two adjacent `string` positional
+ * parameters, for the reason the repo makes `orgId` always-second: adjacent same-typed arguments
+ * are transposable in a way review cannot see. Here the transposition would be caught by the uuid
+ * cast, but relying on the database to catch a caller's slip is the weaker design.
+ *
+ * The user-agent is truncated to 256 chars HERE, at the edge (D-15.6-9). It is attacker-controlled
+ * free text that is later rendered in a session list, and the column is unbounded `text`, so the
+ * bound belongs at the boundary rather than in the schema.
+ */
+async function mintSession(
+  db: DbClient,
+  request: FastifyRequest,
+  sessionSecret: string,
+  { userId, email }: { userId: string; email: string },
+): Promise<{ token: string; expiresAt: string }> {
+  const { id: sid } = await createSession(
+    db,
+    userId,
+    new Date(Date.now() + SESSION_TTL_SECONDS * 1000),
+    request.headers["user-agent"]?.slice(0, 256) ?? null,
+  );
+  const { token, exp } = signSession(email, sessionSecret, SESSION_TTL_SECONDS, sid);
+  return { token, expiresAt: new Date(exp * 1000).toISOString() };
+}
+
 /**
  * M12 12.3 admin login surface. POST /v1/auth/login is the ONE un-gated admin route
- * (it's the entry point); it issues a stateless HMAC session token the dashboard then
- * carries as a bearer (the hybrid resolvePrincipal gate accepts it). GET /v1/auth/me is
- * a session-gated identity probe for the dashboard's logged-in state.
+ * (it's the entry point); it issues an HMAC session token the dashboard then carries as a bearer
+ * (the hybrid resolvePrincipal gate accepts it). GET /v1/auth/me is a session-gated identity probe
+ * for the dashboard's logged-in state. (12.3 called that token STATELESS; M15 15.6 made it stateful
+ * — see the 15.6 paragraph at the end of this block.)
  *
  * Brute-force rate-limiting was deferred from 12.3 and SHIPPED in 12.4c: the route config
  * below applies app.rateLimitLogin (strict per-route limit, on by default via server.ts).
@@ -80,6 +124,13 @@ interface ChangePasswordBody {
  * `password_reset_tokens`) carry no RLS, and `invites` is permissive without a context — while the
  * ATOMICITY is what actually matters here (a user created without their membership, or a token
  * consumed without the password changing, are both worse than a failed request).
+ *
+ * M15 15.6 — the file gains SESSION MANAGEMENT (D-M15-12), and the `withOrg` reasoning above
+ * extends to it unchanged: `sessions` is an identity table with no `org_id` and no policy
+ * (D-15.6-3), read inside `resolvePrincipal` at the one moment before any org context exists. Every
+ * session read and write here is scoped by `userId`, never `orgId`, because a session belongs to a
+ * USER — being removed from an org ends the login (`routes/members.ts`), but the org is not what
+ * owns the row.
  */
 export default async function authRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Body: LoginBody }>(
@@ -93,15 +144,31 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
     },
     async (request, reply) => {
       const { email, password } = request.body;
-      const cred = await findAdminCredential(app.db, email);
-      // Generic 401 whether the user is missing or the password is wrong (no user-enumeration).
-      if (!cred?.passwordHash || !verifyPassword(password, cred.passwordHash)) {
+      // M15 15.6 — THE CREDENTIAL READ AND THE SESSION INSERT ARE ONE TRANSACTION, holding a
+      // `FOR SHARE` lock on the user row across the scrypt in between. Without the lock a login
+      // that overlapped a password RESET could mint a session the reset's `revokeAllSessions` had
+      // already run past, leaving a session minted from the OLD password valid for 7 days — the
+      // exact takeover-recovery failure D-15.6-6 exists to close, and reproducible at the HTTP
+      // layer. `findAdminCredential`'s doc comment names the lock and both orderings.
+      //
+      // The cost is holding a transaction across ~100 ms of scrypt on a rate-limited path, which
+      // the sibling reset-confirm route already accepts for the same class of reason.
+      const outcome = await app.db.transaction(async (tx) => {
+        const cred = await findAdminCredential(tx, email, { lock: true });
+        // Generic 401 whether the user is missing or the password is wrong (no user-enumeration).
+        if (!cred?.passwordHash || !verifyPassword(password, cred.passwordHash)) {
+          return "invalid" as const;
+        }
+        // M15 15.5 (D-15.5-3): sign the NORMALIZED address, so a session minted from `Foo@corp.com`
+        // carries the same `sub` that `findPrincipalByEmail` will look up on every later request.
+        // M15 15.6: the row is created BEFORE the token is signed — a token can never name a `sid`
+        // that does not exist, so `resolvePrincipal` failing closed on an unknown `sid` is safe.
+        return mintSession(tx, request, app.sessionSecret, { userId: cred.id, email: cred.email });
+      });
+      if (outcome === "invalid") {
         return reply.code(401).send({ error: "invalid email or password" });
       }
-      // M15 15.5 (D-15.5-3): sign the NORMALIZED address, so a session minted from `Foo@corp.com`
-      // carries the same `sub` that `findPrincipalByEmail` will look up on every later request.
-      const { token, exp } = signSession(cred.email, app.sessionSecret, SESSION_TTL_SECONDS);
-      return reply.code(200).send({ token, expiresAt: new Date(exp * 1000).toISOString() });
+      return reply.code(200).send(outcome);
     },
   );
 
@@ -175,13 +242,27 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
       // ONE transaction: `acceptInvite` re-validates the token inside it, so two concurrent
       // accepts cannot both stamp the same invite, and a crash cannot leave a user with no
       // membership (which `resolvePrincipal` would fail closed on — a permanently locked account).
-      await app.db.transaction(async (tx) => {
-        const userId = await createUserWithPassword(tx, invite.email, passwordHash);
-        await acceptInvite(tx, request.body.token, userId);
+      // M15 15.6: the new user's id must ESCAPE the transaction so the session can be minted for
+      // it — REUSED, never re-queried, so there is no window in which a second `users` row for the
+      // same address could be resolved instead. RETURNED out of the callback rather than assigned
+      // to an outer `let`: the `let` form needs a `!` at the use site (TS cannot see through the
+      // callback), and that assertion would hide a real bug the day someone adds an early `return`
+      // to the transaction — `undefined` would reach `createSession` as a `user_id` AFTER the user
+      // row had already committed. Returning it makes that a type error instead.
+      const newUserId = await app.db.transaction(async (tx) => {
+        const id = await createUserWithPassword(tx, invite.email, passwordHash);
+        await acceptInvite(tx, request.body.token, id);
+        return id;
       });
 
-      const { token, exp } = signSession(invite.email, app.sessionSecret, SESSION_TTL_SECONDS);
-      return reply.code(200).send({ token, expiresAt: new Date(exp * 1000).toISOString() });
+      // The session is minted AFTER the transaction commits, deliberately: a rolled-back accept
+      // must not leave a live session pointing at a user row that no longer exists.
+      return reply.code(200).send(
+        await mintSession(app.db, request, app.sessionSecret, {
+          userId: newUserId,
+          email: invite.email,
+        }),
+      );
     },
   );
 
@@ -215,13 +296,16 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
       }
 
       const passwordHash = hashPassword(request.body.password);
-      await app.db.transaction(async (tx) => {
-        const userId = await createUserWithPassword(tx, email, passwordHash);
-        await ensurePersonalOrg(tx, userId, email);
+      // Same escape-the-transaction shape as invite-accept above, and for the same reason.
+      const newUserId = await app.db.transaction(async (tx) => {
+        const id = await createUserWithPassword(tx, email, passwordHash);
+        await ensurePersonalOrg(tx, id, email);
+        return id;
       });
 
-      const { token, exp } = signSession(email, app.sessionSecret, SESSION_TTL_SECONDS);
-      return reply.code(200).send({ token, expiresAt: new Date(exp * 1000).toISOString() });
+      return reply
+        .code(200)
+        .send(await mintSession(app.db, request, app.sessionSecret, { userId: newUserId, email }));
     },
   );
 
@@ -312,11 +396,17 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
         // one `password_reset_tokens` row on a rate-limited, low-volume path, and it buys the
         // atomicity that makes a leaked token non-replayable.
         await updatePasswordHash(tx, userId, hashPassword(request.body.password));
+        // M15 15.6 (D-M15-12 / D-15.6-6) — INVALIDATE ON CREDENTIAL CHANGE, and here that means
+        // ALL of them, sparing none. OWASP's Forgot-Password guidance requires it, and the reason
+        // is the canonical recovery story: "somebody took over my account, let me reset my
+        // password". The caller is UNAUTHENTICATED and has no current session to spare; the whole
+        // point of the flow is that somebody else may be holding one.
+        //
+        // Inside the EXISTING transaction, not a second one: a password written but sessions left
+        // live is exactly the half-state the atomicity note above warns about, and it is the more
+        // dangerous half — the victim believes they have locked the attacker out.
+        await revokeAllSessions(tx, userId);
       });
-      // 15.6 (D-M15-12): sessions become stateful; THIS is where invalidate-on-credential-change
-      // lands. Today a session is a stateless HMAC (session.ts) and the ONLY revocation is rotating
-      // SESSION_SECRET, so there is no partial revocation to attempt here. Half-revocation would be
-      // worse than none: indistinguishable from working revocation, and harder to verify in 15.6.
       return reply.code(204).send();
     },
   );
@@ -341,11 +431,134 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
         // same answer login gives.
         return reply.code(401).send({ error: "invalid email or password" });
       }
-      await updatePasswordHash(app.db, principal.userId, hashPassword(request.body.newPassword));
-      // 15.6 (D-M15-12): sessions become stateful; THIS is where invalidate-on-credential-change
-      // lands. See the note on the reset-confirm route above — the caller's other sessions stay
-      // valid until then, and that is a deliberate deferral rather than an oversight.
+      // ONE transaction, for the same reason the reset-confirm route above uses one: a password
+      // written with sessions left live is the dangerous half-state — the user believes they have
+      // locked an attacker out, and has not. These were two autocommit statements until review
+      // caught the asymmetry with the sibling path that documents exactly this hazard.
+      const keep = request.sessionId ?? undefined;
+      await app.db.transaction(async (tx) => {
+        await updatePasswordHash(tx, principal.userId, hashPassword(request.body.newPassword));
+        // M15 15.6 (D-15.6-6) — every session EXCEPT the caller's own, which is the deliberate
+        // asymmetry with the reset-confirm route above. A voluntary password change is performed BY
+        // an authenticated user who has just re-proved their current password; logging them out of
+        // the very tab they did it in would be a usability tax with no security gain. A reset is the
+        // opposite situation and spares nobody.
+        await revokeAllSessions(tx, principal.userId, keep);
+      });
       return reply.code(204).send();
     },
   );
+
+  // ── M15 15.6 session management (D-M15-12) ────────────────────────────────────────────────
+  //
+  // All four routes are session-gated at `viewer`, for the reason `POST /v1/auth/password` above
+  // records: managing YOUR OWN sessions is not a privileged act on the org, and a read-only
+  // account must still be able to sign out a stolen laptop.
+  //
+  // None of them takes `withOrg`. `sessions` is an identity table with no `org_id` and no policy
+  // (D-15.6-3); the `userId` predicate inside every repository call IS the whole scoping.
+
+  /**
+   * GET /v1/auth/sessions — the caller's LIVE sessions, newest first, with their own flagged
+   * `current: true` so a UI can say "this device".
+   *
+   * An `ADMIN_TOKEN` caller has no session, so `currentSid` is null and nothing is flagged. The
+   * list itself is still whatever `sessions` holds for the bootstrap admin USER — which is empty
+   * unless that human has also logged in through `/v1/auth/login`.
+   */
+  app.get("/v1/auth/sessions", async (request, reply) => {
+    const principal = await resolvePrincipal(app, request);
+    if (!principal) {
+      return reply.code(401).send({ error: "admin authorization required" });
+    }
+    if (!authorized(principal, "viewer")) {
+      return reply.code(403).send({ error: "insufficient role" });
+    }
+    const sid = request.sessionId;
+    const rows = await listSessions(app.db, principal.userId);
+    return reply.code(200).send({
+      sessions: rows.map((s) => ({
+        id: s.id,
+        createdAt: s.createdAt.toISOString(),
+        expiresAt: s.expiresAt.toISOString(),
+        userAgent: s.userAgent,
+        current: s.id === sid,
+      })),
+    });
+  });
+
+  /**
+   * DELETE /v1/auth/sessions/:id — sign ONE of the caller's own sessions out.
+   *
+   * 404 — NOT 403 — when the id belongs to somebody else. `revokeSession` collapses "unknown",
+   * "already revoked" and "not yours" into one `false` on purpose: telling a caller that a session
+   * id exists but is not theirs turns this route into an enumeration oracle, the same reasoning
+   * that makes the reset route always answer 202 (D-15.5-7).
+   */
+  app.delete<{ Params: { id: string } }>("/v1/auth/sessions/:id", async (request, reply) => {
+    const principal = await resolvePrincipal(app, request);
+    if (!principal) {
+      return reply.code(401).send({ error: "admin authorization required" });
+    }
+    if (!authorized(principal, "viewer")) {
+      return reply.code(403).send({ error: "insufficient role" });
+    }
+    // `isUuid` first, so a malformed id is a 400 rather than a Postgres uuid-cast 500 — the
+    // repo-wide "unknown id → 404, never a DB-constraint 500" invariant.
+    if (!isUuid(request.params.id)) {
+      return reply.code(400).send({ error: "invalid session id" });
+    }
+    const revoked = await revokeSession(app.db, principal.userId, request.params.id);
+    if (!revoked) {
+      return reply.code(404).send({ error: "no such session" });
+    }
+    return reply.code(204).send();
+  });
+
+  /**
+   * POST /v1/auth/logout — end the CURRENT session server-side.
+   *
+   * This is the route that makes logout mean something (OWASP Session Management: a session
+   * identifier must be invalidated ON THE SERVER, not merely dropped by the client). Until 15.6 the
+   * dashboard deleted its cookie and the token stayed valid for the rest of its seven days.
+   *
+   * 204 even for an `ADMIN_TOKEN` caller, which has no session to revoke: logout is idempotent, and
+   * the desktop app still presents `ADMIN_TOKEN` until D-M15-7 retires it in 15.9. Erroring there
+   * would break a client for successfully being in the state it asked for.
+   */
+  app.post("/v1/auth/logout", async (request, reply) => {
+    const principal = await resolvePrincipal(app, request);
+    if (!principal) {
+      return reply.code(401).send({ error: "admin authorization required" });
+    }
+    if (!authorized(principal, "viewer")) {
+      return reply.code(403).send({ error: "insufficient role" });
+    }
+    const sid = request.sessionId;
+    if (sid) await revokeSession(app.db, principal.userId, sid);
+    return reply.code(204).send();
+  });
+
+  /**
+   * POST /v1/auth/sessions/revoke-all — sign out EVERYWHERE, the caller's own session INCLUDED.
+   *
+   * That inclusion is the deliberate difference from `POST /v1/auth/password`, which spares the
+   * current session: "sign out all devices" is a panic button, and a panic button that leaves the
+   * device you pressed it on signed in does not do what its label says. The dashboard clears the
+   * cookie immediately afterwards.
+   *
+   * Returns `{revoked: n}` where n is how many were LIVE, so a second call answers 0 rather than
+   * erroring — `revokeAllSessions` is idempotent by its `revoked_at IS NULL` predicate.
+   */
+  app.post("/v1/auth/sessions/revoke-all", async (request, reply) => {
+    const principal = await resolvePrincipal(app, request);
+    if (!principal) {
+      return reply.code(401).send({ error: "admin authorization required" });
+    }
+    if (!authorized(principal, "viewer")) {
+      return reply.code(403).send({ error: "insufficient role" });
+    }
+    const revoked = await revokeAllSessions(app.db, principal.userId);
+    return reply.code(200).send({ revoked });
+  });
 }

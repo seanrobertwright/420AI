@@ -54,16 +54,38 @@ export async function ensureUserByEmail(db: DbClient, email: string): Promise<st
  * Resolve the admin credential (id + email + scrypt hash) by email, or undefined
  * if no such user exists. `passwordHash` is NULL for pairing-only users (M12 12.3);
  * the login route treats a null hash the same as a missing user (generic 401).
+ *
+ * M15 15.6 — pass `{ lock: true }` (inside a transaction) to take a `FOR SHARE` lock on the user
+ * row. THE LOGIN PATH MUST DO THIS, and the reason is a race the 15.6 review measured rather than
+ * theorised:
+ *
+ *   A login reads the hash, awaits (~100 ms of scrypt), then inserts a `sessions` row. A
+ *   concurrent password RESET updates the hash and runs `revokeAllSessions` — a blind UPDATE, which
+ *   cannot see a row a concurrent transaction has not inserted yet. Interleaved so the login's
+ *   insert lands after the revoke, A SESSION MINTED FROM THE OLD PASSWORD SURVIVES THE RESET, for
+ *   its full 7 days. That is exactly the account-takeover-recovery story D-15.6-6 exists to close,
+ *   and it was reproducible at the HTTP layer with a small stagger (without one, the two handlers'
+ *   blocking scrypt happens to serialise them the safe way, which is why no existing test saw it).
+ *
+ * THE MECHANISM IS THE LOCK, not the transaction (CLAUDE.md 15.5). `FOR SHARE` conflicts with the
+ * `UPDATE users` that both credential-change paths run, so the two orderings are:
+ *   - login first → it holds the lock through its insert; the reset's UPDATE blocks, and its
+ *     `revokeAllSessions` therefore runs AFTER the new row exists and revokes it.
+ *   - reset first → the login's locking read blocks, then re-evaluates under EvalPlanQual and sees
+ *     the NEW hash, so the old password fails and no session is minted at all.
+ * Both are correct; neither needs SERIALIZABLE or a retry loop.
  */
 export async function findAdminCredential(
   db: DbClient,
   email: string,
+  options?: { lock?: boolean },
 ): Promise<{ id: string; email: string; passwordHash: string | null } | undefined> {
-  const [row] = await db
+  const query = db
     .select({ id: users.id, email: users.email, passwordHash: users.passwordHash })
     .from(users)
     .where(eq(users.email, normalizeEmail(email)))
     .limit(1);
+  const [row] = await (options?.lock ? query.for("share") : query);
   return row;
 }
 

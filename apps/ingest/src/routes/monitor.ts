@@ -31,6 +31,7 @@ import {
   deliverResolvedFirings,
   countPendingCatalogs,
   countRecentAuthFailures,
+  findLiveSession,
   withOrg,
   type DbClient,
 } from "@420ai/db";
@@ -275,6 +276,9 @@ export default async function monitorRoutes(app: FastifyInstance): Promise<void>
       return reply.code(403).send({ error: "insufficient role" });
     }
     const userId = principal.userId;
+    // M15 15.6 — captured BEFORE the hijack, alongside the other pre-hijack guards. Null for an
+    // `ADMIN_TOKEN` caller, which has no session (see the per-tick re-check below).
+    const sid = request.sessionId;
 
     reply.raw.writeHead(200, {
       "content-type": "text/event-stream",
@@ -303,14 +307,43 @@ export default async function monitorRoutes(app: FastifyInstance): Promise<void>
       if (timer) clearInterval(timer);
     });
 
+    /** Tear the stream down mid-flight, telling the client WHY before closing the socket. */
+    const terminate = (reason: string): void => {
+      if (closed) return;
+      closed = true;
+      if (timer) clearInterval(timer);
+      reply.raw.write(`event: error\ndata: ${JSON.stringify({ error: reason })}\n\n`);
+      reply.raw.end();
+    };
+
     const push = async (): Promise<void> => {
       if (closed || inFlight) return;
       inFlight = true;
       try {
         const now = new Date();
+        // M15 15.6 (D-M15-12) — RE-CHECK THE SESSION EVERY TICK. This is the one route in the
+        // product that keeps serving data after `resolvePrincipal` has returned, so a
+        // connect-time-only gate means revocation does not reach it: measured before this fix, a
+        // stream kept delivering the org's live snapshot for as long as the client held the socket
+        // AFTER `revoke-all` (and after the viewer was removed from the org) had made every other
+        // route 401. "Remove an employee, sign them out" is the canonical use case for this slice,
+        // and the one long-lived thing they have open was exactly what it missed.
+        //
+        // The previous comment here justified NOT doing this — "that would be a DB round trip per
+        // SSE frame" — and it was measuring the wrong thing. A full `resolvePrincipal` is two
+        // queries; this is ONE primary-key probe, added to a tick that already opens a transaction
+        // spanning eight reads plus a reconcile write. The cost is noise; the gap was a hole.
+        //
+        // `sid === null` means an `ADMIN_TOKEN` caller, which has no session row to check. That
+        // tier is un-revocable by construction until D-M15-7 retires it in 15.9 — skipping the
+        // probe here changes nothing about that, and failing closed on it would break the desktop
+        // app's monitor for a guarantee `ADMIN_TOKEN` never offered.
+        if (sid) {
+          const live = await findLiveSession(app.db, sid);
+          if (!live) return terminate("session revoked");
+        }
         // M15 15.2: `userId` comes from the principal resolved ONCE before the stream
-        // started (never re-resolved per tick — that would be a DB round trip per SSE
-        // frame), so the old `userId ? … : empty` fallback is dead. Teardown wiring
+        // started, so the old `userId ? … : empty` fallback is dead. Teardown wiring
         // above is deliberately untouched.
         // M15 15.3: the RLS context wraps the SNAPSHOT BUILD ONLY — one short transaction per
         // tick. Deliberately NOT the stream, the writeHead, the hijack or the interval: an SSE

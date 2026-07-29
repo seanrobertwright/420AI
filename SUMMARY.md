@@ -241,7 +241,7 @@ through the deferral-audit + scope conversation that produced M12/M13/M14. Full 
   fixed roles + per-project grants (D-M15-4), all four identity paths + reset + MFA (D-M15-5),
   `ADMIN_TOKEN` retired to a bootstrap-only seed (D-M15-7). Slices: **15.0** ✅ Truth + RLS spike ·
   **15.1** ✅ Tenancy schema · **15.2** ✅ Request principal · **15.3** ✅ RLS enforcement · **15.4** ✅ RBAC ·
-  **15.5** ✅ Identity core · **15.6** Sessions + revocation · **15.7** SSO (Google + GitHub) ·
+  **15.5** ✅ Identity core · **15.6** ✅ Sessions + revocation · **15.7** SSO (Google + GitHub) ·
   **15.8** MFA · **15.9** API keys + retire `ADMIN_TOKEN` · **15.10** Team surfaces + audit table.
   **15.0 gates 15.3**; 15.5 gates 15.7.
 - **M16 — Cloud-hosted SaaS.** Multi-tenancy, managed archive, quotas/rate limits beyond 12.4,
@@ -507,13 +507,74 @@ enforced`, the sibling of `skipped ≠ passed`. Closes the Spike-6 hole: a cross
         trap is why the accept path calls `createUserWithPassword` (the ONE users-insert that skips
         `ensurePersonalOrg`) and **never** `setUserPassword`; `identity.int.test.ts` pins it with a
         membership-COUNT assertion that was CONFIRMED to fail under the wrong call before being
-        left green. Sessions are deliberately NOT invalidated on password change — they are
-        stateless HMACs until 15.6 (D-M15-12), and half-revocation would be indistinguishable from
-        working revocation. Proven by two new **two-role** suites (24 HTTP + 11 repository tests):
+        left green. Sessions were deliberately NOT invalidated on password change at this slice —
+        they were stateless HMACs, and half-revocation would have been indistinguishable from
+        working revocation. **15.6 closed that** (D-M15-12). Proven by two new **two-role** suites
+        (24 HTTP + 11 repository tests):
         the HTTP one validates the primary defence, the repository one the predicates — and there
         the split matters more than usual, because `memberships`/`users` carry **no RLS at all**,
         so a forgotten `orgId` predicate has no backstop behind it.
-  - [ ] **15.6** Sessions + revocation · **15.7** SSO · **15.8** MFA ·
+  - [x] **15.6** Sessions + revocation — DONE `2026-07-28` (PR #66). 15.5 shipped invites, signup
+        and password reset onto a session that was a **stateless HMAC with no server-side record**,
+        so the only revocation available was rotating `SESSION_SECRET` — which signs out the whole
+        deployment. Migration `0018` adds a `sessions` table and the token gains a `sid` claim
+        (D-15.6-1: keep the HMAC rather than switching to opaque tokens, or the dashboard's Edge
+        middleware would need a network hop per navigation; a spike proved the extra claim
+        round-trips through `crypto.subtle` untouched, so **no dashboard verifier change**).
+        `sessions` is an IDENTITY table — no `org_id`, **no RLS policy at all** (D-15.6-3), joining
+        `users`/`memberships`/`password_reset_tokens` in `NO_RLS_TABLES`, because it is read INSIDE
+        `resolvePrincipal` at the one moment before any org context exists. It stores **no
+        `token_hash`** (D-15.6-2), departing from `invites`/`password_reset_tokens`: those hold a
+        bearer secret that IS the credential, whereas a session's credential is the HMAC and the
+        `id` is a lookup key — hashing it would imply a protection that is not there. There is
+        **one** enforcement point, `resolvePrincipal`, and three triggers: explicit
+        (logout / revoke-one / revoke-all), credential change, and member removal. The two
+        asymmetries are deliberate and each is pinned: a password **reset** kills every session
+        (OWASP; the caller is unauthenticated and somebody else may hold one) while a password
+        **change** spares the caller's own (D-15.6-6); member **removal** revokes while a **role
+        change** does not (D-15.6-7), since `role` is re-resolved per request. There is deliberately no
+        `last_used_at` (D-15.6-8) — it would put a WRITE on every authenticated read — and
+        `user_agent` is truncated to 256 chars at the route (D-15.6-9), since it is
+        attacker-controlled text that is later rendered. Pre-0018 (`sid`-less)
+        tokens are **rejected, not grandfathered** (D-15.6-5) — everyone logs in once — because a
+        grace period is a window in which revocation silently does not apply.
+        **The proof needed a new shape.** 15.3/15.5 proved their claims by dropping an RLS policy
+        and watching tests fail; there is no policy here to drop, and the failure mode is nastier —
+        a revoked session that still works reports **nothing**: no error, no log, a 200, and every
+        existing test stays green because they all use freshly-minted tokens. So the suite's
+        discriminating assertion is that a rejected token is **still cryptographically valid**
+        (`verifySession` non-null, `exp` in the future) at the moment it 401s, which excludes
+        expiry, tampering and a wrong secret as explanations. Keeping `verifySession` a pure
+        crypto check with no database in it is what makes that assertion possible, so the split is
+        load-bearing rather than stylistic. The mutation check (revocation lookup removed) failed
+        12 of the 23 HTTP tests with **all positives still passing** — and surfaced one finding: the
+        member-removal test PASSED under the mutation, because a removed membership already fails
+        closed via `findPrincipalByEmail`. That accidental mechanism (the one 15.6 replaces, and
+        the one that evaporates when 15.10 ships multi-org users) is now named in the test itself.
+        **A SECOND, ADVERSARIAL REVIEW PASS found the two defects the first missed, and both were
+        the slice's own failure mode turned on itself.** (a) Revocation did not reach an OPEN SSE
+        stream: `GET /v1/monitor/stream` hijacks the socket and was gated once, at connect, so a
+        revoked — or REMOVED — user kept receiving the org's live snapshot indefinitely, kept
+        driving its reconcile writes and kept firing its outbound alerts. Proven against a live
+        server. The gap was the smaller half: the code ASSERTED there was no second enforcement
+        point, and the test claiming to sweep "every authenticated route" was built on
+        `app.inject`, which cannot observe a hijacked socket — `bypassed ≠ enforced`, one layer out.
+        Fixed with a per-tick session re-check (one PK probe on a tick that already spans eight
+        reads) and a regression test on a real `listen()`. (b) A login racing a password RESET
+        survived it — the login inserts its row after the reset's blind `UPDATE` has run past, so a
+        session minted from the OLD password stayed valid for 7 days, exactly the takeover-recovery
+        failure D-15.6-6 exists to close. Fixed with a `FOR SHARE` lock on the user row held across
+        the login's scrypt, so either the reset waits and revokes the new row or the login
+        re-evaluates and refuses. Its FIRST regression test was written at the HTTP layer and passed
+        identically with and without the lock — CLAUDE.md's "concurrency test at the wrong LAYER"
+        lesson, walked into rather than remembered — so it was rewritten at the repository layer
+        with two hand-held transactions. Two new **two-role** suites (23 HTTP + 15 repository) plus
+        a dashboard logout ORDERING test, every behaviour-changing fix verified to FAIL without it,
+        and the D-15.6-4 residual documented
+        rather than hidden: the Edge middleware cannot see revocation, so a revoked-but-unexpired
+        cookie renders the dashboard **shell** while every data fetch 401s. Closing it would cost a
+        network hop per navigation for no security gain — ingest is the boundary.
+  - [ ] **15.7** SSO · **15.8** MFA ·
         **15.9** API keys + retire `ADMIN_TOKEN` · **15.10** Team surfaces + audit table.
 
 - [ ] **M16–M19 remain committed scope, unsequenced** (§3, PRD §25). Each still needs its own

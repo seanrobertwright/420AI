@@ -120,19 +120,28 @@ describe.skipIf(!TEST_URL)("migration rollback (rollbackLast, integration)", () 
     return Number(r.rows[0]!.n);
   }
 
-  it("rolls back the latest migration (0017 identity core) and a re-migrate restores it", async () => {
-    // M15 15.5 D-M15-13 drill, run in CI rather than by hand. Two load-bearing assertions, and
-    // NEITHER is "0017 reverses cleanly":
+  /** Does the M15 15.6 `sessions` table exist? 0018 creates it; its down drops it. */
+  async function sessionsTableExists(): Promise<boolean> {
+    const r = await pool.query(
+      "select 1 from information_schema.tables where table_name = 'sessions'",
+    );
+    return r.rowCount === 1;
+  }
+
+  it("rolls back the latest migration (0018 sessions) and a re-migrate restores it", async () => {
+    // M15 15.6 D-M15-13 drill, run in CI rather than by hand. `rollbackLast` reverses THE LATEST
+    // migration, so this test retargets with every slice that adds one — 15.5's version of it named
+    // 0017. The 15.5 assertions it made survive here as UNTOUCHED-BY-0018 invariants below.
     //
-    //   (a) reversing 0017 leaves 15.3's TENANCY layer and 15.4's ROLE backstop entirely alone.
-    //       0017 touched no existing policy, so its down must not either.
-    //   (b) the email LOWERCASING is deliberately NOT reversed (see the down SQL's header). It is a
-    //       normalization, not data loss, and re-introducing case variance would re-open the second
-    //       half of the takeover chain D-M15-8 exists to close. Pinned here so a future reader does
-    //       not "complete" the down migration and silently undo D-15.5-3.
-    expect(await trackedCount()).toBe(18);
+    // The load-bearing assertion for 15.6 is the POLICY COUNT NOT MOVING. 0018 is the first
+    // migration since 0014 that adds a table and NO policy (D-15.6-3: `sessions` is an identity
+    // table), so "59 before, 59 after the rollback, 59 after the re-migrate" is what pins that
+    // absence as a decision. If a future reader adds a policy to `sessions`, this drill fails
+    // before `rls.int.test.ts` even runs.
+    expect(await trackedCount()).toBe(19);
     expect(await policyCount()).toBe(59); // 15 org + project_grants org + invites org + 42 restrictive
     expect(await restrictivePolicyCount()).toBe(42); // 39 from 0016 + 3 for `invites`
+    expect(await sessionsTableExists()).toBe(true);
     expect(await identityTablesExist()).toBe(2);
     expect(await projectGrantsExists()).toBe(true);
     expect(await appRoleHasPrivileges()).toBe(true);
@@ -140,25 +149,27 @@ describe.skipIf(!TEST_URL)("migration rollback (rollbackLast, integration)", () 
     expect(await mixedCaseEmailCount()).toBe(0);
 
     const result = await rollbackLast(TEST_URL!, { downDir, journalPath });
-    expect(result).toEqual({ rolledBack: "0017_aromatic_maximus" });
-    expect(await trackedCount()).toBe(17);
-    // Exactly the pre-15.5 inventory remains: 16 org policies + the 39-policy role backstop.
-    expect(await policyCount()).toBe(55);
-    expect(await restrictivePolicyCount()).toBe(39);
-    expect(await identityTablesExist()).toBe(0);
-    // 15.4's table and 15.3's flags are untouched — 0017's down names only its own objects.
+    expect(result).toEqual({ rolledBack: "0018_warm_living_mummy" });
+    expect(await trackedCount()).toBe(18);
+    // `sessions` is gone — and NOTHING ELSE moved. 0018's down names one object.
+    expect(await sessionsTableExists()).toBe(false);
+    expect(await policyCount()).toBe(59);
+    expect(await restrictivePolicyCount()).toBe(42);
+    // 15.5's identity core, 15.4's table and 15.3's flags are all untouched.
+    expect(await identityTablesExist()).toBe(2);
     expect(await projectGrantsExists()).toBe(true);
     expect(await eventsRlsFlags()).toEqual({ enabled: true, forced: true });
     expect(await appRoleHasPrivileges()).toBe(true);
     // …and 0014's tenancy schema likewise.
     expect(await orgIdColumnExists()).toBe(true);
     expect(await searchEntityIndexColumns()).toContain("(org_id, entity_type, entity_id)");
-    // (b): emails stay lowercased across the rollback.
+    // Emails stay lowercased across the rollback (0017's down deliberately does not undo it).
     expect(await mixedCaseEmailCount()).toBe(0);
 
-    // Re-apply: an idempotent re-migrate brings 0017 back + restores the tracking row.
+    // Re-apply: an idempotent re-migrate brings 0018 back + restores the tracking row.
     await runMigrations(TEST_URL!);
-    expect(await trackedCount()).toBe(18);
+    expect(await trackedCount()).toBe(19);
+    expect(await sessionsTableExists()).toBe(true);
     expect(await policyCount()).toBe(59);
     expect(await restrictivePolicyCount()).toBe(42);
     expect(await identityTablesExist()).toBe(2);
