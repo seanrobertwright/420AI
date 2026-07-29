@@ -5,9 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { safeNext } from "@/lib/safe-next";
-
-/** M15 15.7 — provider ids ingest may report, and the label each button carries. */
-const SSO_LABELS: Record<string, string> = { google: "Google", github: "GitHub" };
+import { SSO_PROVIDER_LABELS } from "@/lib/sso-flow";
 
 /**
  * M15 15.7 — the copy for each refusal the SSO callback can bounce back with. `link_required` is
@@ -169,7 +167,7 @@ export function LoginForm() {
                     "border-border hover:bg-muted",
                   )}
                 >
-                  Sign in with {SSO_LABELS[id] ?? id}
+                  Sign in with {SSO_PROVIDER_LABELS[id] ?? id}
                 </a>
               ))}
             </div>

@@ -602,7 +602,7 @@ enforced`, the sibling of `skipped ≠ passed`. Closes the Spike-6 hole: a cross
         is absent from the request schema entirely (D-15.7-6); no provider access or refresh token
         is stored (D-15.7-5) — this is identity, not API access, so 12.3's rejection of GitHub
         OAuth is superseded on different grounds rather than overturned.
-        Proven by two new **two-role** suites (24 HTTP + 12 repository) plus 7 dashboard callback
+        Proven by two new **two-role** suites (25 HTTP + 14 repository) plus 11 dashboard callback
         tests, and the discriminator was verified by MUTATION rather than asserted: implementing
         adoption in place of branch 4 made the takeover test fail on its **409 expectation with a
         clean 200** while the role-identity, positive, isolation and unlink tests all stayed green

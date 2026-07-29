@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { formatDate } from "@/lib/format";
+import { SSO_PROVIDER_LABELS } from "@/lib/sso-flow";
 
 /**
  * M15 15.7 — the link/unlink surface, a client island inside the existing Settings page (no new
@@ -15,8 +16,6 @@ import { formatDate } from "@/lib/format";
  * Both hops go through same-origin proxy route handlers, so the session token stays httpOnly and
  * the browser never holds a credential (D8).
  */
-
-const LABELS: Record<string, string> = { google: "Google", github: "GitHub" };
 
 interface SsoIdentity {
   id: string;
@@ -105,7 +104,7 @@ export function SsoLinks() {
           return (
             <div key={id} className="flex items-center justify-between gap-4">
               <div className="min-w-0">
-                <p className="text-sm font-medium">{LABELS[id] ?? id}</p>
+                <p className="text-sm font-medium">{SSO_PROVIDER_LABELS[id] ?? id}</p>
                 <p className="text-muted-foreground truncate text-xs">
                   {link
                     ? `${link.email ?? "connected"} · since ${formatDate(link.createdAt)}`

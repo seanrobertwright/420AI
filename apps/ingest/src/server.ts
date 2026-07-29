@@ -186,6 +186,14 @@ if (googleClientId && googleClientSecret) {
     clientSecret: googleClientSecret,
     timeoutMs: ssoTimeoutMs,
   };
+} else if (googleClientId || googleClientSecret) {
+  // THE REPORT THE COMMENT ABOVE PROMISES. It did not exist until review caught it, and its
+  // absence was the whole harm: a half-configured provider is silently dropped, so the operator
+  // sees no button, no error and a 404 from /start — the exact symptom of nothing being configured
+  // at all, sending them to look everywhere except the one variable they missed.
+  console.warn(
+    "SSO_GOOGLE_CLIENT_ID / SSO_GOOGLE_CLIENT_SECRET: only one half is set — Google SSO is DISABLED.",
+  );
 }
 const githubClientId = process.env.SSO_GITHUB_CLIENT_ID || "";
 const githubClientSecret = process.env.SSO_GITHUB_CLIENT_SECRET || "";
@@ -195,6 +203,10 @@ if (githubClientId && githubClientSecret) {
     clientSecret: githubClientSecret,
     timeoutMs: ssoTimeoutMs,
   };
+} else if (githubClientId || githubClientSecret) {
+  console.warn(
+    "SSO_GITHUB_CLIENT_ID / SSO_GITHUB_CLIENT_SECRET: only one half is set — GitHub SSO is DISABLED.",
+  );
 }
 const ssoProviders = createSsoProviders(ssoConfig);
 

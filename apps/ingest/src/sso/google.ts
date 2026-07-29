@@ -91,7 +91,17 @@ async function getUserinfo(cfg: SsoProviderConfig, accessToken: string): Promise
     if (!res.ok) {
       throw new SsoProviderError(`google userinfo returned ${res.status}`);
     }
-    return (await res.json()) as GoogleUserinfo;
+    const body: unknown = await res.json();
+    // Shape-check INSIDE the try, because the dereference happens outside it. `toGoogleProfile`
+    // reads `raw.sub` in `exchange`, so a 200 carrying `null` (an interposing proxy, an edge error
+    // page that happens to be valid JSON) would throw a raw TypeError there — and app.ts maps only
+    // `SsoProviderError`, so it would surface as an opaque 500, contradicting this file's own
+    // "never a leaked 500" contract. The emails array in github.ts was already guarded; this is
+    // the object case that was missed.
+    if (typeof body !== "object" || body === null) {
+      throw new SsoProviderError("google userinfo returned a non-object body");
+    }
+    return body as GoogleUserinfo;
   } catch (err) {
     if (err instanceof SsoProviderError) throw err;
     throw new SsoProviderError(

@@ -360,6 +360,26 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.7 SSO (two-role, HTTP)", () => {
     expect(r.rows[0]!.role).toBe("member");
   });
 
+  it("refuses an invitation whose email ALREADY has a users row", async () => {
+    // Branch 4's rule applies INSIDE branch 3, and until this test nothing pinned it: mutating the
+    // guard out left all 24 other tests green. It is the invite-flavoured half of the slice's
+    // central claim — without it, a later refactor to `ensureUserByEmail` (an UPSERT that does not
+    // throw) would silently ADOPT the pre-existing row for anyone holding a leaked invite link,
+    // which is exactly D-15.7-4's takeover.
+    await owner.db.insert(users).values({ email: "existing@example.com" });
+    const { token: inviteToken } = await createInvite(owner.db, orgA, {
+      email: "existing@example.com",
+      role: "member",
+      invitedByUserId: userOwner,
+    });
+    google.profile = { subject: "g-inv-dup", email: "existing@example.com", emailVerified: true };
+    const res = await ssoCallback("google", { inviteToken });
+
+    expect(res.statusCode, res.body).toBe(409);
+    expect((res.json() as { reason: string }).reason).toBe("link_required");
+    expect(await identityCount("g-inv-dup")).toBe(0);
+  });
+
   it("refuses an invitation whose email differs from the verified provider email", async () => {
     const { token: inviteToken } = await createInvite(owner.db, orgA, {
       email: "intended@example.com",

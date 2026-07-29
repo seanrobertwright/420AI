@@ -122,7 +122,14 @@ async function getJson<T>(cfg: SsoProviderConfig, url: string, accessToken: stri
     if (!res.ok) {
       throw new SsoProviderError(`github api ${url} returned ${res.status}`);
     }
-    return (await res.json()) as T;
+    const body: unknown = await res.json();
+    // See the matching guard in google.ts: the dereference (`user.id`) happens in `exchange`,
+    // OUTSIDE this try, so a 200 with a `null` body would escape as a raw TypeError and be masked
+    // as a 500 rather than mapped to a 502.
+    if (typeof body !== "object" || body === null) {
+      throw new SsoProviderError(`github api ${url} returned a non-object body`);
+    }
+    return body as T;
   } catch (err) {
     if (err instanceof SsoProviderError) throw err;
     throw new SsoProviderError(

@@ -51,11 +51,15 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ prov
           });
     if (!res.ok) {
       // An unconfigured provider is a 404 upstream. Bounce back to the page the user came from
-      // with a reason rather than rendering a bare JSON error at a URL they navigated to.
+      // with a reason rather than rendering a bare JSON error at a URL they navigated to — but LOG
+      // it, or "provider not configured" and "archive is down" are indistinguishable to the
+      // operator, both presenting as a bare `?error=sso_unavailable`.
+      console.error(`[dashboard] sso start failed for ${provider}: ingest returned ${res.status}`);
       return NextResponse.redirect(new URL("/login?error=sso_unavailable", req.nextUrl));
     }
     started = (await res.json()) as SsoStartResponse;
-  } catch {
+  } catch (err) {
+    console.error(`[dashboard] sso start failed for ${provider}: ingest unreachable`, err);
     return NextResponse.redirect(new URL("/login?error=sso_unavailable", req.nextUrl));
   }
 

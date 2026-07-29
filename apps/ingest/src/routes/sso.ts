@@ -289,7 +289,13 @@ export default async function ssoRoutes(app: FastifyInstance): Promise<void> {
    */
   app.post<{ Params: { provider: string }; Body: SsoCallbackBody }>(
     "/v1/auth/sso/:provider/link",
-    { schema: { body: ssoCallbackBodySchema } },
+    {
+      schema: { body: ssoCallbackBodySchema },
+      // Session-gated, but it makes the SAME two-to-three outbound provider hops the callback
+      // throttles for — so an authenticated caller could still use it to hammer Google on the
+      // operator's behalf (and burn their provider rate limit / IP reputation).
+      config: { rateLimit: app.rateLimitLogin },
+    },
     async (request, reply) => {
       const principal = await resolvePrincipal(app, request);
       if (!principal) {

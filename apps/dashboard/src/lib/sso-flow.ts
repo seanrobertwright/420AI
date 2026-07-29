@@ -8,6 +8,15 @@
 export const SSO_FLOW_COOKIE = "ai_sso";
 
 /**
+ * Display labels for the provider ids ingest reports. ONE definition, shared by the login form and
+ * the Settings island — both render whatever `GET /v1/auth/sso/providers` returns, so a map that
+ * lived in each component would drift the day a third provider is added: the fallback `?? id`
+ * silently renders "Sign in with gitlab" on one page and "GitLab" on the other. This is the same
+ * "two call sites that must not drift" reason `safe-next.ts` exists.
+ */
+export const SSO_PROVIDER_LABELS: Record<string, string> = { google: "Google", github: "GitHub" };
+
+/**
  * THE COOKIE'S PATH, AND IT MUST BE PASSED TO `delete` AS WELL AS TO `set`.
  *
  * Scoping the cookie to the SSO routes is deliberate — it carries a PKCE verifier and has no

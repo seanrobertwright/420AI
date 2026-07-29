@@ -1,4 +1,4 @@
-import { and, desc, eq, ne } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 import type { DbClient } from "../client.js";
 import { ssoIdentities, users } from "../schema.js";
 import { normalizeEmail } from "./users.js";
@@ -130,10 +130,22 @@ export async function listSsoIdentities(db: DbClient, userId: string): Promise<S
  * two concurrent unlinks of two DIFFERENT providers each see "one other credential exists" and
  * both proceed, leaving zero. Sharing a transaction does not help — atomicity is not isolation.
  *
- * So the OTHER identity rows are selected `FOR UPDATE` (hence rows-then-`length`; Postgres cannot
- * apply FOR UPDATE to an aggregate), and the `users` row `FOR SHARE`. A blocked transaction
- * re-evaluates its predicate after the lock releases (EvalPlanQual), so the row the winner deleted
- * drops out of the loser's result set and the loser correctly refuses. No SERIALIZABLE, no retry.
+ * THE LOCK MUST COVER **ALL** OF THE USER'S IDENTITY ROWS, NOT JUST THE OTHERS, AND THAT DETAIL IS
+ * THE WHOLE FIX. An earlier version locked only the OTHER providers' rows and claimed the loser
+ * "correctly refuses" via EvalPlanQual. For the race it named — two concurrent unlinks of two
+ * different providers — that was false, and measurably so: each transaction locked a DISJOINT row
+ * (unlinking `google` locks the `github` row and vice versa), so neither blocked on the read, both
+ * saw one surviving credential, and the conflict surfaced at the DELETEs as a Postgres DEADLOCK
+ * (40P01). The safety invariant survived only because deadlock detection aborted one of them — and
+ * nothing maps 40P01, so the user got a 500 instead of the documented 409.
+ *
+ * Selecting EVERY row for the user, ordered by `id`, makes the lock ordering deterministic: both
+ * transactions contend on the same first row, so one blocks on the READ instead of the delete.
+ * When it wakes it re-evaluates under EvalPlanQual, sees the winner's row is gone, and refuses with
+ * `last_credential` — which is what the comment always claimed. `others` is then computed in JS
+ * (hence rows-then-`length`; Postgres cannot apply FOR UPDATE to an aggregate anyway). The `users`
+ * row is still taken `FOR SHARE`, which is enough — it is only read, never written, here.
+ * No SERIALIZABLE, no retry loop, and no reachable deadlock.
  *
  * Takes a `DbClient` so a caller may pass a `Tx`; the route passes `app.db` and this opens its own.
  */
@@ -143,11 +155,15 @@ export async function unlinkSsoIdentity(
   provider: string,
 ): Promise<boolean> {
   return db.transaction(async (tx) => {
-    const others = await tx
-      .select({ id: ssoIdentities.id })
+    // ALL the user's rows, in a deterministic order — see the paragraph above. Narrowing this
+    // `where` back to `ne(provider)` reintroduces the deadlock.
+    const owned = await tx
+      .select({ id: ssoIdentities.id, provider: ssoIdentities.provider })
       .from(ssoIdentities)
-      .where(and(eq(ssoIdentities.userId, userId), ne(ssoIdentities.provider, provider)))
+      .where(eq(ssoIdentities.userId, userId))
+      .orderBy(asc(ssoIdentities.id))
       .for("update");
+    const others = owned.filter((r) => r.provider !== provider);
     const [cred] = await tx
       .select({ passwordHash: users.passwordHash })
       .from(users)

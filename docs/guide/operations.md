@@ -795,6 +795,12 @@ Scopes are fixed in code and need no configuration: Google gets `openid email`, 
 
 ### Environment
 
+These are read by the **ingest** process, from the repo-root `.env` (`apps/ingest/src/server.ts`) —
+**not** by the dashboard. Putting them in `apps/dashboard/.env.local` (which the setup script does
+write, see the quickstart) has no effect at all: you get no provider buttons, no error and no log
+line. `APP_BASE_URL` must likewise be set for **ingest**, because the OAuth `redirect_uri` is
+derived there.
+
 ```bash
 SSO_GOOGLE_CLIENT_ID=
 SSO_GOOGLE_CLIENT_SECRET=
@@ -852,22 +858,36 @@ account — an SSO-created user has no password at all. Set a password first (or
 provider). If you are already locked out, the ordinary password-reset flow still works and requires
 control of the mailbox.
 
+> **Password reset needs a mail transport, and without one an SSO-created user has NO recovery
+> path.** `POST /v1/auth/password-reset` answers **503** when neither `SMTP_URL`/`MAIL_FROM` nor the
+> 13.5 fallbacks `ALERT_SMTP_URL`/`ALERT_EMAIL_FROM` are set — and `.env.example` ships all four
+> empty. Since `SSO_SIGNUP_ENABLED=true` creates users with `password_hash IS NULL`, **configure
+> SMTP before enabling it**, or an account whose only provider link is lost cannot be recovered
+> through any supported flow.
+
 ### Troubleshooting
 
-| Symptom                                              | Cause                                                                                                                                        |
-| ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| No provider buttons on the login page                | Neither provider has **both** its id and secret set. Check `GET /v1/auth/sso/providers`.                                                     |
-| `409 link_required` on every SSO login               | Working as designed — that address already has an account. Sign in and link from Settings.                                                   |
-| `403 signup_disabled` for a brand-new address        | `SSO_SIGNUP_ENABLED` is not the literal string `true`. Invite the person instead, or turn it on.                                             |
-| `403 email_unverified`                               | The provider has not verified the address. On GitHub the **primary** address must be the verified one — a verified secondary does not count. |
-| `409 invite_mismatch`                                | The invitation was issued to a different address than the provider vouches for. The invite is left unspent.                                  |
-| Redirected to `/login?error=sso_state`               | The flow cookie expired (10 minutes), was blocked, or the `state` did not match. Start again.                                                |
-| The provider's own error page, before reaching 420AI | The registered redirect URI does not match `<APP_BASE_URL>/api/auth/sso/<provider>/callback`.                                                |
-| `502` from the callback                              | The provider was unreachable or timed out (`SSO_TIMEOUT_MS`).                                                                                |
+| Symptom                                                       | Cause                                                                                                                                                                                                                                                                                                                                                       |
+| ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No provider buttons on the login page                         | Neither provider has **both** its id and secret set (check `GET /v1/auth/sso/providers`) — **or** the dashboard cannot reach ingest. The proxy returns an empty list on any failure so the password form still renders, so a down archive looks identical to no configuration. Check `INGEST_URL` and curl ingest directly; the dashboard logs the failure. |
+| Only one provider appears, and the other's variables look set | Only one half of its pair is set. Ingest logs `only one half is set — … SSO is DISABLED` at boot.                                                                                                                                                                                                                                                           |
+| `?error=sso_unavailable`                                      | The start hop failed: the provider is unconfigured (404) or ingest is unreachable. The most common first-run symptom.                                                                                                                                                                                                                                       |
+| `?error=sso_denied`                                           | The user cancelled at the provider's consent screen.                                                                                                                                                                                                                                                                                                        |
+| `?error=config`                                               | `SESSION_SECRET` is unset on the **dashboard**, so the session cookie could never be verified. Logged server-side.                                                                                                                                                                                                                                          |
+| `?error=unreachable` / `?error=failed`                        | The callback could not reach ingest, or ingest answered without a typed reason (e.g. a 502 because the provider hop failed).                                                                                                                                                                                                                                |
+| `?ssoError=identity_taken` on Settings                        | That provider account is already linked to a different 420AI user.                                                                                                                                                                                                                                                                                          |
+| `409 link_required` on every SSO login                        | Working as designed — that address already has an account. Sign in and link from Settings.                                                                                                                                                                                                                                                                  |
+| `403 signup_disabled` for a brand-new address                 | `SSO_SIGNUP_ENABLED` is not the literal string `true`. Invite the person instead, or turn it on.                                                                                                                                                                                                                                                            |
+| `403 email_unverified`                                        | The provider has not verified the address. On GitHub the **primary** address must be the verified one — a verified secondary does not count.                                                                                                                                                                                                                |
+| `409 invite_mismatch`                                         | The invitation was issued to a different address than the provider vouches for. The invite is left unspent.                                                                                                                                                                                                                                                 |
+| Redirected to `/login?error=sso_state`                        | The flow cookie expired (10 minutes), was blocked, or the `state` did not match. Start again.                                                                                                                                                                                                                                                               |
+| The provider's own error page, before reaching 420AI          | The registered redirect URI does not match `<APP_BASE_URL>/api/auth/sso/<provider>/callback`.                                                                                                                                                                                                                                                               |
+| `502` from the callback                                       | The provider was unreachable or timed out (`SSO_TIMEOUT_MS`).                                                                                                                                                                                                                                                                                               |
 
 ### Rolling back migration 0019
 
 The down-migration **drops `sso_identities`**, discarding every provider link. Users with a password
 are unaffected; an SSO-created user (`password_hash IS NULL`) must recover through password reset.
 No `users`, `memberships` or `sessions` row is touched, and links must be re-established after
-rolling forward again.
+rolling forward again. The same SMTP caveat as above applies: password reset is only a recovery
+path if a mail transport is configured.

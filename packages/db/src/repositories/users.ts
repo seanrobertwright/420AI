@@ -170,8 +170,8 @@ export async function findUserEmailById(db: DbClient, userId: string): Promise<s
  * `POST /v1/auth/signup` does.
  *
  * `password_hash` stays NULL, which is not a gap but the whole point: `findAdminCredential`'s
- * callers already treat a null hash as "cannot log in with a password" (the generic 401 at
- * routes/auth.ts:159), so an SSO-only account is password-unopenable by construction rather than
+ * callers already treat a null hash as "cannot log in with a password" (the generic 401 in
+ * `POST /v1/auth/login`), so an SSO-only account is password-unopenable by construction rather than
  * by a check somebody has to remember to write. Such a user may still ADOPT a password later
  * through the ordinary reset flow, which requires control of the mailbox — that is a feature, and
  * it is also the recovery path named in the 0019 down-migration note.

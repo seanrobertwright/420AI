@@ -218,6 +218,51 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.7 sso_identities (two-role, repos
     });
   });
 
+  /**
+   * THE DEADLOCK ORDERING — the one the existing concurrency test above does NOT exercise.
+   *
+   * That test hand-drives the interleaving where the winner has ALREADY DELETED before the loser
+   * reads, which is the ordering in which EvalPlanQual genuinely fires. The dangerous ordering is
+   * the other one: BOTH transactions complete their locking read first. With the old code each
+   * locked a disjoint row (unlinking `google` locked the `github` row and vice versa), so neither
+   * blocked, both saw a surviving credential, and the two DELETEs deadlocked — 40P01, unmapped,
+   * surfacing to the user as a 500 rather than the documented 409.
+   *
+   * Both unlinks are launched with NO hand-holding here, precisely so the read-read interleaving is
+   * reachable. The assertion is deliberately about the OUTCOME CLASS, not about which one wins:
+   * exactly one must succeed, the other must be refused with `last_credential`, and neither may
+   * fail with a deadlock.
+   */
+  it("does not DEADLOCK when two different providers are unlinked concurrently", async () => {
+    await linkSsoIdentity(appRole.db, userSsoOnly, { provider: "google", subject: "g-dl" });
+    await linkSsoIdentity(appRole.db, userSsoOnly, { provider: "github", subject: "gh-dl" });
+
+    const settle = (p: Promise<boolean>) =>
+      p.then(
+        (v) => ({ ok: true as const, v }),
+        (e: unknown) => ({ ok: false as const, e }),
+      );
+    const [a, b] = await Promise.all([
+      settle(unlinkSsoIdentity(appRole.db, userSsoOnly, "google")),
+      settle(unlinkSsoIdentity(appRole.db, userSsoOnly, "github")),
+    ]);
+
+    for (const r of [a, b]) {
+      if (!r.ok) {
+        const msg =
+          r.e instanceof Error ? `${r.e.message} ${String(r.e.cause ?? "")}` : String(r.e);
+        expect(msg, "a deadlock is not an acceptable outcome — it surfaces as a 500").not.toMatch(
+          /deadlock|40P01/i,
+        );
+        expect(r.e).toBeInstanceOf(SsoIdentityError);
+        expect((r.e as SsoIdentityError).reason).toBe("last_credential");
+      }
+    }
+    // Exactly one succeeded, so the account keeps exactly one credential and is still openable.
+    expect([a.ok, b.ok].filter(Boolean)).toHaveLength(1);
+    expect(await listSsoIdentities(appRole.db, userSsoOnly)).toHaveLength(1);
+  });
+
   it("returns false when nothing was linked for that provider", async () => {
     await linkSsoIdentity(appRole.db, userA, { provider: "google", subject: "g-9" });
     expect(await unlinkSsoIdentity(appRole.db, userA, "github")).toBe(false);
