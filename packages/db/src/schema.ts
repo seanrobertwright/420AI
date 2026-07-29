@@ -217,6 +217,41 @@ export const passwordResetTokens = pgTable(
   (t) => [index("password_reset_tokens_by_user").on(t.userId)],
 );
 
+/**
+ * M15 15.6 — a STATEFUL user session (D-M15-12), superseding 12.3's "no sessions table".
+ *
+ * An IDENTITY table: no `org_id`, and therefore NO RLS at all, for the same reason
+ * `users`/`memberships`/`password_reset_tokens` carry none (D-15.3-4 / D-15.5-1 / D-15.6-3).
+ * It is read inside `resolvePrincipal` — the one moment before any org context exists, because
+ * resolving this row is part of what establishes it.
+ *
+ * NOTE what is absent: there is NO `token_hash` column, unlike `invites` and
+ * `password_reset_tokens` (D-15.6-2). Those tables hold a bearer secret that IS the whole
+ * credential, so only its hash may be stored. A session's credential is the HMAC over the
+ * payload, which `SESSION_SECRET` alone can produce; `id` is a LOOKUP KEY, not a secret, and
+ * hashing it would buy nothing while implying a protection that is not there.
+ *
+ * There is also no `last_used_at`, deliberately: touching it would put a WRITE on every
+ * authenticated read, and the SSE monitor stream is one request per client per tick — the exact
+ * shape of the audit-B.4 problem 15.4 had to throttle back out.
+ */
+export const sessions = pgTable(
+  "sessions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    // Free-text, truncated by the route (D-15.6-9) — it exists so a user can recognise a session
+    // in the list, never for a security decision. Nullable: non-browser clients send none.
+    userAgent: text("user_agent"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("sessions_by_user").on(t.userId)],
+);
+
 export const ingestTokens = pgTable(
   "ingest_tokens",
   {

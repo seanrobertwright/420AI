@@ -185,6 +185,18 @@ await ensureUserByEmail(db, adminEmail);
 // Seed the single admin's password (scrypt) from env. Idempotent: re-running on every boot
 // re-hashes ADMIN_PASSWORD, so rotating it + restart re-seeds. If unset, login is disabled
 // (admin has no hash → 401 for everyone) but the rest of the API still works via the service token.
+//
+// M15 15.6 — THIS IS A CREDENTIAL CHANGE THAT DELIBERATELY DOES NOT REVOKE, and it is the one
+// exception to the rule the other three follow (reset-confirm, password-change, member-removal all
+// call `revokeAllSessions`). It cannot revoke here, because it cannot tell a ROTATION from a
+// RESTART: scrypt re-salts on every call, so the freshly computed hash never equals the stored one
+// and there is nothing to compare. An unconditional revoke would therefore sign the admin out of
+// every device on every single boot — including a crash-loop restart.
+//
+// The consequence is real and is stated in `docs/guide/operations.md`: an operator rotating
+// ADMIN_PASSWORD *because it leaked* must also call `POST /v1/auth/sessions/revoke-all`, or a
+// stolen session token stays valid for the rest of its 7 days. Do not "fix" this by revoking here
+// without first solving the rotation-vs-restart distinction.
 if (adminPassword) {
   await setUserPassword(db, adminEmail, hashPassword(adminPassword));
 } else {

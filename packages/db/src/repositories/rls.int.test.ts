@@ -140,6 +140,11 @@ const NO_RLS_TABLES = [
   // M15 15.5 (D-15.5-1): keyed by `user_id`, no `org_id`. Read at the one moment before any
   // identity — and therefore any org context — is established, exactly like the three above.
   "password_reset_tokens",
+  // M15 15.6 (D-15.6-3): keyed by `user_id`, no `org_id`. Read INSIDE `resolvePrincipal` — the one
+  // moment before any org context exists, because resolving this row is part of what establishes
+  // it. Adding it here changes no derived policy COUNT (this list's expectation is "carries no
+  // policy at all"), which is exactly the assertion 0018's missing policy block needs.
+  "sessions",
   "pricing_catalogs",
   "connector_catalogs",
   "ingest_auth_failures",

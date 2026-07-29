@@ -9,6 +9,7 @@ import {
   listMembers,
   normalizeEmail,
   removeMember,
+  revokeAllSessions,
   revokeInvite,
   setMemberRole,
   withOrg,
@@ -258,6 +259,12 @@ export default async function memberRoutes(app: FastifyInstance): Promise<void> 
       if (!isUuid(request.params.userId)) {
         return reply.code(400).send({ error: "invalid user id" });
       }
+      // M15 15.6 (D-15.6-7) — A ROLE CHANGE DELIBERATELY DOES NOT REVOKE, unlike the DELETE route
+      // below. `findPrincipalByEmail` re-resolves `role` from `memberships` on EVERY request, so a
+      // demotion is already live on the target's very next call without touching their session.
+      // Revoking here would sign a colleague out for a change that had already taken effect. The
+      // asymmetry with DELETE is the point, not an oversight — do not "fix" it.
+      //
       // Same escalation guard as the invite route (D-15.5-11): an admin cannot promote anyone to
       // `owner`, including themselves.
       const requestedRole = request.body.role as "viewer" | "member" | "admin" | "owner";
@@ -301,7 +308,32 @@ export default async function memberRoutes(app: FastifyInstance): Promise<void> 
       // The DELETE path needs the outrank guard MORE than the PATCH path, not less: it had no role
       // comparison of any kind, so an admin could EVICT an owner outright.
       if (!outranks(principal.role, target.role)) return "outranked" as const;
-      return removeMember(tx, principal.orgId, request.params.userId);
+      const removed = await removeMember(tx, principal.orgId, request.params.userId);
+      // M15 15.6 (D-15.6-7) — REMOVING A MEMBER SIGNS THEM OUT, in the SAME transaction, so a
+      // dropped membership and dead sessions commit together.
+      //
+      // Before 15.6 this fell closed only BY ACCIDENT: with the membership gone,
+      // `findPrincipalByEmail` stopped resolving and the token 401'd — but only because the user
+      // had no OTHER membership. That mechanism evaporates the moment 15.10 ships multi-org users,
+      // at which point a removed colleague's existing token would keep working against their
+      // remaining org's data. Revoking explicitly is what makes the guarantee designed rather than
+      // incidental.
+      //
+      // `revokeAllSessions` is keyed on `user_id` with NO org predicate. Correct today, and
+      // REVISIT AT 15.10 — the two halves of that are worth keeping apart:
+      //
+      //   Today a user belongs to exactly one org (15.5's accept path refuses an email that already
+      //   has an account), so "removed from the org" and "no longer has a login" are the same
+      //   statement, and a global revoke is the only thing that can be meant.
+      //   Under 15.10's multi-org users it INVERTS: an admin of org A calling this would sign the
+      //   user out of org B as well, which is a cross-tenant action taken by someone with no
+      //   standing in B. At that point this needs either a per-org session model or a revoke scoped
+      //   to sessions whose resolved org is this one.
+      //
+      // `sessions` carries no policy, so running inside `withOrg` neither helps nor hinders it —
+      // the transaction is here for the ATOMICITY.
+      if (removed) await revokeAllSessions(tx, request.params.userId);
+      return removed;
     });
     if (outcome === "outranked") {
       return reply.code(403).send({ error: "cannot modify a member who outranks you" });

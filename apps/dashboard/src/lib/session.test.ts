@@ -11,10 +11,11 @@ import { verifySessionEdge } from "./session.js";
 const SECRET = "shared-session-secret";
 
 /** Replicate ingest's signSession (node:crypto) inline — same format as apps/ingest/src/session.ts. */
-function nodeSign(sub: string, secret: string, ttlSec: number): string {
+function nodeSign(sub: string, secret: string, ttlSec: number, sid?: string): string {
   const iat = Math.floor(Date.now() / 1000);
   const exp = iat + ttlSec;
-  const body = Buffer.from(JSON.stringify({ sub, iat, exp })).toString("base64url");
+  const payload = sid === undefined ? { sub, iat, exp } : { sub, iat, exp, sid };
+  const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
   const mac = createHmac("sha256", secret).update(body).digest("base64url");
   return `${body}.${mac}`;
 }
@@ -51,5 +52,29 @@ describe("verifySessionEdge (Node-sign → Edge-verify interop)", () => {
     const body = Buffer.from("null").toString("base64url");
     const mac = createHmac("sha256", SECRET).update(body).digest("base64url");
     expect(await verifySessionEdge(`${body}.${mac}`, SECRET)).toBeNull();
+  });
+
+  /**
+   * M15 15.6 (D-15.6-1) — THE INTEROP PIN FOR THE ENLARGED PAYLOAD. `signSession` now emits a
+   * fourth `sid` claim, and the Edge verifier was deliberately NOT changed: its base64url→`atob`
+   * →`TextDecoder` path decodes the longer body identically, and its `{sub, exp}` reads simply
+   * ignore the extra key.
+   *
+   * Without this test that "no change needed" conclusion is an assumption, and the way it would
+   * break is silent — a payload change that broke Edge decoding would bounce every logged-in user
+   * to /login while `next build` and every ingest test stayed green.
+   */
+  it("accepts a token carrying the M15 15.6 `sid` claim and ignores the extra key", async () => {
+    const token = nodeSign(
+      "admin@test.local",
+      SECRET,
+      3600,
+      "11111111-2222-3333-4444-555555555555",
+    );
+    const payload = await verifySessionEdge(token, SECRET);
+    expect(payload, "the enlarged payload must still decode on the Edge path").not.toBeNull();
+    expect(payload!.sub).toBe("admin@test.local");
+    // Well under the 4096-byte cookie limit — SPIKE 4 measured 172 bytes for a real token.
+    expect(token.length).toBeLessThan(1024);
   });
 });
