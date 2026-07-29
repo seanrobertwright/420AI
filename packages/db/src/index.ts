@@ -11,6 +11,8 @@ export {
   passwordResetTokens,
   // M15 15.6: a stateful user session (D-M15-12). Identity-owned — no org_id, no RLS.
   sessions,
+  // M15 15.7: a linked external identity (D-M15-5). Identity-owned — no org_id, no RLS.
+  ssoIdentities,
   ingestTokens,
   rawSourceRecords,
   events,
@@ -72,6 +74,11 @@ export {
   normalizeEmail,
   // M15 15.5 (GOTCHA-1): creates a user WITHOUT a personal org — the invite-accept path's insert.
   createUserWithPassword,
+  // M15 15.7: the SSO-only sibling — no password hash, and no personal org either (same reason).
+  createUserWithoutPassword,
+  // M15 15.7: the inverse of findUserIdByEmail — an SSO login resolved by (provider, subject)
+  // knows only a userId, and the session token is signed with the email.
+  findUserEmailById,
   updatePasswordHash,
 } from "./repositories/users.js";
 // M15 15.5 organization invitations (D-M15-5). Same lifecycle as `pairing_codes`; unlike it, an
@@ -102,6 +109,15 @@ export {
   revokeSession,
 } from "./repositories/sessions.js";
 export type { SessionRow } from "./repositories/sessions.js";
+// M15 15.7 SSO identities. Identity-owned — no org_id, no RLS (D-15.7-3), scoped by userId only.
+export {
+  findUserIdBySsoIdentity,
+  linkSsoIdentity,
+  listSsoIdentities,
+  unlinkSsoIdentity,
+  SsoIdentityError,
+} from "./repositories/sso-identities.js";
+export type { SsoIdentityRow } from "./repositories/sso-identities.js";
 // M15 15.5 org member management. `memberships`/`users` carry NO RLS, so the explicit orgId
 // predicate in each of these is the ONLY tenancy boundary — there is no backstop behind it.
 export {

@@ -145,6 +145,11 @@ const NO_RLS_TABLES = [
   // it. Adding it here changes no derived policy COUNT (this list's expectation is "carries no
   // policy at all"), which is exactly the assertion 0018's missing policy block needs.
   "sessions",
+  // M15 15.7 (D-15.7-3): keyed by `user_id`, no `org_id`. Read at the one moment before any org
+  // context exists, because resolving this row is part of what establishes it. It belongs in THIS
+  // list and in no other — it is not a tenant table, so the "all 17 tenant tables" count below
+  // must stay 17, and every policy count here is derived, so adding it moves no number.
+  "sso_identities",
   "pricing_catalogs",
   "connector_catalogs",
   "ingest_auth_failures",

@@ -241,7 +241,7 @@ through the deferral-audit + scope conversation that produced M12/M13/M14. Full 
   fixed roles + per-project grants (D-M15-4), all four identity paths + reset + MFA (D-M15-5),
   `ADMIN_TOKEN` retired to a bootstrap-only seed (D-M15-7). Slices: **15.0** ✅ Truth + RLS spike ·
   **15.1** ✅ Tenancy schema · **15.2** ✅ Request principal · **15.3** ✅ RLS enforcement · **15.4** ✅ RBAC ·
-  **15.5** ✅ Identity core · **15.6** ✅ Sessions + revocation · **15.7** SSO (Google + GitHub) ·
+  **15.5** ✅ Identity core · **15.6** ✅ Sessions + revocation · **15.7** ✅ SSO (Google + GitHub) ·
   **15.8** MFA · **15.9** API keys + retire `ADMIN_TOKEN` · **15.10** Team surfaces + audit table.
   **15.0 gates 15.3**; 15.5 gates 15.7.
 - **M16 — Cloud-hosted SaaS.** Multi-tenancy, managed archive, quotas/rate limits beyond 12.4,
@@ -574,7 +574,44 @@ enforced`, the sibling of `skipped ≠ passed`. Closes the Spike-6 hole: a cross
         rather than hidden: the Edge middleware cannot see revocation, so a revoked-but-unexpired
         cookie renders the dashboard **shell** while every data fetch 401s. Closing it would cost a
         network hop per navigation for no security gain — ingest is the boundary.
-  - [ ] **15.7** SSO · **15.8** MFA ·
+  - [x] **15.7** SSO (Google + GitHub) — DONE `2026-07-29` (PR #67). The fifth and last way to
+        become a 420AI user before MFA, and the first that is not a password. `sso_identities` is
+        keyed on **`(provider, subject)`** — the provider's immutable id (Google `sub`, GitHub
+        numeric `id`), never a username and **never an email** (D-15.7-1): `findUserIdBySsoIdentity`
+        does not accept an email **as a matter of signature**, so email fallback is not something a
+        later edit can quietly add. The stored `email` is display/audit only. Another IDENTITY table
+        — no `org_id`, no RLS (D-15.7-3), joining `users`/`memberships`/`password_reset_tokens`/
+        `sessions` in `NO_RLS_TABLES`, so migration 0019 adds a table and **no policy** and every
+        derived policy count is unmoved. No OAuth/JWT/Octokit dependency: plain `fetch` +
+        `node:crypto`, and the `id_token` signature is deliberately **not** verified (D-15.7-2) —
+        OIDC Core §3.1.3.7 permits skipping it for a token fetched directly from the token endpoint
+        over TLS, which drops a JWKS cache and makes Google and GitHub the same shape (exchange →
+        access token → profile endpoint). GitHub is the awkward one on purpose: no `id_token`, the
+        verified flag lives behind a second call to `/user/emails`, and PKCE is undocumented there
+        so `usesPkce: false` while `state` stays mandatory.
+        **The slice is its refusal.** A verified provider identity asserting a **pre-existing**
+        address is never adopted — 409 `link_required`, no session minted and no identity row
+        written (D-15.7-4). The rule is unconditional here rather than limited to unverified rows,
+        because **no `users` row in this codebase has a verified email**: 15.5's signup sends no
+        verification mail and pre-seeded pairing rows were never verified at all, which is why
+        D-M15-8 was a hard prerequisite. The escape hatch is an **authenticated** link endpoint,
+        surfaced in `/settings`. SSO-driven signup is gated by its **own** `SSO_SIGNUP_ENABLED`,
+        default off (D-15.7-7) — separate from `SELF_SIGNUP_ENABLED` so an operator can open SSO
+        self-provisioning without opening password signup, and defaulting it on would silently
+        reopen the door D-M15-6 shut. `redirect_uri` is derived server-side from `APP_BASE_URL` and
+        is absent from the request schema entirely (D-15.7-6); no provider access or refresh token
+        is stored (D-15.7-5) — this is identity, not API access, so 12.3's rejection of GitHub
+        OAuth is superseded on different grounds rather than overturned.
+        Proven by two new **two-role** suites (25 HTTP + 14 repository) plus 11 dashboard callback
+        tests, and the discriminator was verified by MUTATION rather than asserted: implementing
+        adoption in place of branch 4 made the takeover test fail on its **409 expectation with a
+        clean 200** while the role-identity, positive, isolation and unlink tests all stayed green
+        — the split the plan predicted. Two facts the suites measured rather than assumed: Fastify's
+        ajv **strips** an unknown `redirectUri` instead of 400ing it, so the D-15.7-6 proof had to
+        become "what the provider actually received"; and the unlink guard's race is only visible
+        at the **repository** layer with two hand-held transactions (CLAUDE.md's 15.5 corollary,
+        applied rather than relearned), with the held connection released in a `finally`.
+  - [ ] **15.8** MFA ·
         **15.9** API keys + retire `ADMIN_TOKEN` · **15.10** Team surfaces + audit table.
 
 - [ ] **M16–M19 remain committed scope, unsequenced** (§3, PRD §25). Each still needs its own

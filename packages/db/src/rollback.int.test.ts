@@ -128,19 +128,29 @@ describe.skipIf(!TEST_URL)("migration rollback (rollbackLast, integration)", () 
     return r.rowCount === 1;
   }
 
-  it("rolls back the latest migration (0018 sessions) and a re-migrate restores it", async () => {
-    // M15 15.6 D-M15-13 drill, run in CI rather than by hand. `rollbackLast` reverses THE LATEST
-    // migration, so this test retargets with every slice that adds one — 15.5's version of it named
-    // 0017. The 15.5 assertions it made survive here as UNTOUCHED-BY-0018 invariants below.
+  /** Does the M15 15.7 `sso_identities` table exist? 0019 creates it; its down drops it. */
+  async function ssoIdentitiesTableExists(): Promise<boolean> {
+    const r = await pool.query(
+      "select 1 from information_schema.tables where table_name = 'sso_identities'",
+    );
+    return r.rowCount === 1;
+  }
+
+  it("rolls back the latest migration (0019 sso_identities) and a re-migrate restores it", async () => {
+    // M15 15.7 D-M15-13 drill, run in CI rather than by hand. `rollbackLast` reverses THE LATEST
+    // migration, so this test retargets with every slice that adds one — 15.5's version named 0017
+    // and 15.6's named 0018. The assertions those made survive here as UNTOUCHED-BY-0019
+    // invariants below, which is the whole value of retargeting rather than rewriting.
     //
-    // The load-bearing assertion for 15.6 is the POLICY COUNT NOT MOVING. 0018 is the first
-    // migration since 0014 that adds a table and NO policy (D-15.6-3: `sessions` is an identity
+    // The load-bearing assertion for 15.7 is again the POLICY COUNT NOT MOVING. 0019 is the second
+    // migration in a row that adds a table and NO policy (D-15.7-3: `sso_identities` is an identity
     // table), so "59 before, 59 after the rollback, 59 after the re-migrate" is what pins that
-    // absence as a decision. If a future reader adds a policy to `sessions`, this drill fails
+    // absence as a decision. If a future reader adds a policy to `sso_identities`, this drill fails
     // before `rls.int.test.ts` even runs.
-    expect(await trackedCount()).toBe(19);
+    expect(await trackedCount()).toBe(20);
     expect(await policyCount()).toBe(59); // 15 org + project_grants org + invites org + 42 restrictive
     expect(await restrictivePolicyCount()).toBe(42); // 39 from 0016 + 3 for `invites`
+    expect(await ssoIdentitiesTableExists()).toBe(true);
     expect(await sessionsTableExists()).toBe(true);
     expect(await identityTablesExist()).toBe(2);
     expect(await projectGrantsExists()).toBe(true);
@@ -149,13 +159,14 @@ describe.skipIf(!TEST_URL)("migration rollback (rollbackLast, integration)", () 
     expect(await mixedCaseEmailCount()).toBe(0);
 
     const result = await rollbackLast(TEST_URL!, { downDir, journalPath });
-    expect(result).toEqual({ rolledBack: "0018_warm_living_mummy" });
-    expect(await trackedCount()).toBe(18);
-    // `sessions` is gone — and NOTHING ELSE moved. 0018's down names one object.
-    expect(await sessionsTableExists()).toBe(false);
+    expect(result).toEqual({ rolledBack: "0019_outstanding_silhouette" });
+    expect(await trackedCount()).toBe(19);
+    // `sso_identities` is gone — and NOTHING ELSE moved. 0019's down names one object.
+    expect(await ssoIdentitiesTableExists()).toBe(false);
     expect(await policyCount()).toBe(59);
     expect(await restrictivePolicyCount()).toBe(42);
-    // 15.5's identity core, 15.4's table and 15.3's flags are all untouched.
+    // 15.6's sessions, 15.5's identity core, 15.4's table and 15.3's flags are all untouched.
+    expect(await sessionsTableExists()).toBe(true);
     expect(await identityTablesExist()).toBe(2);
     expect(await projectGrantsExists()).toBe(true);
     expect(await eventsRlsFlags()).toEqual({ enabled: true, forced: true });
@@ -166,9 +177,10 @@ describe.skipIf(!TEST_URL)("migration rollback (rollbackLast, integration)", () 
     // Emails stay lowercased across the rollback (0017's down deliberately does not undo it).
     expect(await mixedCaseEmailCount()).toBe(0);
 
-    // Re-apply: an idempotent re-migrate brings 0018 back + restores the tracking row.
+    // Re-apply: an idempotent re-migrate brings 0019 back + restores the tracking row.
     await runMigrations(TEST_URL!);
-    expect(await trackedCount()).toBe(19);
+    expect(await trackedCount()).toBe(20);
+    expect(await ssoIdentitiesTableExists()).toBe(true);
     expect(await sessionsTableExists()).toBe(true);
     expect(await policyCount()).toBe(59);
     expect(await restrictivePolicyCount()).toBe(42);
