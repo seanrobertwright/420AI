@@ -574,7 +574,7 @@ enforced`, the sibling of `skipped ≠ passed`. Closes the Spike-6 hole: a cross
         rather than hidden: the Edge middleware cannot see revocation, so a revoked-but-unexpired
         cookie renders the dashboard **shell** while every data fetch 401s. Closing it would cost a
         network hop per navigation for no security gain — ingest is the boundary.
-  - [x] **15.7** SSO (Google + GitHub) — DONE `2026-07-29` (PR #NN). The fifth and last way to
+  - [x] **15.7** SSO (Google + GitHub) — DONE `2026-07-29` (PR #67). The fifth and last way to
         become a 420AI user before MFA, and the first that is not a password. `sso_identities` is
         keyed on **`(provider, subject)`** — the provider's immutable id (Google `sub`, GitHub
         numeric `id`), never a username and **never an email** (D-15.7-1): `findUserIdBySsoIdentity`
