@@ -46,7 +46,7 @@ No collector, desktop or Rust file changed. **No npm dependency added or upgrade
 | THE GATE          | `npm run repo-health -- --require-db`      | ✓ **PASS**, 1037 tests / 128 files        |
 | Dashboard build   | `npm run build:dashboard`                  | ✓ Edge middleware import graph intact     |
 | Rollback drill    | `rollback.int.test.ts` (0018 down + re-up) | ✓ in CI, not by hand                      |
-| Mutation check    | revocation lookup removed                  | ✓ 11/20 failed, **all positives passed**  |
+| Mutation check    | revocation lookup removed                  | ✓ 12/23 failed, **all positives passed**  |
 | Manual (L4)       | live server, real HTTP                     | ✓ 200 → revoke-all → 401; `ADMIN_TOKEN` unregressed |
 
 Integration count rose 309 → 347 with the two new suites plus the review's regression tests.
@@ -54,20 +54,26 @@ Integration count rose 309 → 347 with the two new suites plus the review's reg
 ## The mutation check — the finding, not just the fact that it ran
 
 The plan required proving the discriminator assertion actually discriminates. Removing the
-`findLiveSession` lookup from `resolvePrincipal` produced **11 failures / 9 passes**:
+`findLiveSession` lookup from `resolvePrincipal` produced **12 failures / 11 passes** across the
+final 23 HTTP tests. (An earlier draft of this report, and the comment in the suite itself, quoted
+11/9 from the 20-test version that existed before the adversarial review added three more — a stale
+count in exactly the place whose purpose is to give the next person something to compare against.
+Re-measured rather than adjusted.)
 
-- **Passed (correctly):** role identity, all three positive assertions, malformed-id 400, the
-  session list, both `ADMIN_TOKEN` tests.
-- **Failed (correctly):** discriminator, all-routes, isolation, logout, revoke-one, password change,
-  password reset, sid-less token, unknown/non-uuid sid, expired row, revoke-all idempotence.
+- **Passed (correctly):** role identity, all four positive assertions, malformed-id 400, the session
+  list, the no-bearer sweep, both `ADMIN_TOKEN` tests, member-removal, and the SSE stream test.
+- **Failed (correctly):** discriminator, cross-route, isolation, logout, revoke-one, password
+  change, password reset, sid-less token, unknown/non-uuid sid, expired row, repeat revoke-all, and
+  the viewer gate.
 
 The plan's stated gate — *"if the positive test fails too, the suite is over-coupled"* — held.
 
-Two results diverged from the plan's prediction, and both are worth recording:
+Three results are worth recording because each would otherwise read as a hole:
 
 1. **The isolation test FAILED**, where the plan predicted it would pass. That is because it also
    asserts A's *own* session died, not merely that B's survived. A B-only assertion would pass
-   trivially, so the stronger version was kept.
+   trivially — it would still pass if revocation did nothing at all — so the stronger version was
+   kept.
 2. **"Removing a member signs them out" PASSED under the mutation** — the 401 came entirely from the
    missing membership (`findPrincipalByEmail` returns null). That is exactly the *accidental*
    fail-closed mechanism the plan's Problem Statement §3 describes, the one that evaporates when
@@ -75,6 +81,9 @@ Two results diverged from the plan's prediction, and both are worth recording:
    because the mutation broke ENFORCEMENT, not the revoke itself. So that test proves the row is
    **stamped**, not that enforcement works — now recorded in the test's own comment so no future
    reader mistakes it for a discriminator.
+3. **The SSE test PASSED**, correctly: the stream re-checks its session in `routes/monitor.ts`, not
+   in `resolvePrincipal`. That path carries its own mutation proof — removing the per-tick
+   `findLiveSession` there fails the SSE test while the rest of the file stays green.
 
 ## What the second review pass found (and why there was one)
 

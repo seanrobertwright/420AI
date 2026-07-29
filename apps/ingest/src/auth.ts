@@ -42,8 +42,8 @@ function bearerToken(request: FastifyRequest): string | null {
  * none — which was false, and a false claim here is worse than the gap it hid. `resolvePrincipal`
  * gates a request AT ITS START. A route that then holds the socket open serves data for as long as
  * the client keeps it, on the strength of a check that happened once. There is exactly one such
- * route, `GET /v1/monitor/stream` (it calls `reply.hijack()`), and it therefore RE-CHECKS the
- * session itself on every tick via `sessionIdFromRequest` + `findLiveSession`. See the comment
+ * route, `GET /v1/monitor/stream` (it calls `reply.hijack()`); it reads `request.sessionId` once
+ * before hijacking and then RE-CHECKS it with `findLiveSession` on every tick. See the comment
  * there. If a second hijacking route is ever added, it inherits that obligation — a
  * connect-time-only gate does not revoke.
  */
@@ -58,6 +58,10 @@ export async function resolvePrincipal(
   // The `sessions.user_id` behind branch (2)'s `sid`, or null on the ADMIN_TOKEN path (which has
   // no session). Cross-checked against the resolved principal below.
   let sessionUserId: string | null = null;
+  // The `sid` itself, stashed on the request for the handlers that need it (logout, the
+  // spare-my-own-session revoke, the `current` flag, the SSE per-tick re-check) so none of them
+  // has to re-parse the bearer and re-verify the MAC a second time.
+  let sid: string | null = null;
   // (1) Service token — the unchanged ADMIN_TOKEN path. The length guard before
   // timingSafeEqual is mandatory (it throws on a length mismatch).
   //
@@ -80,12 +84,14 @@ export async function resolvePrincipal(
     // hand-forged non-uuid `sid` (only the secret-holder can forge one, but auth code stays
     // defensive) would raise Postgres `22P02` and surface as a 500. A guard keeps the repo-wide
     // "unknown/malformed id → 401, never a DB-cast 500" invariant, and costs a regex rather than a
-    // round trip. Pinned by `sessions.int.test.ts`.
+    // round trip. Pinned by `apps/ingest/src/sessions.int.test.ts` (two files share that
+    // basename; the `packages/db` one does not cover this).
     if (payload?.sid && isUuid(payload.sid)) {
       const live = await findLiveSession(app.db, payload.sid);
       if (live) {
         email = payload.sub;
         sessionUserId = live.userId;
+        sid = payload.sid;
       }
     }
   }
@@ -100,26 +106,12 @@ export async function resolvePrincipal(
   // Side effect AND return: handlers use the RETURNED value (narrowed non-null);
   // `request.principal` exists for future middleware and 15.3's transaction wrapper.
   request.principal = principal;
+  // M15 15.6 — the session id travels with the request from here. Every handler that needs it
+  // reads `request.sessionId` rather than re-deriving it, so the Bearer parsing and the MAC
+  // verification have exactly ONE definition each, and the `isUuid` validation above covers every
+  // later use rather than only this one.
+  request.sessionId = sid;
   return principal;
-}
-
-/**
- * M15 15.6 — the CALLER's own session id, or null when the credential carries none (an
- * `ADMIN_TOKEN` service caller, or a pre-0018 token).
- *
- * A PURE crypto check with no database in it, deliberately: it answers "which session does this
- * request name?", never "is that session still live". Callers that need the second question ask
- * `findLiveSession`. Keeping the two separable is the same split that lets the int suite assert
- * "still cryptographically valid, yet rejected".
- *
- * Lives here rather than in `routes/auth.ts` because `routes/monitor.ts` needs it too: an SSE
- * stream must re-check its own session per tick (see the stream handler), and a second private
- * copy of this logic in that file would be a second place for the `Bearer` parsing to drift.
- */
-export function sessionIdFromRequest(app: FastifyInstance, request: FastifyRequest): string | null {
-  const token = bearerToken(request);
-  if (!token) return null;
-  return verifySession(token, app.sessionSecret)?.sid ?? null;
 }
 
 /**

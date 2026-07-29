@@ -52,19 +52,25 @@ const stubProvider: AnalysisProvider = {
  *   3. THE DISCRIMINATOR: rejected WHILE STILL CRYPTOGRAPHICALLY VALID. See its test below.
  *   4. ISOLATION: revoking A must not touch B.
  *
- * MUTATION CHECK — the MEASURED result, so that re-running it has a correct expectation to compare
- * against. Removing the `findLiveSession` lookup from `resolvePrincipal` produces **11 failures /
- * 9 passes**. Tests 1 and 2 keep passing; THE LOAD-BEARING GATE IS TEST 2 — if a positive assertion
- * fails too, the suite is over-coupled and cannot tell "revocation works" from "auth works".
+ * MUTATION CHECK — the MEASURED result over the CURRENT 23 tests, so re-running it has a correct
+ * expectation to compare against. (A stale count here is worse than none: an earlier version of
+ * this comment still quoted "11 / 9" from a 20-test draft, which is the sort of number a reader
+ * checks against and then distrusts the whole block.) Removing the `findLiveSession` lookup from
+ * `resolvePrincipal` produces **12 failures / 11 passes**.
  *
- * Note test 4 (isolation) DOES fail under the mutation, and that is correct rather than a defect in
- * it: this file's isolation test also asserts that A's own session died, not merely that B's
- * survived. A B-only assertion would pass trivially — it would still pass if revocation did nothing
- * at all — so the stronger version is deliberate. An earlier draft of this comment predicted test 4
- * would pass, which would have led the next person to "fix" a working test.
+ * THE LOAD-BEARING GATE IS ASSERTION 2 — if a positive test fails too, the suite is over-coupled
+ * and cannot tell "revocation works" from "auth works". It does not; all four positives pass.
  *
- * One test passes under the mutation for a reason worth knowing: "removing a member signs them out"
- * (below) is carried by the missing MEMBERSHIP, not by revocation. Its own comment explains.
+ * Three of the passes are worth knowing, because each would otherwise look like a hole:
+ *   - ISOLATION (assertion 4) FAILS under this mutation, not passes, and that is correct: this
+ *     file's version also asserts A's own session died, not merely that B's survived. A B-only
+ *     assertion would pass even if revocation did nothing at all.
+ *   - "removing a member signs them out" PASSES, because the 401 is carried by the missing
+ *     MEMBERSHIP rather than by revocation — the accidental mechanism 15.6 replaces. Its own
+ *     comment explains, and it is the reason that test cannot stand in for the discriminator.
+ *   - "an OPEN SSE stream dies" PASSES, because the stream re-checks the session in
+ *     `routes/monitor.ts`, not here. That path has its own mutation proof: remove the per-tick
+ *     `findLiveSession` there and this test fails while the rest of the file stays green.
  */
 interface SentMail {
   to: string;
@@ -156,12 +162,17 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.6 sessions + revocation (two-role
     return m![1]!;
   }
 
-  /** Sign a PRE-0018 token by hand: a genuinely valid MAC over the old three-claim payload. */
-  function signLegacy(sub: string, ttlSec: number): string {
+  /**
+   * Hand-sign a token with a genuinely valid MAC over an ARBITRARY claim set — the one place in
+   * this file that knows the byte format, so a forged token and a legacy token cannot drift apart.
+   * `sid` omitted entirely reproduces a pre-0018 token.
+   */
+  function signClaims(claims: Record<string, unknown>): string {
     const iat = Math.floor(Date.now() / 1000);
-    const body = Buffer.from(JSON.stringify({ sub, iat, exp: iat + ttlSec })).toString("base64url");
-    const mac = createHmac("sha256", SESSION_SECRET).update(body).digest("base64url");
-    return `${body}.${mac}`;
+    const body = Buffer.from(JSON.stringify({ iat, exp: iat + 3600, ...claims })).toString(
+      "base64url",
+    );
+    return `${body}.${createHmac("sha256", SESSION_SECRET).update(body).digest("base64url")}`;
   }
 
   beforeEach(async () => {
@@ -513,7 +524,7 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.6 sessions + revocation (two-role
   // ── Edge cases the plan names explicitly ──────────────────────────────────────────────────
 
   it("a PRE-0018 (sid-less) token is rejected, not grandfathered (D-15.6-5)", async () => {
-    const legacy = signLegacy("member@example.com", 3600);
+    const legacy = signClaims({ sub: "member@example.com" });
     // It is crypto-valid — this is the same split the discriminator relies on.
     expect(verifySession(legacy, SESSION_SECRET), "the legacy MAC must verify").not.toBeNull();
     expect(verifySession(legacy, SESSION_SECRET)!.sid).toBeUndefined();
@@ -521,13 +532,7 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.6 sessions + revocation (two-role
   });
 
   it("a well-formed but UNKNOWN sid is 401, and a NON-uuid sid is 401 (never a 500)", async () => {
-    const iat = Math.floor(Date.now() / 1000);
-    const sign = (sid: string) => {
-      const body = Buffer.from(
-        JSON.stringify({ sub: "member@example.com", iat, exp: iat + 3600, sid }),
-      ).toString("base64url");
-      return `${body}.${createHmac("sha256", SESSION_SECRET).update(body).digest("base64url")}`;
-    };
+    const sign = (sid: string) => signClaims({ sub: "member@example.com", sid });
     expect(await meStatus(sign("11111111-2222-3333-4444-555555555555"))).toBe(401);
     // The decision the plan left to the executor: `isUuid` GUARDS the lookup in `resolvePrincipal`
     // rather than the query being wrapped in a try/catch. Without it Postgres raises `22P02` on the

@@ -56,11 +56,12 @@ describe("POST /api/auth/logout", () => {
   });
 
   it("still clears the cookie when the ingest hop THROWS", async () => {
-    // `proxyJson` collapses an unreachable upstream to a 502 RESPONSE rather than throwing, so this
-    // covers the harsher case it does not: something raised before or around the fetch, e.g.
-    // `adminHeaders()`'s own `await cookies()`. Writing this test is what found the bug — the first
-    // implementation had no `try`, so a throw here skipped the delete and stranded the user
-    // signed-in, in precisely the scenario the handler's comment promised it would not.
+    // The mock throws where the REAL `proxyJson` currently cannot: it wraps `adminHeaders()` and
+    // the fetch in its own try and returns a 502 response instead. So this pins the handler against
+    // a FUTURE `proxyJson` that throws, not against a reachable failure today — which is exactly
+    // why the `try` is worth keeping. Writing this test is what found the original bug: the handler
+    // had no `try` at all, so a throw skipped the delete and stranded the user signed in, in
+    // precisely the scenario its own comment promised it would not.
     proxyResult.throws = true;
 
     const res = await POST();

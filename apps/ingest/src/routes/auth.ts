@@ -27,7 +27,7 @@ import {
 } from "../schemas.js";
 import { hashPassword, verifyPassword } from "../password.js";
 import { signSession, SESSION_TTL_SECONDS } from "../session.js";
-import { resolvePrincipal, authorized, isUuid, sessionIdFromRequest } from "../auth.js";
+import { resolvePrincipal, authorized, isUuid } from "../auth.js";
 
 interface LoginBody {
   email: string;
@@ -53,16 +53,50 @@ interface ChangePasswordBody {
   newPassword: string;
 }
 
-/* ────────────────────────────────────────────────────────────────────────────────────────────
- * FILE CHARTER — this block describes `authRoutes` further down, NOT the `mintSession` helper
- * immediately below it. (M15 15.6 inserted that helper between the two, so this marker exists to
- * stop the charter reading as `mintSession`'s doc comment.)
- * ──────────────────────────────────────────────────────────────────────────────────────────── */
+// ── module-private helpers ────────────────────────────────────────────────────────────────────
+
+/**
+ * M15 15.6 — mint a `sessions` row AND the token that carries its id (D-M15-12). The three places
+ * that log a user in (login, invite-accept, signup) all go through here.
+ *
+ * The row's `expires_at` and the token's `exp` come from THE SAME `SESSION_TTL_SECONDS`, in one
+ * place, deliberately: computed independently at three call sites the constant would eventually
+ * drift, and a token that outlives its row (or vice versa) is a 401 nobody can explain. (The two
+ * read the clock a moment apart — the insert's round trip sits between them, and `exp` floors to
+ * whole seconds — so they agree on the TTL, not on the exact instant. Sub-second on a 7-day
+ * lifetime; worth stating precisely rather than claiming an exactness that is not there.)
+ *
+ * `userId` and `email` arrive in an OPTIONS OBJECT rather than as two adjacent `string` positional
+ * parameters, for the reason the repo makes `orgId` always-second: adjacent same-typed arguments
+ * are transposable in a way review cannot see. Here the transposition would be caught by the uuid
+ * cast, but relying on the database to catch a caller's slip is the weaker design.
+ *
+ * The user-agent is truncated to 256 chars HERE, at the edge (D-15.6-9). It is attacker-controlled
+ * free text that is later rendered in a session list, and the column is unbounded `text`, so the
+ * bound belongs at the boundary rather than in the schema.
+ */
+async function mintSession(
+  db: DbClient,
+  request: FastifyRequest,
+  sessionSecret: string,
+  { userId, email }: { userId: string; email: string },
+): Promise<{ token: string; expiresAt: string }> {
+  const { id: sid } = await createSession(
+    db,
+    userId,
+    new Date(Date.now() + SESSION_TTL_SECONDS * 1000),
+    request.headers["user-agent"]?.slice(0, 256) ?? null,
+  );
+  const { token, exp } = signSession(email, sessionSecret, SESSION_TTL_SECONDS, sid);
+  return { token, expiresAt: new Date(exp * 1000).toISOString() };
+}
+
 /**
  * M12 12.3 admin login surface. POST /v1/auth/login is the ONE un-gated admin route
- * (it's the entry point); it issues a stateless HMAC session token the dashboard then
- * carries as a bearer (the hybrid resolvePrincipal gate accepts it). GET /v1/auth/me is
- * a session-gated identity probe for the dashboard's logged-in state.
+ * (it's the entry point); it issues an HMAC session token the dashboard then carries as a bearer
+ * (the hybrid resolvePrincipal gate accepts it). GET /v1/auth/me is a session-gated identity probe
+ * for the dashboard's logged-in state. (12.3 called that token STATELESS; M15 15.6 made it stateful
+ * — see the 15.6 paragraph at the end of this block.)
  *
  * Brute-force rate-limiting was deferred from 12.3 and SHIPPED in 12.4c: the route config
  * below applies app.rateLimitLogin (strict per-route limit, on by default via server.ts).
@@ -98,38 +132,6 @@ interface ChangePasswordBody {
  * USER — being removed from an org ends the login (`routes/members.ts`), but the org is not what
  * owns the row.
  */
-
-// ── module-private helpers ────────────────────────────────────────────────────────────────────
-
-/**
- * M15 15.6 — mint a `sessions` row AND the token that carries its id (D-M15-12). The three places
- * that log a user in (login, invite-accept, signup) all go through here.
- *
- * The row's `expires_at` and the token's `exp` are derived from THE SAME `SESSION_TTL_SECONDS`, in
- * one place, deliberately: computed independently at three call sites they would eventually drift,
- * and a token that outlives its row (or vice versa) turns into a 401 nobody can explain.
- *
- * The user-agent is truncated to 256 chars HERE, at the edge (D-15.6-9). It is attacker-controlled
- * free text that is later rendered in a session list, and the column is unbounded `text`, so the
- * bound belongs at the boundary rather than in the schema.
- */
-async function mintSession(
-  db: DbClient,
-  request: FastifyRequest,
-  sessionSecret: string,
-  userId: string,
-  email: string,
-): Promise<{ token: string; expiresAt: string }> {
-  const { id: sid } = await createSession(
-    db,
-    userId,
-    new Date(Date.now() + SESSION_TTL_SECONDS * 1000),
-    request.headers["user-agent"]?.slice(0, 256) ?? null,
-  );
-  const { token, exp } = signSession(email, sessionSecret, SESSION_TTL_SECONDS, sid);
-  return { token, expiresAt: new Date(exp * 1000).toISOString() };
-}
-
 export default async function authRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Body: LoginBody }>(
     "/v1/auth/login",
@@ -161,7 +163,7 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
         // carries the same `sub` that `findPrincipalByEmail` will look up on every later request.
         // M15 15.6: the row is created BEFORE the token is signed — a token can never name a `sid`
         // that does not exist, so `resolvePrincipal` failing closed on an unknown `sid` is safe.
-        return mintSession(tx, request, app.sessionSecret, cred.id, cred.email);
+        return mintSession(tx, request, app.sessionSecret, { userId: cred.id, email: cred.email });
       });
       if (outcome === "invalid") {
         return reply.code(401).send({ error: "invalid email or password" });
@@ -242,18 +244,25 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
       // membership (which `resolvePrincipal` would fail closed on — a permanently locked account).
       // M15 15.6: the new user's id must ESCAPE the transaction so the session can be minted for
       // it — REUSED, never re-queried, so there is no window in which a second `users` row for the
-      // same address could be resolved instead.
-      let newUserId: string;
-      await app.db.transaction(async (tx) => {
-        newUserId = await createUserWithPassword(tx, invite.email, passwordHash);
-        await acceptInvite(tx, request.body.token, newUserId);
+      // same address could be resolved instead. RETURNED out of the callback rather than assigned
+      // to an outer `let`: the `let` form needs a `!` at the use site (TS cannot see through the
+      // callback), and that assertion would hide a real bug the day someone adds an early `return`
+      // to the transaction — `undefined` would reach `createSession` as a `user_id` AFTER the user
+      // row had already committed. Returning it makes that a type error instead.
+      const newUserId = await app.db.transaction(async (tx) => {
+        const id = await createUserWithPassword(tx, invite.email, passwordHash);
+        await acceptInvite(tx, request.body.token, id);
+        return id;
       });
 
       // The session is minted AFTER the transaction commits, deliberately: a rolled-back accept
       // must not leave a live session pointing at a user row that no longer exists.
-      return reply
-        .code(200)
-        .send(await mintSession(app.db, request, app.sessionSecret, newUserId!, invite.email));
+      return reply.code(200).send(
+        await mintSession(app.db, request, app.sessionSecret, {
+          userId: newUserId,
+          email: invite.email,
+        }),
+      );
     },
   );
 
@@ -288,15 +297,15 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
 
       const passwordHash = hashPassword(request.body.password);
       // Same escape-the-transaction shape as invite-accept above, and for the same reason.
-      let newUserId: string;
-      await app.db.transaction(async (tx) => {
-        newUserId = await createUserWithPassword(tx, email, passwordHash);
-        await ensurePersonalOrg(tx, newUserId, email);
+      const newUserId = await app.db.transaction(async (tx) => {
+        const id = await createUserWithPassword(tx, email, passwordHash);
+        await ensurePersonalOrg(tx, id, email);
+        return id;
       });
 
       return reply
         .code(200)
-        .send(await mintSession(app.db, request, app.sessionSecret, newUserId!, email));
+        .send(await mintSession(app.db, request, app.sessionSecret, { userId: newUserId, email }));
     },
   );
 
@@ -426,7 +435,7 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
       // written with sessions left live is the dangerous half-state — the user believes they have
       // locked an attacker out, and has not. These were two autocommit statements until review
       // caught the asymmetry with the sibling path that documents exactly this hazard.
-      const keep = sessionIdFromRequest(app, request) ?? undefined;
+      const keep = request.sessionId ?? undefined;
       await app.db.transaction(async (tx) => {
         await updatePasswordHash(tx, principal.userId, hashPassword(request.body.newPassword));
         // M15 15.6 (D-15.6-6) — every session EXCEPT the caller's own, which is the deliberate
@@ -465,7 +474,7 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
     if (!authorized(principal, "viewer")) {
       return reply.code(403).send({ error: "insufficient role" });
     }
-    const sid = sessionIdFromRequest(app, request);
+    const sid = request.sessionId;
     const rows = await listSessions(app.db, principal.userId);
     return reply.code(200).send({
       sessions: rows.map((s) => ({
@@ -525,7 +534,7 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
     if (!authorized(principal, "viewer")) {
       return reply.code(403).send({ error: "insufficient role" });
     }
-    const sid = sessionIdFromRequest(app, request);
+    const sid = request.sessionId;
     if (sid) await revokeSession(app.db, principal.userId, sid);
     return reply.code(204).send();
   });

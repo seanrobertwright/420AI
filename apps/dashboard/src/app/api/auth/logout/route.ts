@@ -28,13 +28,16 @@ export async function POST() {
   // outlives its cookie — the row expires on its own within 7 days, whereas a browser that refuses
   // to sign out has no recovery at all.
   //
-  // The `try` is NOT redundant, and the first version of this handler got that wrong. `proxyJson`
-  // catches a failed/unreachable `fetch` and returns a 502 RESPONSE — but only that. Anything
-  // raised BEFORE or AROUND the fetch still propagates: `adminHeaders()` awaits `cookies()`, and a
-  // throw from there (or from any future change inside `proxyJson`) would escape this handler and
-  // skip the `delete` below, stranding the user signed-in in exactly the case the paragraph above
-  // says must not strand them. "The helper happens to catch the failure I thought of" is not the
-  // same guarantee as "the cookie is always cleared", and it is the second one that is promised.
+  // The `try` is defence against `proxyJson`'s CONTRACT changing, not against a throw that is
+  // reachable today — and being precise about that matters, because the first version of this
+  // comment named `adminHeaders()`'s `await cookies()` as the escape route and that is provably
+  // wrong: `proxyJson` evaluates it INSIDE its own `try` and collapses every failure, that one
+  // included, into a 502 *response*. (Its sibling `proxyStream` is the one that calls
+  // `adminHeaders()` outside the try — the claim was imported from the wrong function.)
+  //
+  // So nothing here can throw right now. The `try` stays anyway, because the guarantee this
+  // handler owes is "the cookie is always cleared", and "a helper happens to catch the failure I
+  // thought of" is a weaker promise that a future edit inside `proxyJson` could silently withdraw.
   try {
     await proxyJson("/v1/auth/logout", { method: "POST" });
   } catch {

@@ -3,6 +3,7 @@ import { eq, sql } from "drizzle-orm";
 import { createDb } from "../client.js";
 import { sessions, users } from "../schema.js";
 import { ensurePersonalOrg } from "./organizations.js";
+import { findAdminCredential } from "./users.js";
 import {
   createSession,
   findLiveSession,
@@ -114,8 +115,10 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.6 sessions repository (two-role)"
   });
 
   it("an EXPIRED session does not resolve, even unrevoked", async () => {
-    // Expiry is compared in the DATABASE (`now()`), never against a JS Date — so this row is past
-    // regardless of any clock skew between this process and Postgres.
+    // Expiry is compared against the APP clock (`new Date()` in `findLiveSession`), matching how
+    // `expires_at` is written in `mintSession` — see the comment there for why comparing against
+    // Postgres `now()` was the thing INTRODUCING skew rather than avoiding it. This row is a second
+    // in the past, so it is expired under that comparison.
     const { id } = await createSession(appRole.db, userA, new Date(Date.now() - 1000));
     expect(await findLiveSession(appRole.db, id)).toBeUndefined();
   });
@@ -177,7 +180,9 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.6 sessions repository (two-role)"
   });
 
   /**
-   * The reasoning pin for D-15.6-3's "no lock needed", because CLAUDE.md's 15.5 lesson makes "is
+   * The reasoning pin for `revokeAllSessions`' "no lock needed" (see its header in `sessions.ts`;
+   * no D-15.6-N covers it — D-15.6-3 is about the table carrying no RLS, not about locking),
+   * because CLAUDE.md's 15.5 lesson makes "is
    * this racy?" the first question a reviewer will ask of any concurrent mutation.
    *
    * `revokeAllSessions` is a BLIND UPDATE with its whole predicate in the WHERE clause — there is
@@ -218,18 +223,50 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.6 sessions repository (two-role)"
    * test. Two hand-held transactions are the only thing that discriminates.
    *
    * The discriminating assertion is that the credential-change UPDATE is STILL UNSETTLED after a
-   * wait — i.e. genuinely blocked on the login's `FOR SHARE` lock. Remove `{ lock: true }` from
+   * wait — i.e. genuinely blocked on the login's lock. Remove `{ lock: true }` from
    * `findAdminCredential` and this is the line that fails.
+   *
+   * IT CALLS `findAdminCredential(tx, email, { lock: true })` RATHER THAN HAND-ROLLING THE
+   * `SELECT … FOR SHARE`, and that distinction is the whole point of the test. An earlier version
+   * issued the raw SQL itself, which meant it demonstrated a POSTGRES PROPERTY while leaving the
+   * application's use of that property completely unpinned — deleting `{ lock: true }` from the
+   * production code would have left it green. Verifying "the mechanism works" is not verifying
+   * "the code uses the mechanism", and the gap between those two is where the bug lives.
    */
-  it("a login's FOR SHARE lock blocks a concurrent credential change until its session exists", async () => {
-    const login = await appRole.pool.connect();
+  it("the login path's lock blocks a concurrent credential change until its session exists", async () => {
     const reset = await appRole.pool.connect();
-    try {
-      // ── the LOGIN transaction: lock the user row, then (slowly) mint a session.
-      await login.query("BEGIN");
-      await login.query("SELECT id FROM users WHERE id = $1 FOR SHARE", [userA]);
+    // The login runs as a REAL drizzle transaction — the same `Tx` the route passes — held open on
+    // a latch, so the interleaving is driven by the test rather than by scheduling luck. TWO latches
+    // are needed, and the first one is not optional: without waiting for the lock to actually be
+    // held, the reset's UPDATE can win the race, take its own exclusive lock, and then BOTH sides
+    // wait on each other. That is not a hypothetical — it is what the first version of this test
+    // did, and it hung for 5 s and then leaked its connections into the next four tests.
+    let signalLocked!: () => void;
+    const lockAcquired = new Promise<void>((r) => {
+      signalLocked = r;
+    });
+    let releaseLogin!: () => void;
+    const loginMayProceed = new Promise<void>((r) => {
+      releaseLogin = r;
+    });
 
-      // ── the RESET transaction: try to rewrite the hash. It must BLOCK on the lock above.
+    let lockedCredentialId: string | undefined;
+    const loginTxn = appRole.db.transaction(async (tx) => {
+      try {
+        lockedCredentialId = (await findAdminCredential(tx, "a@example.com", { lock: true }))?.id;
+      } finally {
+        // In `finally`, so a throw on the read cannot leave the test parked on `lockAcquired`.
+        signalLocked();
+      }
+      await loginMayProceed;
+      await createSession(tx, userA, hour());
+    });
+
+    try {
+      await lockAcquired;
+      expect(lockedCredentialId, "the locking read must still return the credential").toBe(userA);
+
+      // ── the RESET: try to rewrite the hash. It must BLOCK on the login's lock.
       await reset.query("BEGIN");
       let settled = false;
       const blocked = reset
@@ -244,12 +281,9 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.6 sessions repository (two-role)"
         "the credential change must be BLOCKED by the login's lock — without it, it commits first and revokes nothing",
       ).toBe(false);
 
-      // The login now inserts its session and commits, releasing the lock.
-      await login.query(
-        "INSERT INTO sessions (user_id, expires_at) VALUES ($1, now() + interval '1 hour')",
-        [userA],
-      );
-      await login.query("COMMIT");
+      // Let the login mint its session and commit, releasing the lock.
+      releaseLogin();
+      await loginTxn;
 
       await blocked;
       // …and because it waited, the reset's revoke SEES the just-inserted row.
@@ -262,13 +296,14 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.6 sessions repository (two-role)"
 
       expect(await listSessions(appRole.db, userA)).toHaveLength(0);
     } finally {
-      // CLAUDE.md 15.5: a held transaction MUST be released in `finally`. When an assertion above
-      // first failed without this, the pooled connections stayed checked out and five later tests
-      // in the file timed out at 10 s — one real failure wearing five fake ones.
-      await login.query("ROLLBACK").catch(() => {});
+      // CLAUDE.md 15.5: a held transaction MUST be released in `finally` — and THE ORDER HERE IS
+      // LOAD-BEARING. Roll the reset back FIRST: if an assertion above threw while the login was
+      // still waiting on the reset's lock, awaiting the login before releasing that lock deadlocks
+      // the cleanup itself. Latch, then rollback, then await.
+      releaseLogin();
       await reset.query("ROLLBACK").catch(() => {});
-      login.release();
       reset.release();
+      await loginTxn.catch(() => {});
     }
   });
 

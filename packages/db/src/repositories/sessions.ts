@@ -49,7 +49,9 @@ export async function createSession(
     .insert(sessions)
     .values({ userId, expiresAt, userAgent: userAgent ?? null })
     .returning({ id: sessions.id });
-  return row!;
+  // No `!`: a single-row `INSERT … RETURNING` always yields one row, and drizzle types it
+  // non-optional here. An assertion would read as a suppressed check that is not being made.
+  return row;
 }
 
 /**

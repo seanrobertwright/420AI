@@ -35,7 +35,7 @@ import {
   withOrg,
   type DbClient,
 } from "@420ai/db";
-import { resolvePrincipal, authorized, sessionIdFromRequest } from "../auth.js";
+import { resolvePrincipal, authorized } from "../auth.js";
 
 /**
  * The "active now" window: a session whose last event is within this lookback is
@@ -278,7 +278,7 @@ export default async function monitorRoutes(app: FastifyInstance): Promise<void>
     const userId = principal.userId;
     // M15 15.6 — captured BEFORE the hijack, alongside the other pre-hijack guards. Null for an
     // `ADMIN_TOKEN` caller, which has no session (see the per-tick re-check below).
-    const sid = sessionIdFromRequest(app, request);
+    const sid = request.sessionId;
 
     reply.raw.writeHead(200, {
       "content-type": "text/event-stream",

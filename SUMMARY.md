@@ -532,7 +532,10 @@ enforced`, the sibling of `skipped ≠ passed`. Closes the Spike-6 hole: a cross
         asymmetries are deliberate and each is pinned: a password **reset** kills every session
         (OWASP; the caller is unauthenticated and somebody else may hold one) while a password
         **change** spares the caller's own (D-15.6-6); member **removal** revokes while a **role
-        change** does not (D-15.6-7), since `role` is re-resolved per request. Pre-0018 (`sid`-less)
+        change** does not (D-15.6-7), since `role` is re-resolved per request. There is deliberately no
+        `last_used_at` (D-15.6-8) — it would put a WRITE on every authenticated read — and
+        `user_agent` is truncated to 256 chars at the route (D-15.6-9), since it is
+        attacker-controlled text that is later rendered. Pre-0018 (`sid`-less)
         tokens are **rejected, not grandfathered** (D-15.6-5) — everyone logs in once — because a
         grace period is a window in which revocation silently does not apply.
         **The proof needed a new shape.** 15.3/15.5 proved their claims by dropping an RLS policy
@@ -544,7 +547,7 @@ enforced`, the sibling of `skipped ≠ passed`. Closes the Spike-6 hole: a cross
         expiry, tampering and a wrong secret as explanations. Keeping `verifySession` a pure
         crypto check with no database in it is what makes that assertion possible, so the split is
         load-bearing rather than stylistic. The mutation check (revocation lookup removed) failed
-        11 of 20 HTTP tests with **all positives still passing** — and surfaced one finding: the
+        12 of the 23 HTTP tests with **all positives still passing** — and surfaced one finding: the
         member-removal test PASSED under the mutation, because a removed membership already fails
         closed via `findPrincipalByEmail`. That accidental mechanism (the one 15.6 replaces, and
         the one that evaporates when 15.10 ships multi-org users) is now named in the test itself.

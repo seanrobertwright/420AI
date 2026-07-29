@@ -232,8 +232,9 @@ export const passwordResetTokens = pgTable(
  * hashing it would buy nothing while implying a protection that is not there.
  *
  * There is also no `last_used_at`, deliberately: touching it would put a WRITE on every
- * authenticated read, and the SSE monitor stream is one request per client per tick — the exact
- * shape of the audit-B.4 problem 15.4 had to throttle back out.
+ * authenticated read. The monitor stream makes that worse rather than better — it is ONE long-held
+ * request per client, but its per-tick session re-check would then become a per-tick write per
+ * connected client, which is the audit-B.4 shape 15.4 had to throttle back out.
  */
 export const sessions = pgTable(
   "sessions",
