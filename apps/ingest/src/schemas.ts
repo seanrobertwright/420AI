@@ -505,6 +505,28 @@ export const signupBodySchema = {
   },
 } as const;
 
+/** POST /v1/auth/sso/:provider/start body — optional, carries only the invite being accepted. */
+export const ssoStartBodySchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: { inviteToken: { type: "string", minLength: 8, maxLength: 256 } },
+} as const;
+
+/**
+ * POST /v1/auth/sso/:provider/callback (and .../link) body. NOTE what is ABSENT: `redirectUri`.
+ * Ingest derives it from APP_BASE_URL so a caller can never steer the exchange (D-15.7-6).
+ */
+export const ssoCallbackBodySchema = {
+  type: "object",
+  required: ["code"],
+  additionalProperties: false,
+  properties: {
+    code: { type: "string", minLength: 1, maxLength: 2048 },
+    codeVerifier: { type: "string", minLength: 32, maxLength: 128 },
+    inviteToken: { type: "string", minLength: 8, maxLength: 256 },
+  },
+} as const;
+
 /** POST /v1/auth/password-reset body — the address to mail a reset link to (always 202). */
 export const passwordResetRequestBodySchema = {
   type: "object",

@@ -769,3 +769,105 @@ If a deployment ever needs it, the purge is a one-liner and safe to run at any t
 ```sql
 DELETE FROM sessions WHERE expires_at < now() - interval '30 days';
 ```
+
+## 15.7 — SSO (Google + GitHub)
+
+Sign-in with Google or GitHub, for **identity only**. No repository or API scopes are requested and
+**no provider access or refresh token is stored** (D-15.7-5) — 420AI never calls a provider on your
+behalf after the login completes.
+
+SSO is **off** until you configure it, and configuring it does not by itself let anyone in.
+
+### Registering the two OAuth apps
+
+Register each app with the **exact** redirect URI below, substituting your `APP_BASE_URL`. A
+mismatch here is the most common setup failure and the provider reports it on its own error page
+before 420AI is ever contacted.
+
+| Provider | Where                                                                                 | Redirect URI                                  |
+| -------- | ------------------------------------------------------------------------------------- | --------------------------------------------- |
+| Google   | Google Cloud console → APIs & Services → Credentials → OAuth client (Web application) | `<APP_BASE_URL>/api/auth/sso/google/callback` |
+| GitHub   | GitHub → Settings → Developer settings → OAuth Apps                                   | `<APP_BASE_URL>/api/auth/sso/github/callback` |
+
+Scopes are fixed in code and need no configuration: Google gets `openid email`, GitHub gets
+`read:user user:email` (the second is required to read the _verified_ flag, which is not on
+`/user`).
+
+### Environment
+
+```bash
+SSO_GOOGLE_CLIENT_ID=
+SSO_GOOGLE_CLIENT_SECRET=
+SSO_GITHUB_CLIENT_ID=
+SSO_GITHUB_CLIENT_SECRET=
+SSO_SIGNUP_ENABLED=false   # literal "true" to allow SSO to CREATE accounts
+SSO_TIMEOUT_MS=10000
+```
+
+A provider is live only when **both** halves are set; a client id with no secret is treated as
+absent rather than failing later at the token exchange. `GET /v1/auth/sso/providers` reports which
+came up configured, and the login page renders exactly those buttons.
+
+`redirect_uri` is derived server-side from `APP_BASE_URL` (D-15.7-6) and is not accepted from any
+request. If your dashboard moves origin, update `APP_BASE_URL` **and** both OAuth app registrations.
+
+### `SSO_SIGNUP_ENABLED` is its own flag, and it is off by default
+
+It is deliberately **separate** from `SELF_SIGNUP_ENABLED` (D-15.7-7), so you can say "anyone with a
+company Google account may self-provision, password signup stays shut" — or the reverse. With it
+off, a new person arrives through SSO only by accepting an invitation: send the invite as usual and
+they may redeem it with a provider login instead of choosing a password, provided the provider's
+**verified** address matches the invited one.
+
+Turning it on means anyone with a verified account at a configured provider can create an account
+here. The server warns loudly at boot when it is on, naming the live providers.
+
+### An existing account is NEVER adopted — this is the behaviour, not a bug
+
+If someone signs in with Google using an address that **already has a 420AI account**, the login is
+refused with **409 `link_required`** — no session is minted and no link is written — even though the
+provider verified the address. The dashboard says "That address already has a 420AI account. Sign in
+with your password, then connect the provider from Settings."
+
+This is the point of the slice (D-15.7-4). The alternative — "look the user up by the email the
+provider asserts, log them in" — is an account-takeover primitive against this product specifically:
+**no `users` row here has a verified email**. Self-signup sends no verification mail, and rows
+pre-seeded by pairing were never verified at all, so auto-adoption would turn any stale row into a
+live account for whoever controls that mailbox at a provider.
+
+The supported path is to **link deliberately**:
+
+1. Sign in the way you already can (password).
+2. **Settings → Single sign-on → Connect** next to the provider.
+3. Sign out. The provider button now signs you in as the same account.
+
+After linking, the login resolves on the provider's immutable user id, not the email — so changing
+your address at Google does not break it, and nobody can inherit your account by acquiring a
+released username.
+
+### Disconnecting, and the lockout guard
+
+`Disconnect` refuses with **409 `last_credential`** when it would remove the only way into an
+account — an SSO-created user has no password at all. Set a password first (or connect a second
+provider). If you are already locked out, the ordinary password-reset flow still works and requires
+control of the mailbox.
+
+### Troubleshooting
+
+| Symptom                                              | Cause                                                                                                                                        |
+| ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| No provider buttons on the login page                | Neither provider has **both** its id and secret set. Check `GET /v1/auth/sso/providers`.                                                     |
+| `409 link_required` on every SSO login               | Working as designed — that address already has an account. Sign in and link from Settings.                                                   |
+| `403 signup_disabled` for a brand-new address        | `SSO_SIGNUP_ENABLED` is not the literal string `true`. Invite the person instead, or turn it on.                                             |
+| `403 email_unverified`                               | The provider has not verified the address. On GitHub the **primary** address must be the verified one — a verified secondary does not count. |
+| `409 invite_mismatch`                                | The invitation was issued to a different address than the provider vouches for. The invite is left unspent.                                  |
+| Redirected to `/login?error=sso_state`               | The flow cookie expired (10 minutes), was blocked, or the `state` did not match. Start again.                                                |
+| The provider's own error page, before reaching 420AI | The registered redirect URI does not match `<APP_BASE_URL>/api/auth/sso/<provider>/callback`.                                                |
+| `502` from the callback                              | The provider was unreachable or timed out (`SSO_TIMEOUT_MS`).                                                                                |
+
+### Rolling back migration 0019
+
+The down-migration **drops `sso_identities`**, discarding every provider link. Users with a password
+are unaffected; an SSO-created user (`password_hash IS NULL`) must recover through password reset.
+No `users`, `memberships` or `sessions` row is touched, and links must be re-established after
+rolling forward again.

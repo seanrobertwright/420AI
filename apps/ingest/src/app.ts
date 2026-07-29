@@ -2,10 +2,17 @@ import { randomBytes } from "node:crypto";
 import Fastify, { type FastifyError, type FastifyInstance } from "fastify";
 import rateLimit from "@fastify/rate-limit";
 import type { Db } from "@420ai/db";
-import { PairingError, InviteError, MemberError, PasswordResetError } from "@420ai/db";
+import {
+  PairingError,
+  InviteError,
+  MemberError,
+  PasswordResetError,
+  SsoIdentityError,
+} from "@420ai/db";
 import { createMetrics, registerMetricsHook } from "./metrics.js";
 import authPlugin from "./plugins/auth.js";
 import authRoutes from "./routes/auth.js";
+import ssoRoutes from "./routes/sso.js";
 import healthRoutes from "./routes/health.js";
 import metricsRoutes from "./routes/metrics.js";
 import pairingCodeRoutes from "./routes/pairing-codes.js";
@@ -28,6 +35,7 @@ import replayRoutes from "./routes/replay.js";
 import searchRoutes from "./routes/search.js";
 import { CATALOG_PUBLIC_KEY, CONNECTOR_CATALOG_PUBLIC_KEY } from "@420ai/shared";
 import { AnalysisProviderError, type AnalysisProvider } from "./analysis/provider.js";
+import { SsoProviderError, type SsoProviders } from "./sso/provider.js";
 import type { AlertDeliverer } from "./delivery/alert-deliverer.js";
 import type { Mailer } from "./delivery/mailer.js";
 
@@ -90,6 +98,21 @@ export interface BuildAppOptions {
    * consequential one in the slice: `true` would turn every existing test caller — and every
    * deployment that upgrades without touching `.env` — into an open-signup box. */
   selfSignupEnabled?: boolean;
+  /** M15 15.7 injected SSO providers (real `fetch` clients in server.ts; a deterministic stub in
+   * every test). Omitted → `{}` → no provider is configured, `GET /v1/auth/sso/providers` returns
+   * an empty list and every `:provider` route 404s. Same opt-in shape as `alertDeliverer`/`mailer`,
+   * so no existing caller changes and no test opens a socket to Google. */
+  ssoProviders?: SsoProviders;
+  /** M15 15.7 (D-15.7-7) whether an SSO callback may CREATE an account. Omitted → FALSE, and the
+   * default matters for exactly the reason `selfSignupEnabled`'s does: `true` would make every
+   * deployment that configures a client id an open-signup box, silently reopening the door
+   * D-M15-6 shut. Deliberately a SEPARATE flag from `selfSignupEnabled` — an operator may want
+   * "anyone with a company Google account may self-provision, password signup stays shut". */
+  ssoSignupEnabled?: boolean;
+  /** M15 15.7 the dashboard's public origin, used to DERIVE the OAuth `redirect_uri` server-side
+   * (D-15.7-6 — it is never read from a request body). Omitted → next dev's default origin, the
+   * same fallback `mailer.appBaseUrl` uses. */
+  appBaseUrl?: string;
 }
 
 /**
@@ -150,6 +173,11 @@ export function buildApp(opts: BuildAppOptions): FastifyInstance {
   // decoration, so `app.mailer` / `app.selfSignupEnabled` resolve inside the handlers.
   app.decorate("mailer", opts.mailer ?? null);
   app.decorate("selfSignupEnabled", opts.selfSignupEnabled ?? false);
+  // M15 15.7 SSO. All three decorated BEFORE the route registrations below so `app.ssoProviders` /
+  // `app.ssoSignupEnabled` / `app.appBaseUrl` resolve inside the handlers.
+  app.decorate("ssoProviders", opts.ssoProviders ?? {});
+  app.decorate("ssoSignupEnabled", opts.ssoSignupEnabled ?? false);
+  app.decorate("appBaseUrl", opts.appBaseUrl ?? "http://localhost:3000");
 
   // M12 12.4b metrics: decorate the store BEFORE registering the hook (the hook reads
   // app.metrics) and the route. Default-on so the 7 existing callers get counters for free;
@@ -180,6 +208,7 @@ export function buildApp(opts: BuildAppOptions): FastifyInstance {
 
   app.register(authPlugin);
   app.register(authRoutes);
+  app.register(ssoRoutes);
   app.register(healthRoutes);
   app.register(pairingCodeRoutes);
   app.register(memberRoutes);
@@ -219,9 +248,22 @@ export function buildApp(opts: BuildAppOptions): FastifyInstance {
         .code(err.reason === "not_a_member" ? 404 : 409)
         .send({ error: err.message, reason: err.reason });
     }
+    // M15 15.7 — an SSO link refused by the repository. Both reasons are CONFLICTS with state that
+    // already exists (`identity_taken`: that provider identity belongs to somebody else;
+    // `last_credential`: unlinking would leave the account unopenable), so both are 409 and the
+    // typed `reason` rides along for the dashboard's copy.
+    if (err instanceof SsoIdentityError) {
+      return reply.code(409).send({ error: err.message, reason: err.reason });
+    }
     // Provider failures (non-200/timeout/parse → 502; not-configured → 503). Placed
     // BEFORE the status>=500 masking branch, which would otherwise hide the message.
     if (err instanceof AnalysisProviderError) {
+      return reply.code(err.kind === "not_configured" ? 503 : 502).send({ error: err.message });
+    }
+    // M15 15.7 — the same mapping for an OAuth provider outage: a Google timeout or a GitHub 500
+    // is a 502 here, never a leaked internal error. Placed alongside its analysis sibling and
+    // BEFORE the status>=500 masking branch for the same reason.
+    if (err instanceof SsoProviderError) {
       return reply.code(err.kind === "not_configured" ? 503 : 502).send({ error: err.message });
     }
     if (err.validation) {

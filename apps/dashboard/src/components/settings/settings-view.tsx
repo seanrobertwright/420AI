@@ -3,6 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { formatDate } from "@/lib/format";
+import { SsoLinks } from "@/components/settings/sso-links";
 
 interface Health {
   status: string;
@@ -73,6 +74,11 @@ export function SettingsView({
             </CardContent>
           </Card>
         </div>
+
+        {/* M15 15.7 — the SSO link surface. A client island (it mutates), rendered from the
+            existing Settings page rather than a new route. It renders NOTHING when no provider is
+            configured, so a deployment without SSO sees exactly what it saw before. */}
+        <SsoLinks />
 
         <Card>
           <CardHeader>

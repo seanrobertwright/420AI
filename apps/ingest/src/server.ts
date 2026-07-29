@@ -7,6 +7,7 @@ import { createAnalysisProvider, type AnalysisProviderConfig } from "./analysis/
 import { createWebhookDeliverer } from "./delivery/alert-deliverer.js";
 import { createSmtpDeliverer, createFanoutDeliverer } from "./delivery/smtp-deliverer.js";
 import { createMailer } from "./delivery/mailer.js";
+import { createSsoProviders, type SsoConfig } from "./sso/provider.js";
 
 // Load the repo-root .env (this runs from apps/ingest/ via npm -w).
 config({ path: fileURLToPath(new URL("../../../.env", import.meta.url)) });
@@ -168,6 +169,55 @@ if (selfSignupEnabled) {
   );
 }
 
+// M15 15.7 SSO (D-M15-5). A provider is configured only when BOTH halves are present; a client id
+// with no secret is a half-configuration that would fail at the token exchange with an opaque 502,
+// so it is treated as absent and reported once at boot.
+//
+// `||` NOT `??` on every one of these, per the SMTP_URL comment above: `.env.example` ships these
+// keys with EMPTY values, and `""` is not null — `??` would hand an empty client id straight to
+// Google, exactly the silent misconfiguration the mailer fallback was written to avoid.
+const ssoTimeoutMs = parsePositiveInt(process.env.SSO_TIMEOUT_MS, "SSO_TIMEOUT_MS", 10000);
+const ssoConfig: SsoConfig = {};
+const googleClientId = process.env.SSO_GOOGLE_CLIENT_ID || "";
+const googleClientSecret = process.env.SSO_GOOGLE_CLIENT_SECRET || "";
+if (googleClientId && googleClientSecret) {
+  ssoConfig.google = {
+    clientId: googleClientId,
+    clientSecret: googleClientSecret,
+    timeoutMs: ssoTimeoutMs,
+  };
+}
+const githubClientId = process.env.SSO_GITHUB_CLIENT_ID || "";
+const githubClientSecret = process.env.SSO_GITHUB_CLIENT_SECRET || "";
+if (githubClientId && githubClientSecret) {
+  ssoConfig.github = {
+    clientId: githubClientId,
+    clientSecret: githubClientSecret,
+    timeoutMs: ssoTimeoutMs,
+  };
+}
+const ssoProviders = createSsoProviders(ssoConfig);
+
+// D-15.7-7: SSO-driven account creation is its OWN flag, and off by default. STRICT equality for
+// the same reason SELF_SIGNUP_ENABLED uses it — a typo (`SSO_SIGNUP_ENABLED=yes`) fails safe.
+const ssoSignupEnabled = process.env.SSO_SIGNUP_ENABLED === "true";
+if (ssoSignupEnabled) {
+  // Entrypoint, so logging is in bounds (CLAUDE.md's boundary). Name the LIVE providers: "SSO
+  // signup is on" is only actionable if the operator can see which identity sources it trusts.
+  const live = Object.keys(ssoProviders);
+  console.warn(
+    live.length > 0
+      ? `SSO_SIGNUP_ENABLED=true — anyone with a verified ${live.join("/")} account can create an account here.`
+      : "SSO_SIGNUP_ENABLED=true but no SSO provider is configured — the flag has no effect.",
+  );
+}
+
+// The `redirect_uri` handed to each provider is DERIVED from this (D-15.7-6), never from a
+// request. It reuses the SAME APP_BASE_URL the mailer reads above rather than introducing a
+// second base-URL variable — the two must agree or a login link and a reset link point at
+// different hosts.
+const appBaseUrl = process.env.APP_BASE_URL || "http://localhost:3000";
+
 // The server's ONLY connection is the non-owner app role — there is no privileged handle
 // anywhere in the request path (D-15.3-5: "the ingest server can never see across orgs").
 const { db } = createDb(appDatabaseUrl);
@@ -218,6 +268,9 @@ const app = buildApp({
   alertDeliverer,
   mailer,
   selfSignupEnabled,
+  ssoProviders,
+  ssoSignupEnabled,
+  appBaseUrl,
 });
 
 await app.listen({ port: Number(process.env.INGEST_PORT ?? 8420), host: "0.0.0.0" });

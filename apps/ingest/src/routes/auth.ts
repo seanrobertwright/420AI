@@ -74,8 +74,13 @@ interface ChangePasswordBody {
  * The user-agent is truncated to 256 chars HERE, at the edge (D-15.6-9). It is attacker-controlled
  * free text that is later rendered in a session list, and the column is unbounded `text`, so the
  * bound belongs at the boundary rather than in the schema.
+ *
+ * M15 15.7 — EXPORTED (it was module-private through 15.6) so `routes/sso.ts` reuses this one
+ * definition rather than re-deriving the row/token pair. An SSO login is an ordinary login the
+ * moment the policy admits it, and a second implementation of this is precisely how the row's
+ * `expires_at` and the token's `exp` would drift apart.
  */
-async function mintSession(
+export async function mintSession(
   db: DbClient,
   request: FastifyRequest,
   sessionSecret: string,

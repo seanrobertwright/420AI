@@ -55,6 +55,20 @@ const ALLOWED_WITHOUT_WITHORG: Record<string, string> = {
   "auth.ts":
     "reads `users` to ESTABLISH identity and `sessions` to establish the request context; " +
     "users/organizations/memberships/sessions carry no RLS",
+  // M15 15.7 — the SAME argument as `auth.ts` above, one table further along. `sso_identities` is
+  // an identity table with no `org_id` and no policy (D-15.7-3), and the login path reads it at the
+  // one moment before any org context exists, because resolving that row is part of what
+  // establishes the context. An identity belongs to a USER, so `userId` is the scoping predicate on
+  // every call — there is no `orgId` in the repository's signatures at all.
+  //
+  // The file DOES write org-owned rows on one path: invite-acceptance inserts a `memberships` row.
+  // That is not an exemption being stretched — it goes through `acceptInvite`, exactly as
+  // `auth.ts`'s password invite-accept does, and `invites`/`memberships` are the bootstrap-permissive
+  // and no-policy tables that path was designed around (D-15.3-3 / D-15.5-2). Wrapping it in
+  // `withOrg` would read zero rows, since the invite lookup is what discovers the org.
+  "sso.ts":
+    "reads `sso_identities` + `users` to ESTABLISH identity before any org context exists; " +
+    "sso_identities/users/memberships carry no RLS and `invites` is bootstrap-permissive",
   // The BOOTSTRAP paths (D-15.3-3) — circular with respect to tenancy by construction.
   "pair.ts": "redeems the pairing code IN ORDER TO discover the org (bootstrap-permissive)",
   // M15 15.5 REMOVED `pairing-codes.ts`. Its exemption read "writes a row for a TARGET user whose

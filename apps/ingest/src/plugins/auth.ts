@@ -47,6 +47,16 @@ declare module "fastify" {
     /** M15 15.5 (D-M15-6) whether POST /v1/auth/signup accepts anyone. FALSE unless the operator
      * sets SELF_SIGNUP_ENABLED=true; invite-only is the default posture for EVERY deployment. */
     selfSignupEnabled: boolean;
+    /** M15 15.7 the CONFIGURED SSO providers, keyed by id. `{}` when none — the login page asks
+     * `GET /v1/auth/sso/providers` which buttons to render, so an unconfigured provider is ABSENT
+     * rather than present-and-throwing (the one divergence from `analysisProvider`'s stand-in). */
+    ssoProviders: import("../sso/provider.js").SsoProviders;
+    /** M15 15.7 (D-15.7-7) whether an SSO callback may CREATE an account. FALSE unless the
+     * operator sets SSO_SIGNUP_ENABLED=true — separate from SELF_SIGNUP_ENABLED on purpose. */
+    ssoSignupEnabled: boolean;
+    /** M15 15.7 the dashboard origin the OAuth `redirect_uri` is DERIVED from (D-15.7-6). Never
+     * caller-supplied — a caller-supplied redirect is a complete takeover primitive. */
+    appBaseUrl: string;
     /** preHandler that 401s unless a valid bearer token resolves to a machine. */
     authenticate: preHandlerHookHandler;
   }

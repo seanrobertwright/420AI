@@ -143,6 +143,49 @@ export async function createUserWithPassword(
   return row!.id;
 }
 
+/**
+ * M15 15.7 — resolve a user's email by id, or undefined if the row is gone.
+ *
+ * The inverse of `findUserIdByEmail`, and it exists for exactly one caller: an SSO login resolved
+ * through `(provider, subject)` knows only a `userId`, and `mintSession` signs the EMAIL as the
+ * token's `sub`. Re-deriving it from the provider's assertion instead would be the takeover bug in
+ * a different costume — the whole point of branch 1 is that the provider's email is not consulted.
+ */
+export async function findUserEmailById(db: DbClient, userId: string): Promise<string | undefined> {
+  const [row] = await db
+    .select({ email: users.email })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+  return row?.email;
+}
+
+/**
+ * M15 15.7 — create a user who has NO password, for an SSO-only account, returning its id. Like
+ * its password-bearing sibling above it deliberately does NOT call `ensurePersonalOrg`, and for
+ * exactly the same reason (D-15.5-9 / GOTCHA-1): the SSO invite-acceptance path inserts its one
+ * membership through `acceptInvite`, and a personal `owner` membership created first would shadow
+ * it forever, because `findPrincipalByEmail` resolves the FIRST membership by (created_at, id).
+ * The SSO *signup* path is the other case and calls `ensurePersonalOrg` explicitly, exactly as
+ * `POST /v1/auth/signup` does.
+ *
+ * `password_hash` stays NULL, which is not a gap but the whole point: `findAdminCredential`'s
+ * callers already treat a null hash as "cannot log in with a password" (the generic 401 at
+ * routes/auth.ts:159), so an SSO-only account is password-unopenable by construction rather than
+ * by a check somebody has to remember to write. Such a user may still ADOPT a password later
+ * through the ordinary reset flow, which requires control of the mailbox — that is a feature, and
+ * it is also the recovery path named in the 0019 down-migration note.
+ *
+ * Throws on a duplicate email (the unique index) — callers check first and return 409.
+ */
+export async function createUserWithoutPassword(db: DbClient, email: string): Promise<string> {
+  const [row] = await db
+    .insert(users)
+    .values({ email: normalizeEmail(email) })
+    .returning({ id: users.id });
+  return row!.id;
+}
+
 /** Set (or replace) an existing user's password hash. Returns false if no such user. */
 export async function updatePasswordHash(
   db: DbClient,

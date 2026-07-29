@@ -253,6 +253,51 @@ export const sessions = pgTable(
   (t) => [index("sessions_by_user").on(t.userId)],
 );
 
+/**
+ * M15 15.7 — a linked external identity (D-M15-5). An IDENTITY table: no `org_id` and therefore
+ * NO RLS, for the same reason `users`/`memberships`/`password_reset_tokens`/`sessions` carry none
+ * (D-15.3-4 / D-15.5-1 / D-15.6-3 / D-15.7-3). It is read at the one moment before any org context
+ * exists, because resolving this row is part of what establishes it.
+ *
+ * THE UNIQUE KEY IS `(provider, subject)`, AND `subject` IS THE PROVIDER'S IMMUTABLE ID — never a
+ * username, never an email (D-15.7-1). GitHub `login` is renameable and a released handle can be
+ * re-registered by somebody else; a Google address can be deleted and re-issued inside a Workspace
+ * domain. Keying on either would let one person inherit another's account by acquiring a string.
+ * So: Google's `sub`, GitHub's numeric `id`.
+ *
+ * `email` is stored for DISPLAY AND AUDIT ONLY and is deliberately NOT unique and NOT a lookup
+ * key. It records what the provider asserted at link time; it is never how a login is resolved,
+ * which is the single rule that makes auto-adoption unrepresentable rather than merely unwritten.
+ *
+ * There is no `access_token` / `refresh_token` column, and that absence is the decision
+ * (D-15.7-5): this is identity, not API access. We never call a provider on the user's behalf
+ * after the login completes, so storing a live provider credential would add a breach liability
+ * that buys nothing.
+ */
+export const ssoIdentities = pgTable(
+  "sso_identities",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
+    // `google` | `github` — TEXT with no CHECK, matching how `memberships.role` models a closed
+    // set (the legal values live in code, so adding one is not a migration).
+    provider: text("provider").notNull(),
+    subject: text("subject").notNull(),
+    // Lowercased via `normalizeEmail` at the boundary, like `invites.email`. Nullable: a GitHub
+    // account with no verified address links only through an already-authenticated user.
+    email: text("email"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("sso_identities_provider_subject").on(t.provider, t.subject),
+    // NOT unique: one user may hold a Google AND a GitHub link. A uniqueIndex here would silently
+    // cap every account at one provider, and the failure would look like "GitHub linking is broken".
+    index("sso_identities_by_user").on(t.userId),
+  ],
+);
+
 export const ingestTokens = pgTable(
   "ingest_tokens",
   {
