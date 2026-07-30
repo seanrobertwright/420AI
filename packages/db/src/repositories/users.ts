@@ -90,6 +90,44 @@ export async function findAdminCredential(
 }
 
 /**
+ * M15 15.8 — the ID-KEYED sibling of `findAdminCredential`, with the same `{ lock: true }`
+ * `FOR SHARE` behaviour and the same return shape.
+ *
+ * WHY A SEPARATE FUNCTION RATHER THAN A REUSE. An MFA challenge carries a USER ID, deliberately: it
+ * is the only identifier that cannot change between the two steps of a two-step login, whereas an
+ * email can be reassigned. Going `id → email → findAdminCredential` on the way back would
+ * re-introduce a lookup by a MUTABLE key at the exact moment the code is trying to prove nothing
+ * mutated. Same reason `findUserEmailById` exists for the 15.7 SSO path.
+ *
+ * THE LOCK IS LOAD-BEARING HERE FOR THE SAME RACE `findAdminCredential` documents above, one step
+ * further along, and it is the second half of a mechanism that would otherwise have a hole
+ * (D-15.8-4). 15.6 held the lock across the login's scrypt so a concurrent password reset could not
+ * have its `revokeAllSessions` run past a session about to be inserted. Splitting login into
+ * "authenticate now, mint later" puts an UNBOUNDED gap in the middle — it spans a human reading a
+ * code off their phone — and no lock reaches across that. So `POST /v1/auth/mfa/verify` re-reads the
+ * credential HERE, under the lock, and compares the challenge's `cv` fingerprint against a freshly
+ * recomputed one. Both orderings are then correct:
+ *   - reset first  → the hash changed, the recomputed `cv` differs, and the challenge is refused.
+ *   - verify first → `FOR SHARE` blocks the reset's `UPDATE users`, so the reset's
+ *                    `revokeAllSessions` runs AFTER the new session row exists and revokes it.
+ * Neither needs SERIALIZABLE nor a retry loop. The challenge's 5-minute TTL is a BOUND, not the
+ * mechanism.
+ */
+export async function findCredentialById(
+  db: DbClient,
+  userId: string,
+  options?: { lock?: boolean },
+): Promise<{ id: string; email: string; passwordHash: string | null } | undefined> {
+  const query = db
+    .select({ id: users.id, email: users.email, passwordHash: users.passwordHash })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+  const [row] = await (options?.lock ? query.for("share") : query);
+  return row;
+}
+
+/**
  * Find-or-create a user by email AND set its password hash, returning the id
  * (idempotent). The env-seed (server.ts) calls this on every boot so rotating
  * ADMIN_PASSWORD + restart re-seeds the hash. Mirrors ensureUserByEmail.

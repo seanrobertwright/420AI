@@ -1,7 +1,7 @@
 import { and, asc, eq, isNotNull, like, not } from "drizzle-orm";
 import type { Db, Tx } from "../client.js";
 import { activeKeyId, decryptField, encryptField, type EncryptedField } from "../crypto.js";
-import { events, gitCommits, rawSourceRecords } from "../schema.js";
+import { events, gitCommits, rawSourceRecords, totpCredentials } from "../schema.js";
 
 /**
  * M12 12.4e — re-encrypt every encrypted row under the ACTIVE keyring key. The keyId rides
@@ -20,6 +20,15 @@ export interface RotationCounts {
   rawSourceRecords: number;
   events: number;
   gitCommits: number;
+  /**
+   * M15 15.8 — the FOURTH encrypted column trio (`totp_credentials.secret_*`). It is here because
+   * `reencryptAll`'s promise is "every encrypted row under the active key", and a new encrypted
+   * column left out of this pass would make that promise FALSE — precisely the class of comment
+   * CLAUDE.md's 15.5 lesson forbids. The consequence of the omission would also be severe and
+   * silent: after retiring the old key, every enrolled user's `decryptField` would throw and MFA
+   * would break for all of them at once, at login.
+   */
+  totpCredentials: number;
 }
 
 interface EncRow {
@@ -138,5 +147,35 @@ export async function reencryptAll(db: Db): Promise<RotationCounts> {
         .where(eq(gitCommits.id, key)),
   );
 
-  return { rawSourceRecords: rawCount, events: eventsCount, gitCommits: gitCount };
+  // M15 15.8 — `totp_credentials.secret_*`. Identical shape to the `gitCommits` pass above, with one
+  // deliberate difference: all three columns are `notNull`, so this pass needs NO `isNotNull(...)`
+  // guards (unlike `events`, whose trio is nullable). `rotateTable`'s defensive
+  // `if (r.ct === null …) continue` still covers it, so the absence is a simplification, not a gap.
+  const totpCount = await rotateTable(
+    db,
+    (tx) =>
+      tx
+        .select({
+          key: totpCredentials.userId,
+          ct: totpCredentials.secretCiphertext,
+          iv: totpCredentials.secretIv,
+          tag: totpCredentials.secretTag,
+        })
+        .from(totpCredentials)
+        .where(not(like(totpCredentials.secretCiphertext, prefix)))
+        .orderBy(asc(totpCredentials.userId))
+        .limit(BATCH),
+    (tx, key, enc) =>
+      tx
+        .update(totpCredentials)
+        .set({ secretCiphertext: enc.ciphertext, secretIv: enc.iv, secretTag: enc.tag })
+        .where(eq(totpCredentials.userId, key)),
+  );
+
+  return {
+    rawSourceRecords: rawCount,
+    events: eventsCount,
+    gitCommits: gitCount,
+    totpCredentials: totpCount,
+  };
 }

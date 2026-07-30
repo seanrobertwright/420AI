@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { NextResponse, type NextRequest } from "next/server";
 import { ingestUrl } from "@/lib/ingest";
 import { SESSION_COOKIE, sessionConfigError } from "@/lib/session";
+import { MFA_CHALLENGE_COOKIE, mfaChallengeCookieOptions } from "@/lib/mfa-flow";
 
 /**
  * M12 12.3 login proxy. Forwards {email,password} to ingest's POST /v1/auth/login; on success it
@@ -38,7 +39,28 @@ export async function POST(req: NextRequest) {
       headers: { "content-type": "application/json" },
     });
   }
-  const { token, expiresAt } = (await res.json()) as { token: string; expiresAt: string };
+  const payload = (await res.json()) as
+    | { token: string; expiresAt: string }
+    | { mfaRequired: true; challenge: string; expiresAt: string };
+
+  // M15 15.8 — THE SECOND-FACTOR BRANCH. An enrolled user's login returns a challenge, not a token,
+  // and NO SESSION COOKIE IS SET here: the login is not complete until `/api/auth/mfa/verify`
+  // exchanges the challenge for a session. The challenge goes into its own path-scoped httpOnly
+  // cookie so client JS never holds it (D8) and the form only learns *that* a second step is needed.
+  //
+  // Note the ordering: the `sessionConfigError()` guard above still runs FIRST, deliberately. A
+  // deployment with no `SESSION_SECRET` must fail loudly at step one rather than let the user type a
+  // code into step two and fail there — the same D.3 reasoning, one step later.
+  if ("mfaRequired" in payload) {
+    (await cookies()).set(
+      MFA_CHALLENGE_COOKIE,
+      JSON.stringify({ challenge: payload.challenge }),
+      mfaChallengeCookieOptions(),
+    );
+    return NextResponse.json({ mfaRequired: true });
+  }
+
+  const { token, expiresAt } = payload;
   (await cookies()).set(SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: "lax",

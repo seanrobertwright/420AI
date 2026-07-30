@@ -907,3 +907,86 @@ export const searchDocuments = pgTable(
     index("search_documents_by_session").on(t.sessionId),
   ],
 );
+
+/**
+ * M15 15.8 — a confirmed TOTP credential, ONE ROW PER USER (D-M15-5). An IDENTITY table: no
+ * `org_id`, and therefore NO RLS at all, for the same reason
+ * `users`/`memberships`/`password_reset_tokens`/`sessions`/`sso_identities` carry none (D-15.3-4 /
+ * D-15.5-1 / D-15.6-3 / D-15.7-3 / D-15.8-13). It is read at the one moment before any org context
+ * exists — a second factor is presented BEFORE a session is minted, so there is nothing to scope by
+ * yet. `user_id` is the whole scoping, and it is the PRIMARY KEY: a user has one authenticator, so
+ * there is no separate `id` and no way to accumulate a second silently.
+ *
+ * THE SECRET IS ENCRYPTED AT REST, not hashed (D-15.8-6), because it is a SYMMETRIC BEARER
+ * CREDENTIAL: verification requires the plaintext in order to recompute the code. Anyone holding it
+ * can mint valid codes forever, so a leaked backup would defeat MFA for every enrolled user
+ * silently. It therefore uses the existing AES-256-GCM `encryptField` trio, and `reencryptAll` is
+ * extended to cover it — a fourth encrypted column left out of the rotation pass would make that
+ * function's stated promise ("every encrypted row under the active key") false.
+ *
+ * Column by column, because each one is a decision:
+ *
+ *   - `confirmed_at` NULL means THE CREDENTIAL GATES NOTHING (D-15.8-10). Enrolment is two-phase, so
+ *     a user who abandons it — wrong clock, wrong app, closed tab — is never locked out of their own
+ *     account. Every gate below asks for `confirmed_at IS NOT NULL`, never merely for the row.
+ *   - `last_step` is the RFC 6238 §5.2 replay guard: a code accepted at step N is never accepted
+ *     again. `integer`, NOT `bigint`, and that is measured rather than stylistic — node-postgres
+ *     returns `int8` as a JavaScript STRING, so a `bigint` column would silently make `lastStep <
+ *     step` a string comparison in any path that forgot a `Number(...)` (CLAUDE.md's "numeric is a
+ *     string" class). `int4` covers step 2147483647 = the year 4011.
+ *   - `failed_attempts` / `locked_until` are the RFC 4226 §7.3 throttle (D-15.8-9). A STATELESS
+ *     challenge has nowhere to count, and per-IP rate limiting does not bound an attacker who
+ *     already holds the password and can request a fresh challenge at will.
+ *
+ * NOTE what is absent: no `algorithm`/`digits`/`period` columns. They are SHA1/6/30 for every
+ * mainstream authenticator, they are baked into the `otpauth://` URI the user provisioned from, and
+ * a per-row override would be a configuration surface with no caller.
+ */
+export const totpCredentials = pgTable("totp_credentials", {
+  userId: uuid("user_id")
+    .primaryKey()
+    .references(() => users.id),
+  secretCiphertext: text("secret_ciphertext").notNull(),
+  secretIv: text("secret_iv").notNull(),
+  secretTag: text("secret_tag").notNull(),
+  confirmedAt: timestamp("confirmed_at", { withTimezone: true }),
+  lastStep: integer("last_step"),
+  failedAttempts: integer("failed_attempts").notNull().default(0),
+  lockedUntil: timestamp("locked_until", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
+ * M15 15.8 — single-use MFA recovery codes, ten per enrolment. An IDENTITY table on exactly the
+ * same terms as `totp_credentials` above: no `org_id`, no RLS, scoped by `user_id` alone.
+ *
+ * HASHED, NOT ENCRYPTED (D-15.8-7), which is the opposite choice from the secret one table up and
+ * for a concrete reason: a recovery code is only ever COMPARED, never read back, so the plaintext
+ * has no remaining use after it is shown once. `hashToken` (sha256) rather than scrypt, matching
+ * `invites.token_hash` and `ingest_tokens.token_hash` — these are machine-generated
+ * `randomBytes(32)`, so there is no dictionary to defend against, and scrypt would additionally
+ * cost TEN ~100 ms hashes per redemption attempt on the event loop, since a presented code would
+ * have to be checked against every unused row. The hash lets `redeemRecoveryCode` find the row in
+ * ONE indexed probe instead.
+ *
+ * `used_at` rather than a DELETE, so "you have 3 codes left" is answerable and a redeemed code
+ * cannot be re-inserted by a racing regeneration.
+ */
+export const mfaRecoveryCodes = pgTable(
+  "mfa_recovery_codes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
+    codeHash: text("code_hash").notNull(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // Scoped to the USER, not global: two users holding the same code is astronomically unlikely
+    // but not a conflict, whereas one user holding a duplicate would make "10 codes" a lie.
+    uniqueIndex("mfa_recovery_codes_user_hash").on(t.userId, t.codeHash),
+    index("mfa_recovery_codes_by_user").on(t.userId),
+  ],
+);

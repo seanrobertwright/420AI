@@ -69,6 +69,13 @@ const ALLOWED_WITHOUT_WITHORG: Record<string, string> = {
   "sso.ts":
     "reads `sso_identities` + `users` to ESTABLISH identity before any org context exists; " +
     "sso_identities/users/memberships carry no RLS and `invites` is bootstrap-permissive",
+  // M15 15.8 — the SAME argument as `auth.ts`/`sso.ts` above, two tables further along. A second
+  // factor is presented BEFORE a session is minted, so `POST /v1/auth/mfa/verify` reads these rows at
+  // the one moment before any org context exists — resolving them is part of what establishes it. The
+  // five session-gated routes in the file act on `principal.userId` and touch no tenant table at all.
+  "mfa.ts":
+    "reads totp_credentials/mfa_recovery_codes to complete authentication before any org context " +
+    "exists; both are identity tables with no org_id and no policy (D-15.8-13)",
   // The BOOTSTRAP paths (D-15.3-3) — circular with respect to tenancy by construction.
   "pair.ts": "redeems the pairing code IN ORDER TO discover the org (bootstrap-permissive)",
   // M15 15.5 REMOVED `pairing-codes.ts`. Its exemption read "writes a row for a TARGET user whose

@@ -5,6 +5,7 @@ import { proxyJson } from "@/lib/proxy";
 import { safeNext } from "@/lib/safe-next";
 import { SESSION_COOKIE, sessionConfigError } from "@/lib/session";
 import { parseSsoFlow, SSO_FLOW_COOKIE, SSO_FLOW_PATH } from "@/lib/sso-flow";
+import { MFA_CHALLENGE_COOKIE, mfaChallengeCookieOptions } from "@/lib/mfa-flow";
 
 /**
  * M15 15.7 — the provider's redirect target. Validates `state`, exchanges the code through ingest,
@@ -108,7 +109,26 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ prov
     return refuse(req, reason ?? "failed");
   }
 
-  const { token, expiresAt } = (await res.json()) as { token: string; expiresAt: string };
+  const payload = (await res.json()) as
+    | { token: string; expiresAt: string }
+    | { mfaRequired: true; challenge: string; expiresAt: string };
+
+  // M15 15.8 (D-15.8-5) — THE SAME SECOND-FACTOR BRANCH AS THE PASSWORD LOGIN PROXY. If MFA only
+  // guarded the password path, an attacker who compromises the linked Google account would sign in
+  // with no second factor and the enrolment was theatre. `next` rides in the URL through `safeNext`,
+  // exactly as it does on every other redirect here — not in the challenge cookie.
+  if ("mfaRequired" in payload) {
+    jar.set(
+      MFA_CHALLENGE_COOKIE,
+      JSON.stringify({ challenge: payload.challenge }),
+      mfaChallengeCookieOptions(),
+    );
+    const dest = new URL("/login/mfa", req.nextUrl);
+    dest.searchParams.set("next", safeNext(flow.next));
+    return NextResponse.redirect(dest);
+  }
+
+  const { token, expiresAt } = payload;
   jar.set(SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: "lax",

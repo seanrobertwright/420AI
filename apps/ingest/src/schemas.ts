@@ -558,3 +558,39 @@ export const changePasswordBodySchema = {
     newPassword: { type: "string", minLength: MIN_NEW_PASSWORD_LENGTH, maxLength: 256 },
   },
 } as const;
+
+// --- M15 15.8 MFA (D-M15-5) ---
+
+/**
+ * POST /v1/auth/mfa/enroll/confirm, /disable, /recovery-codes body — a single presented factor.
+ *
+ * ONE field for BOTH credential kinds, deliberately: the route tries the TOTP shape first and falls
+ * through to the recovery-code hash lookup (`verifyTotp` rejects on `/^\d{6}$/` before any HMAC), so
+ * a `kind` discriminator would be a second source of truth the server would have to distrust anyway.
+ * Hence the wide bounds — 6 for a TOTP code, up to 64 for a base64url recovery code.
+ */
+export const mfaCodeBodySchema = {
+  type: "object",
+  required: ["code"],
+  additionalProperties: false,
+  properties: {
+    code: { type: "string", minLength: 6, maxLength: 64 },
+  },
+} as const;
+
+/**
+ * POST /v1/auth/mfa/verify body — the challenge issued by the login, plus the factor.
+ *
+ * `challenge` is permissive on length on purpose: it is `base64url(payload).base64url(mac)`, ~200
+ * characters today, and a payload change must not turn into a 400 nobody can diagnose. 1024 is a
+ * sanity bound, not a validation.
+ */
+export const mfaVerifyBodySchema = {
+  type: "object",
+  required: ["challenge", "code"],
+  additionalProperties: false,
+  properties: {
+    challenge: { type: "string", minLength: 1, maxLength: 1024 },
+    code: { type: "string", minLength: 6, maxLength: 64 },
+  },
+} as const;

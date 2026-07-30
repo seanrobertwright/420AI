@@ -8,11 +8,13 @@ import {
   MemberError,
   PasswordResetError,
   SsoIdentityError,
+  MfaError,
 } from "@420ai/db";
 import { createMetrics, registerMetricsHook } from "./metrics.js";
 import authPlugin from "./plugins/auth.js";
 import authRoutes from "./routes/auth.js";
 import ssoRoutes from "./routes/sso.js";
+import mfaRoutes from "./routes/mfa.js";
 import healthRoutes from "./routes/health.js";
 import metricsRoutes from "./routes/metrics.js";
 import pairingCodeRoutes from "./routes/pairing-codes.js";
@@ -209,6 +211,7 @@ export function buildApp(opts: BuildAppOptions): FastifyInstance {
   app.register(authPlugin);
   app.register(authRoutes);
   app.register(ssoRoutes);
+  app.register(mfaRoutes);
   app.register(healthRoutes);
   app.register(pairingCodeRoutes);
   app.register(memberRoutes);
@@ -254,6 +257,18 @@ export function buildApp(opts: BuildAppOptions): FastifyInstance {
     // typed `reason` rides along for the dashboard's copy.
     if (err instanceof SsoIdentityError) {
       return reply.code(409).send({ error: err.message, reason: err.reason });
+    }
+    // M15 15.8 — a second-factor mutation refused by the repository. `already_enrolled` and
+    // `not_enrolled` are CONFLICTS with state that already exists (409), on the same terms as the
+    // SSO branch above. `locked` is the one reason that is NOT a conflict: it is a rate limit, so it
+    // is a 429 — and it is deliberately distinguishable, because a lockout the user cannot see is a
+    // support ticket while an attacker learning the lockout works is not a leak. (The MFA routes
+    // reply directly for the outcomes they hold a `lockedUntil` for, so they can add `Retry-After`;
+    // this branch is the fallback for a `MfaError` thrown from deeper down.)
+    if (err instanceof MfaError) {
+      return reply
+        .code(err.reason === "locked" ? 429 : 409)
+        .send({ error: err.message, reason: err.reason });
     }
     // Provider failures (non-200/timeout/parse → 502; not-configured → 503). Placed
     // BEFORE the status>=500 masking branch, which would otherwise hide the message.

@@ -891,3 +891,118 @@ are unaffected; an SSO-created user (`password_hash IS NULL`) must recover throu
 No `users`, `memberships` or `sessions` row is touched, and links must be re-established after
 rolling forward again. The same SMTP caveat as above applies: password reset is only a recovery
 path if a mail transport is configured.
+
+## 15.8 — Two-factor authentication (TOTP)
+
+MFA is a **per-user opt-in**. There is no deployment-wide or per-org "require MFA" setting and no new
+environment variable (D-15.8-2) — an org-level policy is a _team_ control and lands with the other org
+settings in 15.10. State the consequence plainly: **an operator cannot yet force members to enrol.**
+
+Nothing needs to be configured to turn this on. It uses `node:crypto` (no new dependency), the
+existing `ARCHIVE_ENCRYPTION_KEY`, and the existing `SESSION_SECRET`.
+
+### How a user enrols
+
+1. **Settings → Two-factor authentication → Enable.** The card shows a base32 secret grouped in
+   fours plus an `otpauth://` URI. There is **no QR code** in 15.8 (D-15.8-14) — every mainstream
+   authenticator accepts manual entry; a QR needs either a new dashboard dependency or a hand-rolled
+   encoder, and it lands with the account surfaces in 15.10.
+2. **Enter the code the app shows and press Confirm.** Until this succeeds the credential gates
+   nothing (`confirmed_at IS NULL`), so an abandoned enrolment — wrong clock, wrong app, closed tab —
+   never locks anyone out of their own account.
+3. **Save the ten recovery codes.** They are shown **once**. They are stored as SHA-256, so there is
+   no endpoint that can display them again; regenerating replaces the whole set.
+
+Confirming revokes every **other** live session and spares the tab it was done in (OWASP Session
+Management: renew after a privilege-level change). Disabling does the same.
+
+### What changes at sign-in
+
+Every path that mints a session for an enrolled user — **password login and the SSO callback alike**
+(D-15.8-5) — stops one step short and returns a short-lived signed **challenge** instead of a session
+token. The dashboard hands off to `/login/mfa`; the session exists only after
+`POST /v1/auth/mfa/verify` accepts a TOTP code or a recovery code. A login that returns a challenge
+writes **no** `sessions` row at all.
+
+Three properties worth knowing before a support ticket arrives:
+
+- **A code cannot be used twice** (RFC 6238 §5.2). The accepted step is recorded and the comparison
+  is monotonic. One consequence is visible: if a user confirms enrolment and then signs out and back
+  in **within the same 30-second window**, the code their app is still showing is the one already
+  spent, and it is refused. Waiting for the next code resolves it. This is the RFC's rule, not a bug.
+- **Ten consecutive failures lock the credential for 15 minutes** (RFC 4226 §7.3). During the lock a
+  _correct_ code is also refused, and the response is a `429` with `Retry-After` — deliberately
+  distinguishable, because a lockout the user cannot see is a support ticket. A success resets both
+  the counter and the lock.
+- **A challenge dies the moment the password changes** (D-15.8-4). The challenge carries a
+  fingerprint of the credential it was issued against, re-checked under the same row lock the login
+  takes, so a reset mid-flow voids any challenge in flight. The answer is a **generic 401** — the
+  same wording a wrong code gets — so it cannot be used to probe whether an account is live.
+
+The `ADMIN_TOKEN` service credential is **never** MFA-gated (D-15.8-15): it has no user session, and
+D-M15-7 retires it in 15.9.
+
+### Losing the second factor
+
+In order of preference:
+
+1. **A recovery code.** Enter it in place of the six digits at `/login/mfa` (the "use a recovery code
+   instead" link only relaxes the input mask — the server accepts either credential on the same
+   field). Each works once; Settings shows how many remain.
+2. **Operator break-glass — direct database access.** There is **no admin "reset MFA for user X"
+   endpoint in 15.8**, and that absence is deliberate: it would be a privilege-escalation surface (an
+   `admin` stripping an `owner`'s second factor), and 15.5's ladder lesson says such a route needs a
+   full rank comparison plus an audit record. Both land in 15.10. Until then, with `DATABASE_URL`
+   (consistent with D-M15-7's "operator break-glass is direct database access, never an HTTP
+   god-token"):
+
+   ```sql
+   -- Verify who you are about to unlock, FIRST.
+   select u.email, t.confirmed_at, t.locked_until
+     from totp_credentials t join users u on u.id = t.user_id
+    where u.email = 'person@example.com';
+
+   -- Remove the second factor. The recovery codes must go too, or a later re-enrolment would
+   -- silently inherit the old ones.
+   begin;
+   delete from mfa_recovery_codes where user_id = (select id from users where email = 'person@example.com');
+   delete from totp_credentials  where user_id = (select id from users where email = 'person@example.com');
+   commit;
+   ```
+
+   To clear only a **lockout** without disabling MFA:
+
+   ```sql
+   update totp_credentials set failed_attempts = 0, locked_until = null
+    where user_id = (select id from users where email = 'person@example.com');
+   ```
+
+### Key rotation covers the TOTP secret
+
+The secret is **encrypted at rest**, not hashed (D-15.8-6) — verification needs the plaintext to
+recompute the code, so it is a symmetric bearer credential and a leaked backup would defeat MFA for
+every enrolled user silently. It is the fourth encrypted column trio in the schema, and `reencryptAll`
+covers it: `npm run keys:rotate` reports a `totpCredentials` count alongside the others. **Retiring an
+old key without running the rotation would break sign-in for every enrolled user at once**, because
+`decryptField` would throw on their stored secret.
+
+### Troubleshooting
+
+| Symptom                                                                       | Cause / fix                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Codes are always rejected during enrolment                                    | The device clock is off by more than 30 s. The window is ±1 step by design (RFC 6238 §6). Enable automatic time on the phone.                                                                                                                                                                                                                                                                                                                          |
+| A correct code is refused right after enrolling                               | The confirming code's step is spent (RFC 6238 §5.2). Wait for the next code.                                                                                                                                                                                                                                                                                                                                                                           |
+| `429` with `retryAfter`                                                       | Ten consecutive failures locked the credential for 15 minutes. Use a recovery code after the lock expires, or clear it with the SQL above.                                                                                                                                                                                                                                                                                                             |
+| `429 Rate limit exceeded, retry in 15 minutes` — **without** a `reason` field | This is the **per-IP** login rate limit (12.4c), not the per-user MFA lockout, and on a deployment with `RATE_LIMIT_*` configured it fires FIRST — measured during 15.8's walkthrough, where the IP limit cut a brute-force burst off at 6 attempts while `totp_credentials.failed_attempts` had reached 8. Both layers are working; they are just ordered. Tell them apart by the BODY: the MFA lockout answers `{"reason":"locked","retryAfter":n}`. |
+| The second step bounces back to `/login`                                      | `/login/mfa` is missing from the dashboard middleware's `PUBLIC` list — the match is exact equality, so `/login` does not cover it.                                                                                                                                                                                                                                                                                                                    |
+| Enrolment returns `409 already_enrolled`                                      | A confirmed credential already exists. Disable it first (which requires a live code) — silently rotating a working second factor from an unproven session would be a takeover primitive.                                                                                                                                                                                                                                                               |
+| Sign-in never asks for a code                                                 | The enrolment was never confirmed (`confirmed_at IS NULL`), so it gates nothing. Re-run Enable and complete step 2.                                                                                                                                                                                                                                                                                                                                    |
+| Every enrolled user fails to sign in after a key rotation                     | The old `ARCHIVE_ENCRYPTION_KEY` was retired without running `keys:rotate`. Restore the key to the keyring and rotate.                                                                                                                                                                                                                                                                                                                                 |
+
+### Rolling back migration 0020
+
+The down-migration **drops `totp_credentials` and `mfa_recovery_codes`**. That is not a lockout — every
+user's password and SSO link are untouched, and login reverts to minting a session directly — but it
+**silently downgrades every enrolled account to a single factor**, with no signal to the user that
+their second factor stopped being asked for. Rolling forward again does **not** restore the secrets:
+each user must re-enrol and save a new set of recovery codes.

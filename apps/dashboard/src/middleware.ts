@@ -11,7 +11,15 @@ import { verifySessionEdge, SESSION_COOKIE, sessionConfigError } from "@/lib/ses
  * `request.cookies.get()` is SYNC in middleware (distinct from the ASYNC `cookies()` from
  * next/headers used in Server Components / Route Handlers — don't mix them up).
  */
-const PUBLIC = ["/login"]; // page paths that never require a session
+/**
+ * Page paths that never require a session.
+ *
+ * THE MATCH IS EXACT EQUALITY (`pathname === p`, below), so `/login/mfa` is NOT covered by the
+ * `/login` entry and must be listed separately. It is the second half of a login, so by construction
+ * the visitor has no session yet — omitting it makes the second step redirect to
+ * `/login?next=/login/mfa` forever, which reads as "the password form is broken".
+ */
+const PUBLIC = ["/login", "/login/mfa"];
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
