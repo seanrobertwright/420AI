@@ -37,16 +37,24 @@ import { decryptField, encryptField } from "../crypto.js";
  */
 
 /**
- * The ONE exceptional condition in this repository. Everything else is an `undefined`/boolean a
- * route turns into a status code; these are different because the caller must be able to say WHY,
- * and "you already have a working authenticator" is not something a boolean conveys.
+ * The ONE exceptional condition in this repository, with exactly ONE reason. Everything else is an
+ * `undefined`/boolean a route turns into a status code; this is different because the caller must be
+ * able to say WHY, and "you already have a working authenticator" is not something a boolean conveys.
  *
- * Mirrors `SsoIdentityError`/`MemberError`. `app.ts` maps `locked` to 429 and the other two to 409.
+ * THE UNION IS DELIBERATELY NARROW. It carried `"not_enrolled" | "locked"` until the 15.8 review
+ * observed that neither is ever constructed anywhere in the repo, which also made `app.ts`'s 429 arm
+ * unreachable code carrying a comment describing behaviour the system could not produce — the exact
+ * defect CLAUDE.md's 15.5 lesson names, since the next reader trusts it instead of re-deriving it.
+ * Those two outcomes belong to the ROUTES and stay there: `routes/mfa.ts`'s `replyForFactor` holds
+ * the `lockedUntil` value, so only it can answer a lockout with a correct `Retry-After`. Reaching
+ * for a thrown error there would produce a second, subtly different lockout response.
+ *
+ * Mirrors `SsoIdentityError`/`MemberError`. `app.ts` maps it to 409.
  */
 export class MfaError extends Error {
   constructor(
     message: string,
-    readonly reason: "already_enrolled" | "not_enrolled" | "locked",
+    readonly reason: "already_enrolled",
   ) {
     super(message);
     this.name = "MfaError";

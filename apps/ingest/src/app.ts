@@ -258,17 +258,16 @@ export function buildApp(opts: BuildAppOptions): FastifyInstance {
     if (err instanceof SsoIdentityError) {
       return reply.code(409).send({ error: err.message, reason: err.reason });
     }
-    // M15 15.8 — a second-factor mutation refused by the repository. `already_enrolled` and
-    // `not_enrolled` are CONFLICTS with state that already exists (409), on the same terms as the
-    // SSO branch above. `locked` is the one reason that is NOT a conflict: it is a rate limit, so it
-    // is a 429 — and it is deliberately distinguishable, because a lockout the user cannot see is a
-    // support ticket while an attacker learning the lockout works is not a leak. (The MFA routes
-    // reply directly for the outcomes they hold a `lockedUntil` for, so they can add `Retry-After`;
-    // this branch is the fallback for a `MfaError` thrown from deeper down.)
+    // M15 15.8 — a second-factor mutation refused by the repository. Its one reason
+    // (`already_enrolled`) is a CONFLICT with state that already exists, on exactly the same terms as
+    // the SSO branch above, so this is a 409 with no other arm.
+    //
+    // NOTE what is deliberately NOT handled here: lockouts. `routes/mfa.ts` answers those itself
+    // (429 + `Retry-After`), because it holds the `lockedUntil` value and an error handler does not.
+    // An earlier version of this branch mapped a `locked` reason that nothing ever constructed —
+    // unreachable code whose comment described behaviour the system could not produce.
     if (err instanceof MfaError) {
-      return reply
-        .code(err.reason === "locked" ? 429 : 409)
-        .send({ error: err.message, reason: err.reason });
+      return reply.code(409).send({ error: err.message, reason: err.reason });
     }
     // Provider failures (non-200/timeout/parse → 502; not-configured → 503). Placed
     // BEFORE the status>=500 masking branch, which would otherwise hide the message.

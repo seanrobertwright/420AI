@@ -111,6 +111,9 @@ export {
 export {
   createSession,
   findLiveSession,
+  // M15 15.8: the age of the CURRENT session, for the one re-auth gate that cannot ask for a
+  // password (an SSO-only account enrolling MFA).
+  findLiveSessionCreatedAt,
   listSessions,
   revokeAllSessions,
   revokeSession,

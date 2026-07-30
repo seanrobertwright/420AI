@@ -22,6 +22,12 @@ interface MfaStatus {
   enabled: boolean;
   confirmedAt: string | null;
   recoveryCodesRemaining: number;
+  /**
+   * D-15.8-16 — whether `enroll` will ask for the current password. False for an SSO-only account,
+   * which has none and re-proves with session recency instead. Reported by the server rather than
+   * guessed here, because the branch depends on a `users` row the browser cannot see.
+   */
+  passwordRequiredToEnrol: boolean;
 }
 
 /** Group a base32 secret in fours — a human is about to retype it into a phone. */
@@ -43,6 +49,12 @@ export function MfaCard() {
    */
   const [codes, setCodes] = useState<string[] | null>(null);
   const [code, setCode] = useState("");
+  /**
+   * D-15.8-16 re-authentication. Held only for the duration of the enrol request and cleared
+   * immediately afterwards, success or failure — a password lingering in island state is one stray
+   * re-render away from being somewhere it should not be.
+   */
+  const [currentPassword, setCurrentPassword] = useState("");
 
   const load = useCallback(async (): Promise<MfaStatus | null> => {
     return fetch("/api/auth/mfa")
@@ -74,12 +86,25 @@ export function MfaCard() {
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch("/api/auth/mfa/enroll", { method: "POST" });
+      const res = await fetch("/api/auth/mfa/enroll", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        // Omitted entirely for an SSO-only account — the server re-proves with session recency.
+        body: JSON.stringify(
+          status?.passwordRequiredToEnrol ? { currentPassword: currentPassword } : {},
+        ),
+      });
       if (!res.ok) {
+        const reason = await reasonOf(res);
         setError(
-          (await reasonOf(res)) === "already_enrolled"
+          reason === "already_enrolled"
             ? "Two-factor is already enabled. Disable it first to enrol a new device."
-            : "Could not start enrolment. Please try again.",
+            : reason === "password_required"
+              ? "That password is not correct."
+              : reason === "reauth_required"
+                ? // The only remedy for an SSO-only account, so the copy has to name it.
+                  "For your security, sign out and sign in again before enabling two-factor."
+                : "Could not start enrolment. Please try again.",
         );
         return;
       }
@@ -88,6 +113,8 @@ export function MfaCard() {
     } catch {
       setError("Archive unreachable.");
     } finally {
+      // Cleared on EVERY path, including success — see the state declaration.
+      setCurrentPassword("");
       setBusy(false);
     }
   }
@@ -186,7 +213,7 @@ export function MfaCard() {
                 : "Require a code from an authenticator app when you sign in."}
             </p>
           </div>
-          {!status.enabled && !pending ? (
+          {!status.enabled && !pending && !status.passwordRequiredToEnrol ? (
             <button
               type="button"
               onClick={() => void beginEnroll()}
@@ -200,6 +227,37 @@ export function MfaCard() {
             </button>
           ) : null}
         </div>
+
+        {/* D-15.8-16 — arming a second factor re-proves the password, exactly as changing the
+            password does. Without it a stolen session cookie could enrol an attacker's authenticator
+            and lock the real owner out permanently, since a password reset does not clear MFA. */}
+        {!status.enabled && !pending && status.passwordRequiredToEnrol ? (
+          <div className="border-border space-y-2 rounded-md border p-3">
+            <p className="text-muted-foreground text-xs">
+              Confirm your password to enable two-factor authentication.
+            </p>
+            <input
+              type="password"
+              value={currentPassword}
+              onChange={(e) => setCurrentPassword(e.target.value)}
+              placeholder="Current password"
+              autoComplete="current-password"
+              className="border-border bg-background w-full rounded-md border px-3 py-1.5 text-sm"
+              aria-label="Current password"
+            />
+            <button
+              type="button"
+              onClick={() => void beginEnroll()}
+              disabled={busy || currentPassword.length === 0}
+              className={cn(
+                "rounded-md border px-3 py-1.5 text-xs font-medium transition-colors",
+                "border-border hover:bg-muted disabled:opacity-50",
+              )}
+            >
+              {busy ? "Starting…" : "Enable"}
+            </button>
+          </div>
+        ) : null}
 
         {pending ? (
           <div className="border-border space-y-3 rounded-md border p-3">

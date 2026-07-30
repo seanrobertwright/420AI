@@ -649,7 +649,17 @@ enforced`, the sibling of `skipped ≠ passed`. Closes the Spike-6 hole: a cross
         held `FOR UPDATE` prelude to separate the two implementations deterministically. And the ±1
         skew window plus a monotonic `last_step` means there is exactly ONE unspent step per 30-second
         window, which is correct per the RFC and visible to users for ~30 s after enrolling —
-        documented in the operations guide rather than filed as a bug. **Deferred to 15.10, stated as
+        documented in the operations guide rather than filed as a bug. The code review then found the
+        slice's own asymmetry, fixed before merge (**D-15.8-16**): `enroll` was session-gated and
+        nothing more, while `disable` demanded a live code on the reasoning that "a stolen session
+        cookie must not be able to switch the second factor OFF" — an argument that applies verbatim
+        to switching it ON and had simply not been made. Reproduced end to end: an attacker holding
+        only a cookie enrolled, `enroll/confirm`'s revoke-all signed the owner out, and **a full
+        password reset did not recover the account** (nothing on the reset path clears
+        `totp_credentials`), leaving operator DB access as the only way back. Enrolment now re-proves
+        the current password, or — for an SSO-only account, which has none — requires a session under
+        15 minutes old; the fix is deliberately NOT "make password reset clear MFA", which would let
+        mailbox access strip the factor and defeat the slice. **Deferred to 15.10, stated as
         deferred:** QR rendering (D-15.8-14) and any org-level "require MFA" policy (D-15.8-2); there
         is deliberately **no** admin "reset MFA for user X" endpoint, since it needs 15.5's full rank
         ceiling-and-floor plus an audit record — break-glass is direct DB access (D-M15-7)

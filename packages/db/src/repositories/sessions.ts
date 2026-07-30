@@ -151,6 +151,41 @@ export async function revokeAllSessions(
   return revoked.length;
 }
 
+/**
+ * M15 15.8 — when was this session established? Used by the ONE re-authentication gate that cannot
+ * ask for a password: `POST /v1/auth/mfa/enroll` for an SSO-only account (`password_hash IS NULL`).
+ *
+ * A SEPARATE FUNCTION rather than a column added to `findLiveSession`, deliberately. `findLiveSession`
+ * is THE hot path — one probe on every authenticated request — and this is needed on exactly one rare
+ * route. Widening the hot path's return type to serve a cold caller is how a hot path accumulates
+ * fields nobody can later prove are unused.
+ *
+ * `userId` is the second parameter and is NOT optional, for the reason the whole file states: without
+ * it a caller could age-check a session id belonging to somebody else. Returns `undefined` when the
+ * session is unknown, revoked, expired, or not this user's — collapsed, exactly as `findLiveSession`
+ * collapses them, because the caller answers the same 401 for all four.
+ */
+export async function findLiveSessionCreatedAt(
+  db: DbClient,
+  userId: string,
+  sessionId: string,
+): Promise<Date | undefined> {
+  const [row] = await db
+    .select({ createdAt: sessions.createdAt })
+    .from(sessions)
+    .where(
+      and(
+        eq(sessions.id, sessionId),
+        eq(sessions.userId, userId),
+        isNull(sessions.revokedAt),
+        // App clock, matching `findLiveSession` — see the comment there.
+        gt(sessions.expiresAt, new Date()),
+      ),
+    )
+    .limit(1);
+  return row?.createdAt;
+}
+
 /** List a user's LIVE sessions, newest first. Explicit columns; rows reach the wire. */
 export async function listSessions(db: DbClient, userId: string): Promise<SessionRow[]> {
   return db

@@ -1,10 +1,11 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
-import type { DbClient } from "@420ai/db";
+import type { Tx } from "@420ai/db";
 import {
   clearMfa,
   confirmTotp,
   countUnusedRecoveryCodes,
   findCredentialById,
+  findLiveSessionCreatedAt,
   findTotpCredential,
   generateToken,
   hashToken,
@@ -15,14 +16,19 @@ import {
   revokeAllSessions,
   upsertUnconfirmedTotp,
 } from "@420ai/db";
-import { mfaCodeBodySchema, mfaVerifyBodySchema } from "../schemas.js";
+import { mfaCodeBodySchema, mfaEnrollBodySchema, mfaVerifyBodySchema } from "../schemas.js";
 import { base32Encode, generateTotpSecret, otpauthUri, verifyTotp } from "../mfa/totp.js";
 import { credentialVersion, verifyChallenge } from "../mfa/challenge.js";
+import { verifyPassword } from "../password.js";
 import { mintSession } from "./auth.js";
 import { authorized, resolvePrincipal } from "../auth.js";
 
 interface CodeBody {
   code: string;
+}
+interface EnrollBody {
+  /** Absent for an SSO-only account, which has no password to re-present (D-15.8-16). */
+  currentPassword?: string;
 }
 interface VerifyBody {
   challenge: string;
@@ -44,6 +50,16 @@ interface VerifyBody {
  */
 export const MFA_MAX_ATTEMPTS = 10;
 export const MFA_LOCK_MS = 15 * 60_000;
+
+/**
+ * D-15.8-16 — how recent the CURRENT session must be for an SSO-only account to arm a second factor.
+ *
+ * Fifteen minutes: short enough that a stolen cookie is usually already outside it, long enough to
+ * cover "I just signed in and went to Settings". It applies ONLY to accounts with no password, since
+ * every other account re-proves with the password itself. Exported so the int suite drives the same
+ * number the route does.
+ */
+export const MFA_REAUTH_MAX_SESSION_AGE_MS = 15 * 60_000;
 
 /** Ten codes, the OWASP MFA cheat-sheet default: enough to survive a lost phone plus mistakes. */
 const RECOVERY_CODE_COUNT = 10;
@@ -67,7 +83,11 @@ type FactorOutcome =
  * (`POST /v1/auth/mfa/verify`) and the two state-changing paths (`disable`, `recovery-codes`) call
  * it, so "a code is single-use and a lockout applies" cannot be true on one and false on another.
  *
- * MUST be called with a `Tx`. Everything it does is a write — the replay stamp, the redemption
+ * TYPED `Tx`, NOT `DbClient`, so the requirement below is unrepresentable rather than merely
+ * documented (the 15.8 review found it stated in prose and permitted by the signature — the same
+ * gap `findUserIdBySsoIdentity` closes by refusing to accept an email at all).
+ *
+ * Everything it does is a write — the replay stamp, the redemption
  * stamp, the failure increment — and each one has to commit or roll back with whatever the caller
  * decided on the strength of it. In particular the FAILURE INCREMENT runs inside the caller's
  * transaction on purpose: a route that rolled back after a failed attempt would silently forget it,
@@ -79,11 +99,7 @@ type FactorOutcome =
  * could not collide — `redeemRecoveryCode` hashes the FULL presented string — but the ordering makes
  * that argument unnecessary rather than merely true).
  */
-async function consumeSecondFactor(
-  tx: DbClient,
-  userId: string,
-  code: string,
-): Promise<FactorOutcome> {
+async function consumeSecondFactor(tx: Tx, userId: string, code: string): Promise<FactorOutcome> {
   const totp = await findTotpCredential(tx, userId);
   // An UNCONFIRMED credential gates nothing (D-15.8-10) and is not a second factor.
   if (!totp?.confirmedAt) return { kind: "not_enrolled" };
@@ -171,12 +187,17 @@ export default async function mfaRoutes(app: FastifyInstance): Promise<void> {
     }
     const totp = await findTotpCredential(app.db, principal.userId);
     const confirmedAt = totp?.confirmedAt ?? null;
+    const cred = await findCredentialById(app.db, principal.userId);
     return reply.code(200).send({
       enabled: confirmedAt !== null,
       confirmedAt: confirmedAt?.toISOString() ?? null,
       recoveryCodesRemaining: confirmedAt
         ? await countUnusedRecoveryCodes(app.db, principal.userId)
         : 0,
+      // D-15.8-16 — WHICH re-auth branch `enroll` will take, so the card asks for a password only
+      // when one exists. It reports the CALLER's own account shape on a session-gated route, so it
+      // discloses nothing they cannot already see from `GET /v1/auth/sso/identities`.
+      passwordRequiredToEnrol: Boolean(cred?.passwordHash),
     });
   });
 
@@ -184,35 +205,98 @@ export default async function mfaRoutes(app: FastifyInstance): Promise<void> {
    * POST /v1/auth/mfa/enroll — phase ONE of a two-phase enrolment (D-15.8-10): mint a secret, store
    * it UNCONFIRMED, and hand it to the caller for manual entry.
    *
-   * Nothing is gated until `enroll/confirm` proves the authenticator agrees, so a user with a wrong
-   * clock, the wrong app, or a closed tab is never locked out of their own account. Re-running this
-   * replaces an unconfirmed secret; run against a CONFIRMED one it throws `already_enrolled` → 409,
-   * because silently rotating a working second factor from a session that has re-proved nothing is a
-   * takeover primitive.
+   * IT REQUIRES RE-AUTHENTICATION (D-15.8-16), and that is a security property, not friction. The
+   * first version of this route was session-gated and nothing more, which made a stolen session
+   * cookie into PERMANENT account takeover — reproduced end to end during the 15.8 code review:
    *
-   * THE SECRET IS RETURNED IN THE RESPONSE BODY, and that is correct rather than a leak: this is a
-   * session-gated route and the shared secret is exactly what the caller must transcribe into their
-   * authenticator. It is stored encrypted (D-15.8-6) and is never readable again through the API —
-   * `GET /v1/auth/mfa` reports status only.
+   *   1. the attacker enrols their own authenticator with nothing but the cookie;
+   *   2. `enroll/confirm`'s `revokeAllSessions` (D-15.8-11) signs the real owner OUT;
+   *   3. the owner's password still works but now yields only a challenge they cannot answer;
+   *   4. A FULL PASSWORD RESET DOES NOT RECOVER THE ACCOUNT — nothing on the reset path clears
+   *      `totp_credentials`, so proven control of the mailbox is no longer enough to get back in;
+   *   5. the attacker keeps access with the factor they planted.
+   *
+   * Step 4 is what made it critical rather than untidy: it breaks the documented recovery story for a
+   * compromised account, leaving operator database access as the only way back — and on a self-hosted
+   * deployment the person locked out is often the only operator. Note the fix is NOT "make password
+   * reset clear MFA": that would let anyone with mailbox access strip the second factor and defeat
+   * the entire slice.
+   *
+   * This is the same asymmetry D-15.8-12 already closed for `disable` and `recovery-codes`, whose
+   * stated reasoning — "an attacker holding a stolen session cookie must not be able to switch the
+   * second factor off" — applies verbatim to switching it ON, and simply had not been made.
+   *
+   * TWO BRANCHES, because an SSO-only account has no password to re-present:
+   *   - `password_hash` set → the current password is REQUIRED, exactly as `POST /v1/auth/password`
+   *     requires it, and a wrong one is the same generic 401 login gives.
+   *   - `password_hash IS NULL` (an SSO-created user) → the CURRENT SESSION must be recent
+   *     (`MFA_REAUTH_MAX_SESSION_AGE_MS`). Weaker than a password, and deliberately so: the
+   *     alternative is either blocking the users who most need MFA, or bolting a second OAuth round
+   *     trip onto this slice. It still bounds the attack to a cookie stolen within the window, and
+   *     the remedy when it refuses is discoverable — sign out and back in — which the error says.
+   *
+   * `enroll/confirm` needs NO gate of its own and that is not an omission: it can only confirm a
+   * pending secret, and a pending secret can only exist because this route created one.
+   *
+   * An `ADMIN_TOKEN` caller has no session at all, so it falls to the password branch (or is refused
+   * for a password-less bootstrap admin). That does not contradict D-15.8-15 — the service token is
+   * never MFA-GATED at authentication; this is about arming a factor on a human's account.
+   *
+   * THE SECRET IS RETURNED IN THE RESPONSE BODY, and that is correct rather than a leak: the shared
+   * secret is exactly what the caller must transcribe into their authenticator. It is stored
+   * encrypted (D-15.8-6) and is never readable again — `GET /v1/auth/mfa` reports status only.
    */
-  app.post("/v1/auth/mfa/enroll", async (request, reply) => {
-    const principal = await resolvePrincipal(app, request);
-    if (!principal) {
-      return reply.code(401).send({ error: "admin authorization required" });
-    }
-    if (!authorized(principal, "viewer")) {
-      return reply.code(403).send({ error: "insufficient role" });
-    }
-    const secret = generateTotpSecret();
-    // Throws `MfaError("already_enrolled")` → 409 via app.ts.
-    await upsertUnconfirmedTotp(app.db, principal.userId, secret);
-    return reply.code(200).send({
-      // Unpadded, matching the URI — `base32Decode` accepts either, and a trailing `=` in a field a
-      // human retypes is one more thing to get wrong.
-      secret: base32Encode(secret).replace(/=+$/, ""),
-      otpauthUri: otpauthUri({ issuer: TOTP_ISSUER, account: principal.email, secret }),
-    });
-  });
+  app.post<{ Body: EnrollBody }>(
+    "/v1/auth/mfa/enroll",
+    { schema: { body: mfaEnrollBodySchema } },
+    async (request, reply) => {
+      const principal = await resolvePrincipal(app, request);
+      if (!principal) {
+        return reply.code(401).send({ error: "admin authorization required" });
+      }
+      if (!authorized(principal, "viewer")) {
+        return reply.code(403).send({ error: "insufficient role" });
+      }
+      const cred = await findCredentialById(app.db, principal.userId);
+      if (!cred) {
+        return reply.code(401).send({ error: "admin authorization required" });
+      }
+      if (cred.passwordHash) {
+        // 401, not 403: re-proving the current password is AUTHENTICATION, and a wrong one gets the
+        // same answer login gives (`routes/auth.ts:437`).
+        if (
+          !request.body?.currentPassword ||
+          !verifyPassword(request.body.currentPassword, cred.passwordHash)
+        ) {
+          return reply
+            .code(401)
+            .send({ error: "invalid email or password", reason: "password_required" });
+        }
+      } else {
+        // SSO-only. The session's own age is the only factor available to re-prove.
+        const since = request.sessionId
+          ? await findLiveSessionCreatedAt(app.db, principal.userId, request.sessionId)
+          : undefined;
+        if (!since || Date.now() - since.getTime() > MFA_REAUTH_MAX_SESSION_AGE_MS) {
+          // The message names the remedy, because there is no other way out for this user.
+          return reply.code(401).send({
+            error: "sign in again before enabling two-factor authentication",
+            reason: "reauth_required",
+          });
+        }
+      }
+
+      const secret = generateTotpSecret();
+      // Throws `MfaError("already_enrolled")` → 409 via app.ts.
+      await upsertUnconfirmedTotp(app.db, principal.userId, secret);
+      return reply.code(200).send({
+        // Unpadded, matching the URI — `base32Decode` accepts either, and a trailing `=` in a field a
+        // human retypes is one more thing to get wrong.
+        secret: base32Encode(secret).replace(/=+$/, ""),
+        otpauthUri: otpauthUri({ issuer: TOTP_ISSUER, account: principal.email, secret }),
+      });
+    },
+  );
 
   /**
    * POST /v1/auth/mfa/enroll/confirm — phase TWO: prove the authenticator agrees, then arm the
@@ -376,7 +460,14 @@ export default async function mfaRoutes(app: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const payload = verifyChallenge(request.body.challenge, app.sessionSecret);
       if (!payload) {
-        return reply.code(401).send({ error: "invalid or expired challenge" });
+        // `reason: "expired"` HERE AND NOWHERE ELSE. GOTCHA-1's generic-401 rule is about the
+        // CREDENTIAL-VERSION mismatch below, where a distinguishable answer would tell an attacker
+        // their stolen challenge is stale AND that the account is live. It does not extend to this
+        // branch: a caller presenting a well-formed challenge already holds it, so naming the expiry
+        // discloses nothing — while withholding it made the dashboard tell a user whose five-minute
+        // window had lapsed that their CODE was wrong, so they retyped correct codes indefinitely.
+        // `mfa.int.test.ts` pins that the cv-mismatch 401 still carries NO reason.
+        return reply.code(401).send({ error: "invalid or expired challenge", reason: "expired" });
       }
       const outcome = await app.db.transaction(async (tx) => {
         // THE SAME LOCK THE 15.6 LOGIN TAKES — see the block comment above and GOTCHA-1.

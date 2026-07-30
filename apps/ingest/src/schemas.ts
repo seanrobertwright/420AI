@@ -579,6 +579,22 @@ export const mfaCodeBodySchema = {
 } as const;
 
 /**
+ * POST /v1/auth/mfa/enroll body — the RE-AUTHENTICATION for arming a second factor (D-15.8-16).
+ *
+ * `currentPassword` is OPTIONAL in the schema and REQUIRED by the route for any account that has a
+ * password. It cannot be required here, because an SSO-only account (`password_hash IS NULL`) has
+ * none to send and re-proves with session recency instead — a distinction ajv cannot see, since it
+ * depends on a database row. The route makes it, and answers 401 either way.
+ */
+export const mfaEnrollBodySchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    currentPassword: { type: "string", minLength: 1, maxLength: 256 },
+  },
+} as const;
+
+/**
  * POST /v1/auth/mfa/verify body — the challenge issued by the login, plus the factor.
  *
  * `challenge` is permissive on length on purpose: it is `base64url(payload).base64url(mac)`, ~200

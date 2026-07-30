@@ -5,7 +5,7 @@ import { createDb, ensurePersonalOrg, setUserPassword } from "@420ai/db";
 import { buildApp } from "./app.js";
 import { hashPassword } from "./password.js";
 import { base32Decode, totpCode, TOTP_PERIOD_SECONDS } from "./mfa/totp.js";
-import { MFA_MAX_ATTEMPTS } from "./routes/mfa.js";
+import { MFA_MAX_ATTEMPTS, MFA_REAUTH_MAX_SESSION_AGE_MS } from "./routes/mfa.js";
 import type { Mailer } from "./delivery/mailer.js";
 import {
   AnalysisProviderError,
@@ -165,14 +165,13 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.8 MFA (two-role, HTTP)", () => {
     return body.challenge!;
   }
 
-  /** Phase one: mint an unconfirmed secret and return it decoded. */
-  async function enrol(token: string): Promise<Buffer> {
-    // `asUser`, NOT `json`: this POST has no body, and Fastify rejects an empty body when
-    // `content-type: application/json` is set. (The dashboard proxy likewise sends no content-type.)
+  /** Phase one: mint an unconfirmed secret and return it decoded. Re-auths per D-15.8-16. */
+  async function enrol(token: string, password: string = PASSWORD): Promise<Buffer> {
     const res = await app.inject({
       method: "POST",
       url: "/v1/auth/mfa/enroll",
-      headers: asUser(token),
+      headers: json(token),
+      payload: { currentPassword: password },
     });
     expect(res.statusCode, `enroll: ${res.body}`).toBe(200);
     const { secret, otpauthUri } = res.json() as { secret: string; otpauthUri: string };
@@ -240,6 +239,27 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.8 MFA (two-role, HTTP)", () => {
     return r.rows[0]?.c ?? null;
   }
 
+  /**
+   * A session token for a user who may have NO password, so `login()` cannot be used. Goes through
+   * the real SSO callback, which is how such a user genuinely obtains one.
+   */
+  async function mintSessionFor(userId: string, email: string): Promise<string> {
+    google.profile = { subject: `g-${userId}`, email, emailVerified: true };
+    await owner.db.execute(
+      sql`insert into sso_identities (user_id, provider, subject, email)
+          values (${userId}, 'google', ${`g-${userId}`}, ${email})
+          on conflict (provider, subject) do nothing`,
+    );
+    const cb = await app.inject({
+      method: "POST",
+      url: "/v1/auth/sso/google/callback",
+      headers: { "content-type": "application/json" },
+      payload: { code: "stub" },
+    });
+    expect(cb.statusCode, `sso login for ${email}: ${cb.body}`).toBe(200);
+    return (cb.json() as { token: string }).token;
+  }
+
   /** Revoke every session out of band, so a later login's session count starts from zero. */
   async function clearSessions(userId: string): Promise<void> {
     await owner.db.execute(
@@ -282,7 +302,8 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.8 MFA (two-role, HTTP)", () => {
     const res = await app.inject({
       method: "POST",
       url: "/v1/auth/mfa/enroll",
-      headers: asUser(token),
+      headers: json(token),
+      payload: { currentPassword: PASSWORD },
     });
     expect(res.statusCode).toBe(409);
     expect((res.json() as { reason: string }).reason).toBe("already_enrolled");
@@ -432,8 +453,10 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.8 MFA (two-role, HTTP)", () => {
     // changed is the password hash. So a 401 here can only be the `cv` comparison.
     const res = await verify(challenge, codeAt(secret));
     expect(res.statusCode).toBe(401);
-    // GENERIC. A distinguishable "your password changed" would tell an attacker their stolen
-    // challenge is stale AND that the account is live.
+    // GENERIC, AND THIS ASSERTION GUARDS A DISTINCTION (D-15.8-16 / review finding 3). A
+    // distinguishable "your password changed" would tell an attacker their stolen challenge is stale
+    // AND that the account is live. The EXPIRED-challenge branch does carry `reason: "expired"` — see
+    // the test below — so this one is pinned reason-less to stop that change being over-applied here.
     expect((res.json() as { error: string; reason?: string }).reason).toBeUndefined();
     // A fresh login under the NEW password issues a challenge that works — the binding refuses stale
     // challenges, it does not break the account.
@@ -626,6 +649,100 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.8 MFA (two-role, HTTP)", () => {
     expect(await confirmedAt(userA)).not.toBeNull();
   });
 
+  // 16 ── RE-AUTHENTICATION AT ENROLMENT (D-15.8-16). The 15.8 code review's critical finding.
+  describe("enrolment requires re-authentication", () => {
+    it("refuses with NO password, and with a WRONG one", async () => {
+      const token = await login("a@example.com");
+      for (const payload of [{}, { currentPassword: "not-the-password" }]) {
+        const res = await app.inject({
+          method: "POST",
+          url: "/v1/auth/mfa/enroll",
+          headers: json(token),
+          payload,
+        });
+        expect(res.statusCode, JSON.stringify(payload)).toBe(401);
+        expect((res.json() as { reason: string }).reason).toBe("password_required");
+      }
+      // NOTHING was written — a refused enrolment must not leave a pending secret behind, or a
+      // second attempt would inherit one the caller never proved they were entitled to.
+      const rows = await owner.db.execute<{ n: number }>(
+        sql`select count(*)::int as n from totp_credentials where user_id = ${userA}`,
+      );
+      expect(rows.rows[0]!.n).toBe(0);
+    });
+
+    it("THE HIJACK CHAIN IS CLOSED: a stolen session alone can no longer arm a second factor", async () => {
+      // This is the exact sequence the code review reproduced end to end. Every step of it passed
+      // before D-15.8-16, ending with the rightful owner permanently locked out of their account.
+      const victimSession = await login("a@example.com");
+      const attackerSession = await login("a@example.com"); // the stolen cookie
+
+      const hijack = await app.inject({
+        method: "POST",
+        url: "/v1/auth/mfa/enroll",
+        headers: json(attackerSession),
+        payload: {}, // an attacker with only a cookie has no password to send
+      });
+      expect(hijack.statusCode, "a session alone must NOT arm a second factor").toBe(401);
+
+      // The victim is still signed in — the attacker could not trigger the enrol-confirm revocation.
+      const me = await app.inject({
+        method: "GET",
+        url: "/v1/auth/me",
+        headers: asUser(victimSession),
+      });
+      expect(me.statusCode).toBe(200);
+      // …and their password login still mints a session rather than an unanswerable challenge.
+      const relogin = await loginRaw("a@example.com");
+      expect((relogin.json() as { token?: string }).token).toBeDefined();
+      expect((relogin.json() as { mfaRequired?: boolean }).mfaRequired).toBeUndefined();
+    });
+
+    it("an SSO-only account (no password) enrols on a RECENT session", async () => {
+      // `password_hash IS NULL` is the genuine case: there is no password to re-present.
+      await owner.db.execute(sql`update users set password_hash = null where id = ${userB}`);
+      const token = await mintSessionFor(userB, "b@example.com");
+      const res = await app.inject({
+        method: "POST",
+        url: "/v1/auth/mfa/enroll",
+        headers: json(token),
+        payload: {},
+      });
+      expect(res.statusCode, res.body).toBe(200);
+    });
+
+    it("an SSO-only account is REFUSED on a session older than the window", async () => {
+      await owner.db.execute(sql`update users set password_hash = null where id = ${userB}`);
+      const token = await mintSessionFor(userB, "b@example.com");
+      // Age the session past the window through the owner handle — the discriminating fact is the
+      // AGE and nothing else, so nothing about the session's validity is touched.
+      await owner.db.execute(
+        sql`update sessions set created_at = now() - make_interval(secs => ${MFA_REAUTH_MAX_SESSION_AGE_MS / 1000 + 60}) where user_id = ${userB}`,
+      );
+      const res = await app.inject({
+        method: "POST",
+        url: "/v1/auth/mfa/enroll",
+        headers: json(token),
+        payload: {},
+      });
+      expect(res.statusCode).toBe(401);
+      expect((res.json() as { reason: string }).reason).toBe("reauth_required");
+      // The session itself is STILL VALID — only enrolment is gated, not the whole account.
+      expect(
+        (await app.inject({ method: "GET", url: "/v1/auth/me", headers: asUser(token) }))
+          .statusCode,
+      ).toBe(200);
+    });
+
+    it("reports which branch applies via GET /v1/auth/mfa", async () => {
+      const withPassword = await login("a@example.com");
+      expect((await status(withPassword)).json()).toMatchObject({ passwordRequiredToEnrol: true });
+      await owner.db.execute(sql`update users set password_hash = null where id = ${userB}`);
+      const ssoOnly = await mintSessionFor(userB, "b@example.com");
+      expect((await status(ssoOnly)).json()).toMatchObject({ passwordRequiredToEnrol: false });
+    });
+  });
+
   // ── EDGE CASES ────────────────────────────────────────────────────────────────────────────
 
   it("a challenge presented after the credential is removed is a 401, never a 500", async () => {
@@ -662,6 +779,16 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.8 MFA (two-role, HTTP)", () => {
     );
   });
 
+  it("an EXPIRED or malformed challenge says so, so the UI stops blaming the code", async () => {
+    // Review finding 3: without a `reason` the dashboard falls back to "That code is not valid",
+    // and a user whose five-minute window lapsed retypes CORRECT codes indefinitely. Safe to
+    // distinguish — a caller presenting a well-formed challenge already holds it.
+    await enrolled("a@example.com");
+    const res = await verify("not-a-challenge", "123456");
+    expect(res.statusCode).toBe(401);
+    expect((res.json() as { reason?: string }).reason).toBe("expired");
+  });
+
   it("a garbage challenge and a garbage code both answer 401, never a 500", async () => {
     await enrolled("a@example.com");
     expect((await verify("not-a-challenge", "123456")).statusCode).toBe(401);
@@ -684,13 +811,9 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.8 MFA (two-role, HTTP)", () => {
   });
 
   it("every MFA route 401s without a credential", async () => {
-    for (const [method, url] of [
-      ["GET", "/v1/auth/mfa"],
-      ["POST", "/v1/auth/mfa/enroll"],
-    ] as const) {
-      expect((await app.inject({ method, url })).statusCode, url).toBe(401);
-    }
+    expect((await app.inject({ method: "GET", url: "/v1/auth/mfa" })).statusCode).toBe(401);
     for (const url of [
+      "/v1/auth/mfa/enroll",
       "/v1/auth/mfa/enroll/confirm",
       "/v1/auth/mfa/disable",
       "/v1/auth/mfa/recovery-codes",
