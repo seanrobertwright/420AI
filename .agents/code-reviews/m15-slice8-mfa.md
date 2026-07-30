@@ -245,3 +245,21 @@ SSO-only accounts on finding 1.
 **Verification.** The two enrolment-gate tests were confirmed to FAIL with the gate disabled
 (`expected 200 to be 401` in both), per CLAUDE.md's rule that a negative test must be shown to fail
 without its mechanism. `apps/ingest/src/mfa.int.test.ts` is now **29 cases**, up from 23.
+
+### Second pass (re-review of the fixes)
+
+Re-running the review over the fix commit surfaced one finding the fix itself introduced, plus its
+pre-existing twin. Both were triaged and fixed.
+
+| #   | Severity | Issue | File | Disposition | What was done | Status |
+| --- | -------- | ----- | ---- | ----------- | ------------- | ------ |
+| 5 | Medium | `POST /v1/auth/mfa/enroll` verifies a password with no per-route rate limit — a password-guessing oracle behind a stolen session | `apps/ingest/src/routes/mfa.ts:269` | Fix | Added `config: { rateLimit: app.rateLimitLogin }`. Introduced by fix 1, which is what made this route verify a password at all. | Fixed |
+| 6 | Medium | `POST /v1/auth/password` has the identical gap, and predates this slice | `apps/ingest/src/routes/auth.ts:496` | Fix | Same one-line addition. Found while reviewing its 15.8 twin; fixed together rather than one at a time, since every other password-touching route (login, signup, both reset routes, invite-accept) already carried the limit and these two were the only outliers. | Fixed |
+
+Everything else in the fix re-reviewed clean: the refusal path writes nothing (asserted by test),
+`findLiveSessionCreatedAt` carries the full predicate set including the `userId` scope, an
+`ADMIN_TOKEN` caller correctly falls to the password branch, and the SSO-only branch fails closed
+when there is no session.
+
+**Final state: 6 findings, all fixed.** `repo-health --require-db` PASS — 1194 tests, 430
+integration, 0 skipped.

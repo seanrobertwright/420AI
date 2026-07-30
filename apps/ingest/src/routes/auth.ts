@@ -481,7 +481,17 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
   /** POST /v1/auth/password — change your OWN password. Session-gated; requires the current one. */
   app.post<{ Body: ChangePasswordBody }>(
     "/v1/auth/password",
-    { schema: { body: changePasswordBodySchema } },
+    {
+      schema: { body: changePasswordBodySchema },
+      // M15 15.8 — added late, and the gap it closes predates this slice. This route VERIFIES the
+      // current password, so without a limit an attacker holding a stolen session cookie can grind
+      // it here at one scrypt per request — a password-guessing oracle behind a session, which is
+      // exactly the credential a session alone should not yield. Every sibling that touches a
+      // password already carried this (login, signup, both reset routes, invite-accept); this one
+      // and 15.8's `POST /v1/auth/mfa/enroll` were the two outliers, found while reviewing the
+      // latter and fixed together rather than one at a time.
+      config: { rateLimit: app.rateLimitLogin },
+    },
     async (request, reply) => {
       const principal = await resolvePrincipal(app, request);
       if (!principal) {

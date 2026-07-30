@@ -248,7 +248,15 @@ export default async function mfaRoutes(app: FastifyInstance): Promise<void> {
    */
   app.post<{ Body: EnrollBody }>(
     "/v1/auth/mfa/enroll",
-    { schema: { body: mfaEnrollBodySchema } },
+    {
+      schema: { body: mfaEnrollBodySchema },
+      // 12.4c's brute-force guard. Session-gated routes normally do not need it, and this one does
+      // ONLY because D-15.8-16 made it verify a password: without the limit, an attacker holding a
+      // stolen session could grind the password here at one scrypt per request. Every other
+      // password-touching route already carries it (login, signup, both reset routes,
+      // invite-accept); `POST /v1/auth/password` was the other outlier and was fixed alongside this.
+      config: { rateLimit: app.rateLimitLogin },
+    },
     async (request, reply) => {
       const principal = await resolvePrincipal(app, request);
       if (!principal) {
