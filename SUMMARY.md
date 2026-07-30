@@ -612,7 +612,7 @@ enforced`, the sibling of `skipped ≠ passed`. Closes the Spike-6 hole: a cross
         become "what the provider actually received"; and the unlink guard's race is only visible
         at the **repository** layer with two hand-held transactions (CLAUDE.md's 15.5 corollary,
         applied rather than relearned), with the held connection released in a `finally`.
-  - [x] **15.8** MFA (TOTP + recovery codes) — DONE `2026-07-30`. The last identity slice, and the
+  - [x] **15.8** MFA (TOTP + recovery codes) — DONE `2026-07-30` (PR #68). The last identity slice, and the
         one that makes the other five paths mean something: after 15.5-15.7 there were five ways to
         become authenticated and **all five terminated in a single-factor secret**, over an archive
         holding decrypted transcripts for a whole org. A **zero-dependency** TOTP core
