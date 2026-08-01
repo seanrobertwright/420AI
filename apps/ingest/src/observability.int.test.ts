@@ -1,15 +1,22 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import type { FastifyInstance } from "fastify";
-import { createDb, ensureUserByEmail } from "@420ai/db";
+import { createDb } from "@420ai/db";
 import { buildApp } from "./app.js";
 import {
   AnalysisProviderError,
   type AnalysisProvider,
   type AnalysisRequest,
 } from "./analysis/provider.js";
+import { seedBootstrapKey } from "./test-support/bootstrap-key.js";
 
 const TEST_URL = process.env.DATABASE_URL_TEST;
-const ADMIN = "test-admin";
+/**
+ * M15 15.9 (D-M15-7) — the admin bearer is now a real API KEY, minted per test in `beforeEach`.
+ * `let`, not `const`: `api_keys` carries an FK to `users`, so this suite's TRUNCATE deletes the key
+ * with its owner and it must be re-minted after every reset. It replaces the shared `ADMIN_TOKEN`
+ * string that used to be passed to `buildApp`, which authenticates nothing as of 15.9.
+ */
+let ADMIN: string;
 
 // Minimal stub provider — these tests never trigger an interpretation, but buildApp requires one.
 const stubProvider: AnalysisProvider = {
@@ -27,14 +34,13 @@ describe.skipIf(!TEST_URL)("observability + rate limiting (HTTP e2e via inject)"
 
   beforeAll(async () => {
     dbh = createDb(TEST_URL!);
-    // M15 15.2: the ADMIN_TOKEN service token now resolves to the BOOTSTRAP ADMIN
-    // PRINCIPAL, so `adminEmail`'s user + org must exist or every admin route 401s.
-    // server.ts seeds this on boot; this suite builds the app directly. Idempotent —
-    // and this suite has no TRUNCATE, so a one-time seed in beforeAll is enough.
-    await ensureUserByEmail(dbh.db, "seanrobertwright@gmail.com");
+    // M15 15.9 (D-M15-7): the admin bearer is a real API KEY. `seedBootstrapKey` also runs
+    // `ensureUserByEmail` (hence `ensurePersonalOrg`), so `adminEmail`'s user + org exist and the
+    // key resolves to an `owner` principal. This suite has no TRUNCATE, so unlike its siblings a
+    // one-time mint in `beforeAll` survives the whole file.
+    ADMIN = await seedBootstrapKey(dbh.db, "seanrobertwright@gmail.com");
     app = buildApp({
       db: dbh.db,
-      adminToken: ADMIN,
       // M15 15.4: reconcile on EVERY tick, i.e. exactly pre-15.4 behaviour — tests that assert
       // a firing appears on the first GET must not race the 30 s production throttle.
       reconcileThrottleMs: 0,

@@ -12,10 +12,20 @@ import {
   type AnalysisProvider,
   type AnalysisRequest,
 } from "./analysis/provider.js";
+import { seedBootstrapKey } from "./test-support/bootstrap-key.js";
 
 const TEST_URL = process.env.DATABASE_URL_TEST;
 const APP_URL = process.env.DATABASE_URL_TEST_APP;
-const SERVICE_TOKEN = "svc-token";
+/**
+ * M15 15.9 (D-M15-7) — the MACHINE-tier bearer is now a real API KEY, minted per test in the
+ * fixture below. `let`, not `const`: `api_keys` carries an FK to `users`, so this suite's TRUNCATE
+ * deletes the key with its owner and it must be re-minted after every reset.
+ *
+ * The NAME is kept so the tests that assert "the machine tier still works here" keep reading as
+ * tests of that tier. What changed is the credential behind it: `ADMIN_TOKEN` was one shared,
+ * un-attributable, un-revocable string; this is a per-user key, capped at its owner's rung.
+ */
+let SERVICE_TOKEN: string;
 const ADMIN_EMAIL = "bootstrap@test.local";
 const SESSION_SECRET = "test-secret";
 const PASSWORD = "correct-horse-battery";
@@ -99,7 +109,6 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.6 sessions + revocation (two-role
     appRole = createDb(APP_URL!); // what the SERVER connects as — the point of this suite
     app = buildApp({
       db: appRole.db,
-      adminToken: SERVICE_TOKEN,
       adminEmail: ADMIN_EMAIL,
       sessionSecret: SESSION_SECRET,
       analysisProvider: stubProvider,
@@ -183,6 +192,9 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.6 sessions + revocation (two-role
       sql`TRUNCATE invites, password_reset_tokens, project_grants, search_documents, session_git_links, git_commit_files, git_commits, alert_firings, machine_heartbeats, report_artifacts, workspace_keys, workspaces, projects, raw_source_records, events, ingest_tokens, pairing_codes, machines, memberships, organizations, users RESTART IDENTITY CASCADE`,
     );
     await setUserPassword(owner.db, ADMIN_EMAIL, hashPassword(PASSWORD));
+    // M15 15.9 — mint the machine-tier bearer AFTER the truncate + identity seed, because
+    // `api_keys` cascades away with `users`.
+    SERVICE_TOKEN = await seedBootstrapKey(owner.db, ADMIN_EMAIL);
     userOwner = await setUserPassword(owner.db, "owner@example.com", hashPassword(PASSWORD));
     userMember = await setUserPassword(owner.db, "member@example.com", hashPassword(PASSWORD));
 
@@ -277,7 +289,6 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.6 sessions + revocation (two-role
     // Signup: same shape, on an app with self-signup enabled.
     const signupApp = buildApp({
       db: appRole.db,
-      adminToken: SERVICE_TOKEN,
       adminEmail: ADMIN_EMAIL,
       sessionSecret: SESSION_SECRET,
       analysisProvider: stubProvider,
@@ -642,7 +653,6 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.6 sessions + revocation (two-role
   it("an OPEN SSE stream dies when its session is revoked mid-flight", async () => {
     const streamApp = buildApp({
       db: appRole.db,
-      adminToken: SERVICE_TOKEN,
       adminEmail: ADMIN_EMAIL,
       sessionSecret: SESSION_SECRET,
       analysisProvider: stubProvider,
@@ -764,12 +774,12 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.6 sessions + revocation (two-role
     expect(await meStatus(second)).toBe(401);
   });
 
-  // ── The ADMIN_TOKEN tier, which must not regress until 15.9 (D-M15-7) ─────────────────────
+  // ── The MACHINE tier (an API key as of 15.9, D-M15-7) — it must not regress ───────────────
 
-  it("an ADMIN_TOKEN caller still works everywhere and its logout is a no-op 204", async () => {
+  it("an API-KEY caller works everywhere and its logout is a no-op 204", async () => {
     expect(
       await meStatus(SERVICE_TOKEN),
-      "the service token has no session and must not need one",
+      "an API key has no session and must not need one (D-15.9-5)",
     ).toBe(200);
 
     const logout = await app.inject({
@@ -786,7 +796,7 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.6 sessions + revocation (two-role
     expect(await listOwn(SERVICE_TOKEN)).toEqual([]);
   });
 
-  it("revoke-all by a session user does NOT affect the ADMIN_TOKEN tier", async () => {
+  it("revoke-all by a session user does NOT affect the API-KEY tier", async () => {
     const token = await login("member@example.com");
     await app.inject({
       method: "POST",

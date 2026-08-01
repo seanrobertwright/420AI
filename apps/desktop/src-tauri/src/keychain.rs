@@ -49,8 +49,22 @@ pub struct ServerConfig {
     pub server_dir: String,
     /// Ingest base URL for the monitor proxy + health poll (non-secret).
     pub ingest_url: String,
-    /// SECRET — admin bearer for `/v1/monitor`, injected as `ADMIN_TOKEN`.
-    pub admin_token: String,
+    /// SECRET — the API KEY bearer for `/v1/monitor` (M15 15.9, D-M15-7). A `k420_…` token minted
+    /// by a real human from Settings → API keys, capped at that human's rung and revocable on its
+    /// own. It is NOT injected into the spawned server's env: it is a credential this app PRESENTS,
+    /// not one the server reads.
+    ///
+    /// REPLACES `admin_token`, which M15 15.9 retired. That field is simply gone rather than
+    /// deprecated: serde ignores unknown fields, so an existing blob's `adminToken` is dropped on
+    /// load and this field defaults to empty — which surfaces as the proxy's clear "API key not
+    /// configured" message rather than as a token the server would now reject with an opaque 401.
+    ///
+    /// `serde(default)` is REQUIRED, not stylistic — the same trap `database_url_app` documents
+    /// below. Without it, this field's ADDITION makes every previously-stored keychain blob fail to
+    /// deserialize, and `load()` maps a parse failure to `None` — silently presenting a configured
+    /// user as UNPAIRED, which reads to them as total data loss.
+    #[serde(default)]
+    pub api_key: String,
     /// SECRET — Postgres DSN for the OWNER role, injected as `DATABASE_URL`.
     pub database_url: String,
     /// SECRET — Postgres DSN for the NON-OWNER app role (M15 15.3), injected as
@@ -167,7 +181,7 @@ mod tests {
         let cfg = ServerConfig {
             server_dir: "C:/repo/420AI".to_string(),
             ingest_url: "http://localhost:8420".to_string(),
-            admin_token: "admin_secret".to_string(),
+            api_key: "k420_secret".to_string(),
             database_url: "postgres://420ai:420ai@localhost:5433/420ai".to_string(),
             database_url_app: "postgres://420ai_app:apppw@localhost:5433/420ai".to_string(),
             archive_encryption_key: "base64key==".to_string(),
@@ -184,7 +198,7 @@ mod tests {
             load_from_user(TEST_SERVICE, SERVER_USER).expect("load after store");
         assert_eq!(loaded.server_dir, cfg.server_dir);
         assert_eq!(loaded.ingest_url, cfg.ingest_url);
-        assert_eq!(loaded.admin_token, cfg.admin_token);
+        assert_eq!(loaded.api_key, cfg.api_key);
         assert_eq!(loaded.database_url, cfg.database_url);
         assert_eq!(loaded.archive_encryption_key, cfg.archive_encryption_key);
         assert_eq!(loaded.ingest_port, Some(8420));

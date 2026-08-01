@@ -9,9 +9,19 @@ import {
   type AnalysisProvider,
   type AnalysisRequest,
 } from "./analysis/provider.js";
+import { seedBootstrapKey } from "./test-support/bootstrap-key.js";
 
 const TEST_URL = process.env.DATABASE_URL_TEST;
-const SERVICE_TOKEN = "svc-token";
+/**
+ * M15 15.9 (D-M15-7) — the MACHINE-tier bearer is now a real API KEY, minted per test in the
+ * fixture below. `let`, not `const`: `api_keys` carries an FK to `users`, so this suite's TRUNCATE
+ * deletes the key with its owner and it must be re-minted after every reset.
+ *
+ * The NAME is kept so the tests that assert "the machine tier still works here" keep reading as
+ * tests of that tier. What changed is the credential behind it: `ADMIN_TOKEN` was one shared,
+ * un-attributable, un-revocable string; this is a per-user key, capped at its owner's rung.
+ */
+let SERVICE_TOKEN: string;
 const ADMIN_EMAIL = "admin@test.local";
 const SESSION_SECRET = "test-secret";
 const PASSWORD = "correct-horse";
@@ -32,7 +42,6 @@ describe.skipIf(!TEST_URL)("auth API (login → session bearer, HTTP e2e via inj
     // A fixed sessionSecret so we can reason about the issued tokens deterministically.
     app = buildApp({
       db: dbh.db,
-      adminToken: SERVICE_TOKEN,
       // M15 15.4: reconcile on EVERY tick, i.e. exactly pre-15.4 behaviour — tests that assert
       // a firing appears on the first GET must not race the 30 s production throttle.
       reconcileThrottleMs: 0,
@@ -54,6 +63,9 @@ describe.skipIf(!TEST_URL)("auth API (login → session bearer, HTTP e2e via inj
       sql`TRUNCATE report_artifacts, workspace_keys, workspaces, projects, raw_source_records, events, ingest_tokens, pairing_codes, machines, memberships, organizations, users RESTART IDENTITY CASCADE`,
     );
     await setUserPassword(dbh.db, ADMIN_EMAIL, hashPassword(PASSWORD));
+    // M15 15.9 — mint the machine-tier bearer AFTER the truncate + identity seed, because
+    // `api_keys` cascades away with `users`.
+    SERVICE_TOKEN = await seedBootstrapKey(dbh.db, ADMIN_EMAIL);
   });
 
   async function login(email: string, password: string) {
@@ -107,7 +119,7 @@ describe.skipIf(!TEST_URL)("auth API (login → session bearer, HTTP e2e via inj
     expect(res.json()).toEqual({ projects: [] });
   });
 
-  it("authorizes an admin route with the SERVICE token (the machine path — desktop/CLI)", async () => {
+  it("authorizes an admin route with an API KEY (the machine path — desktop/CLI)", async () => {
     const res = await app.inject({
       method: "GET",
       url: "/v1/projects",
@@ -115,6 +127,27 @@ describe.skipIf(!TEST_URL)("auth API (login → session bearer, HTTP e2e via inj
     });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ projects: [] });
+  });
+
+  /**
+   * M15 15.9 (D-M15-7) — THE RETIREMENT ASSERTION. `ADMIN_TOKEN` is not merely unused; it
+   * authenticates NOTHING. Asserted rather than assumed, because "we deleted the branch" is exactly
+   * the kind of claim that stays true in the comments and stops being true in the code — and the
+   * failure would be silent in the worst direction: a shared, un-attributable, un-revocable god
+   * token quietly still working after the release notes say it was removed.
+   *
+   * The literal below is the value `scripts/setup-env.mjs` used to generate into `.env`, in the
+   * shape an upgrading operator would still have sitting in theirs.
+   */
+  it("401s the RETIRED ADMIN_TOKEN tier — it authenticates nothing (D-M15-7)", async () => {
+    for (const retired of ["svc-token", "test-admin", "any-old-shared-secret"]) {
+      const res = await app.inject({
+        method: "GET",
+        url: "/v1/projects",
+        headers: { authorization: `Bearer ${retired}` },
+      });
+      expect(res.statusCode, `the retired token "${retired}" must not authorize`).toBe(401);
+    }
   });
 
   it("401s an admin route with no Authorization header", async () => {

@@ -366,7 +366,7 @@ export async function runGit(opts: {
 }
 
 /**
- * List the archive's projects (M5). ADMIN-authed — pass `--token <adminToken>`
+ * List the archive's projects (M5). PRINCIPAL-authed — pass `--token <apiKey>` (M15 15.9)
  * (discovery uses the machine token; this CRUD surface is admin-gated).
  */
 export async function runProjects(opts: {
@@ -430,7 +430,7 @@ function usage(dbPath: string): string {
     "  collector queue [--home <dir>]",
     "  collector discover [--url <baseUrl>] [--token <token>] [--home <dir>]",
     "  collector git [--url <baseUrl>] [--token <token>] [--home <dir>]",
-    "  collector projects [--url <baseUrl>] [--token <adminToken>]",
+    "  collector projects [--url <baseUrl>] [--token <apiKey>]",
     "  collector custom",
     "",
     "  --home <dir>  Collector home root (default: your OS home). Repoints credentials, the durable",
@@ -624,7 +624,7 @@ async function main(argv: string[]): Promise<void> {
       // the most common misuse actionable instead of a bare HTTP 401.
       if (isUnauthorized(err)) {
         throw new Error(
-          "projects is admin-gated — pass --token <adminToken> (the saved pairing is a machine token)",
+          "projects is admin-gated — pass --token <apiKey> (the saved pairing is a machine token)",
         );
       }
       throw err;

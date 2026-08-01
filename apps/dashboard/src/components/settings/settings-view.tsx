@@ -14,22 +14,23 @@ interface Health {
 /**
  * Settings (M12 12.2b) — READ-ONLY system status. Pure-render Server Component: ingest health,
  * the monitor version stamp, the active pricing-catalog version, and whether the server env is
- * configured. CRITICAL (D8): it shows "configured" / "not set" booleans, NEVER the ADMIN_TOKEN or
- * INGEST_URL VALUES — the token must never reach the browser. Editable settings arrive in a
- * later M12 slice.
+ * configured. CRITICAL (D8): it shows "configured" / "not set" booleans, NEVER any secret VALUE —
+ * no credential must ever reach the browser. Editable settings arrive in a later M12 slice.
+ *
+ * M15 15.9 (D-M15-7) dropped the ADMIN_TOKEN row: the variable authenticates nothing, so reporting
+ * whether it is "configured" would tell an operator their deployment is in a state it is not. The
+ * dashboard itself has not used it since M12 12.3 — it forwards the logged-in admin's session.
  */
 export function SettingsView({
   health,
   monitorVersion,
   activeCatalogVersion,
   ingestConfigured,
-  adminTokenConfigured,
 }: {
   health: Health | null;
   monitorVersion: string | null;
   activeCatalogVersion: string | null;
   ingestConfigured: boolean;
-  adminTokenConfigured: boolean;
 }) {
   const reachable = health !== null;
 
@@ -96,10 +97,6 @@ export function SettingsView({
             <div className="flex items-center justify-between">
               <span className="text-muted-foreground">INGEST_URL</span>
               <span>{ingestConfigured ? "configured" : "default (localhost:8420)"}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">ADMIN_TOKEN</span>
-              <span>{adminTokenConfigured ? "configured" : "not set"}</span>
             </div>
           </CardContent>
         </Card>

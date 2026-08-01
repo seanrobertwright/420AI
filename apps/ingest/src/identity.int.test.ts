@@ -22,7 +22,6 @@ import {
 
 const TEST_URL = process.env.DATABASE_URL_TEST;
 const APP_URL = process.env.DATABASE_URL_TEST_APP;
-const SERVICE_TOKEN = "svc-token";
 const ADMIN_EMAIL = "bootstrap@test.local";
 const SESSION_SECRET = "test-secret";
 const PASSWORD = "correct-horse-battery";
@@ -106,7 +105,6 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.5 identity core (two-role, multi-
     appRole = createDb(APP_URL!); // what the SERVER connects as — the point of this suite
     app = buildApp({
       db: appRole.db,
-      adminToken: SERVICE_TOKEN,
       adminEmail: ADMIN_EMAIL,
       sessionSecret: SESSION_SECRET,
       analysisProvider: stubProvider,
@@ -154,15 +152,11 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.5 identity core (two-role, multi-
   }
 
   /** Invite `email` as `role` through the real route, returning the mailed token. */
-  async function inviteAndCollect(
-    adminToken: string,
-    email: string,
-    role: string,
-  ): Promise<string> {
+  async function inviteAndCollect(bearer: string, email: string, role: string): Promise<string> {
     const res = await app.inject({
       method: "POST",
       url: "/v1/members/invite",
-      headers: json(adminToken),
+      headers: json(bearer),
       payload: { email, role },
     });
     expect(res.statusCode, `invite ${email} as ${role}: ${res.body}`).toBe(200);
@@ -662,7 +656,6 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.5 identity core (two-role, multi-
   it("with signup ENABLED the new user owns a BRAND-NEW org, never an existing one", async () => {
     const open = buildApp({
       db: appRole.db,
-      adminToken: SERVICE_TOKEN,
       adminEmail: ADMIN_EMAIL,
       sessionSecret: SESSION_SECRET,
       analysisProvider: stubProvider,
@@ -782,7 +775,6 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.5 identity core (two-role, multi-
     // caller would be a complete account-takeover primitive.
     const noMail = buildApp({
       db: appRole.db,
-      adminToken: SERVICE_TOKEN,
       adminEmail: ADMIN_EMAIL,
       sessionSecret: SESSION_SECRET,
       analysisProvider: stubProvider,
@@ -826,7 +818,6 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.5 identity core (two-role, multi-
     // ADMIN-GATED route.
     const broken = buildApp({
       db: appRole.db,
-      adminToken: SERVICE_TOKEN,
       adminEmail: ADMIN_EMAIL,
       sessionSecret: SESSION_SECRET,
       analysisProvider: stubProvider,

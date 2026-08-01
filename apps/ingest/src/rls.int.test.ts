@@ -21,10 +21,20 @@ import {
   type AnalysisProvider,
   type AnalysisRequest,
 } from "./analysis/provider.js";
+import { seedBootstrapKey } from "./test-support/bootstrap-key.js";
 
 const TEST_URL = process.env.DATABASE_URL_TEST;
 const APP_URL = process.env.DATABASE_URL_TEST_APP;
-const SERVICE_TOKEN = "svc-token";
+/**
+ * M15 15.9 (D-M15-7) — the MACHINE-tier bearer is now a real API KEY, minted per test in the
+ * fixture below. `let`, not `const`: `api_keys` carries an FK to `users`, so this suite's TRUNCATE
+ * deletes the key with its owner and it must be re-minted after every reset.
+ *
+ * The NAME is kept so the tests that assert "the machine tier still works here" keep reading as
+ * tests of that tier. What changed is the credential behind it: `ADMIN_TOKEN` was one shared,
+ * un-attributable, un-revocable string; this is a per-user key, capped at its owner's rung.
+ */
+let SERVICE_TOKEN: string;
 const ADMIN_EMAIL = "admin@test.local";
 const SESSION_SECRET = "test-secret";
 const PASSWORD = "correct-horse";
@@ -121,7 +131,6 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.3 RLS through the HTTP surface", 
     appRole = createDb(APP_URL!); // what the SERVER connects as — the point of this suite
     app = buildApp({
       db: appRole.db,
-      adminToken: SERVICE_TOKEN,
       // M15 15.4: reconcile on EVERY tick, i.e. exactly pre-15.4 behaviour — tests that assert
       // a firing appears on the first GET must not race the 30 s production throttle.
       reconcileThrottleMs: 0,
@@ -158,6 +167,9 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.3 RLS through the HTTP surface", 
       sql`TRUNCATE search_documents, session_git_links, git_commit_files, git_commits, alert_firings, machine_heartbeats, report_artifacts, workspace_keys, workspaces, projects, raw_source_records, events, ingest_tokens, pairing_codes, machines, memberships, organizations, users RESTART IDENTITY CASCADE`,
     );
     await setUserPassword(owner.db, ADMIN_EMAIL, hashPassword(PASSWORD));
+    // M15 15.9 — mint the machine-tier bearer AFTER the truncate + identity seed, because
+    // `api_keys` cascades away with `users`.
+    SERVICE_TOKEN = await seedBootstrapKey(owner.db, ADMIN_EMAIL);
     userA = await setUserPassword(owner.db, "a@example.com", hashPassword(PASSWORD));
     userB = await setUserPassword(owner.db, "b@example.com", hashPassword(PASSWORD));
     orgA = await ensurePersonalOrg(owner.db, userA, "a@example.com");
@@ -419,7 +431,6 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.3 RLS through the HTTP surface", 
     const delivered: { alertKey: string }[] = [];
     const deliveryApp = buildApp({
       db: appRole.db,
-      adminToken: SERVICE_TOKEN,
       // M15 15.4: reconcile on EVERY tick, i.e. exactly pre-15.4 behaviour — tests that assert
       // a firing appears on the first GET must not race the 30 s production throttle.
       reconcileThrottleMs: 0,

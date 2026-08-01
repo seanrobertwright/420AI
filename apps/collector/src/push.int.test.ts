@@ -24,7 +24,7 @@ describe.skipIf(!TEST_URL)("collector push (real-socket e2e)", () => {
 
   beforeAll(async () => {
     dbh = createDb(TEST_URL!);
-    app = buildApp({ db: dbh.db, adminToken: "test-admin", logger: false });
+    app = buildApp({ db: dbh.db, logger: false });
     await app.listen({ port: 0, host: "127.0.0.1" });
     const { port } = app.server.address() as AddressInfo;
     baseUrl = `http://127.0.0.1:${port}`;

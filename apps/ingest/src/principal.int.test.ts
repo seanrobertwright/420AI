@@ -25,9 +25,19 @@ import {
   type AnalysisProvider,
   type AnalysisRequest,
 } from "./analysis/provider.js";
+import { seedBootstrapKey } from "./test-support/bootstrap-key.js";
 
 const TEST_URL = process.env.DATABASE_URL_TEST;
-const SERVICE_TOKEN = "svc-token";
+/**
+ * M15 15.9 (D-M15-7) — the MACHINE-tier bearer is now a real API KEY, minted per test in the
+ * fixture below. `let`, not `const`: `api_keys` carries an FK to `users`, so this suite's TRUNCATE
+ * deletes the key with its owner and it must be re-minted after every reset.
+ *
+ * The NAME is kept so the tests that assert "the machine tier still works here" keep reading as
+ * tests of that tier. What changed is the credential behind it: `ADMIN_TOKEN` was one shared,
+ * un-attributable, un-revocable string; this is a per-user key, capped at its owner's rung.
+ */
+let SERVICE_TOKEN: string;
 const ADMIN_EMAIL = "admin@test.local";
 const SESSION_SECRET = "test-secret";
 const PASSWORD = "correct-horse";
@@ -99,7 +109,6 @@ describe.skipIf(!TEST_URL)("M15 15.2 request principal (HTTP e2e via inject)", (
     dbh = createDb(TEST_URL!);
     app = buildApp({
       db: dbh.db,
-      adminToken: SERVICE_TOKEN,
       // M15 15.4: reconcile on EVERY tick, i.e. exactly pre-15.4 behaviour — tests that assert
       // a firing appears on the first GET must not race the 30 s production throttle.
       reconcileThrottleMs: 0,
@@ -133,8 +142,11 @@ describe.skipIf(!TEST_URL)("M15 15.2 request principal (HTTP e2e via inject)", (
     await dbh.db.execute(
       sql`TRUNCATE search_documents, session_git_links, git_commit_files, git_commits, alert_firings, machine_heartbeats, report_artifacts, workspace_keys, workspaces, projects, raw_source_records, events, ingest_tokens, pairing_codes, machines, memberships, organizations, users RESTART IDENTITY CASCADE`,
     );
-    // The bootstrap admin (what ADMIN_TOKEN resolves to) plus two ordinary users.
+    // The bootstrap admin (whose API key the machine-tier tests use) plus two ordinary users.
     await setUserPassword(dbh.db, ADMIN_EMAIL, hashPassword(PASSWORD));
+    // M15 15.9 — mint the machine-tier bearer AFTER the truncate + identity seed, because
+    // `api_keys` cascades away with `users`.
+    SERVICE_TOKEN = await seedBootstrapKey(dbh.db, ADMIN_EMAIL);
     userA = await setUserPassword(dbh.db, "a@example.com", hashPassword(PASSWORD));
     userB = await setUserPassword(dbh.db, "b@example.com", hashPassword(PASSWORD));
     orgA = await ensurePersonalOrg(dbh.db, userA, "a@example.com");
@@ -324,8 +336,9 @@ describe.skipIf(!TEST_URL)("M15 15.2 request principal (HTTP e2e via inject)", (
   });
 
   // 2 ── the credential tiers that must NOT regress.
-  it("the ADMIN_TOKEN service token still authorizes, as the bootstrap admin principal", async () => {
-    // The desktop app and scripts/generate-reports.mjs still carry it until 15.9 (D-M15-7).
+  it("an API KEY authorizes, resolving to its owner's principal (D-M15-7)", async () => {
+    // The machine tier the desktop app and scripts/generate-reports.mjs carry as of 15.9. Unlike
+    // the ADMIN_TOKEN it replaced, it resolves to a REAL person rather than to a shared identity.
     const res = await app.inject({
       method: "GET",
       url: "/v1/auth/me",

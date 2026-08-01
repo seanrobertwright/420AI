@@ -43,7 +43,6 @@ export default async function SettingsPage() {
       monitorVersion={monitor?.monitorVersion ?? null}
       activeCatalogVersion={activeCatalog?.version ?? null}
       ingestConfigured={Boolean(process.env.INGEST_URL)}
-      adminTokenConfigured={Boolean(process.env.ADMIN_TOKEN)}
     />
   );
 }

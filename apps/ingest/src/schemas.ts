@@ -610,3 +610,38 @@ export const mfaVerifyBodySchema = {
     code: { type: "string", minLength: 6, maxLength: 64 },
   },
 } as const;
+
+/**
+ * M15 15.9 — POST /v1/auth/api-keys body (D-M15-7).
+ *
+ * `name` is REQUIRED and is the only required field: a key you cannot recognise in the list is a
+ * key you will never dare revoke, which defeats the point of the tier. It is free text and never a
+ * security decision.
+ *
+ * `role` is OPTIONAL, and its absence MEANS SOMETHING — "inherit the owner's membership role
+ * exactly" (D-15.9-4), which is what `ADMIN_TOKEN` effectively does today and is what makes the
+ * desktop app's migration behaviour-preserving. The enum mirrors `inviteMemberBodySchema`; the
+ * CEILING (you may not mint above your own rung) is a route-layer check, since ajv cannot see the
+ * caller's principal.
+ *
+ * `expiresInDays` is OPTIONAL and its absence means NEVER EXPIRES (D-15.9-8). Taken as a duration
+ * rather than an absolute timestamp so the server owns the clock — a client-supplied `expiresAt`
+ * would let a skewed or hostile client mint a key that is already expired (harmless) or dated to
+ * the year 3000 (not). 3650 days is a sanity bound, not a policy.
+ *
+ * `currentPassword` is OPTIONAL for the same reason it is on `mfaEnrollBodySchema`: minting requires
+ * re-authentication (D-15.9-6), but an SSO-only account has no password to send and re-proves with
+ * session recency instead — a distinction ajv cannot make, because it depends on a database row.
+ * The route makes it, and answers 401 either way.
+ */
+export const createApiKeyBodySchema = {
+  type: "object",
+  required: ["name"],
+  additionalProperties: false,
+  properties: {
+    name: { type: "string", minLength: 1, maxLength: 80 },
+    role: { type: "string", enum: ["viewer", "member", "admin", "owner"] },
+    expiresInDays: { type: "integer", minimum: 1, maximum: 3650 },
+    currentPassword: { type: "string", minLength: 1, maxLength: 256 },
+  },
+} as const;

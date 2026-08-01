@@ -355,7 +355,7 @@ export default async function ssoRoutes(app: FastifyInstance): Promise<void> {
    * GET /v1/auth/sso/identities — the caller's own links, newest first.
    *
    * `subject` is absent from the response by construction (`ssoIdentityRowColumns` omits it), not
-   * by a filter here. An `ADMIN_TOKEN` caller resolves to the bootstrap admin USER and gets that
+   * by a filter here. An API-KEY caller resolves to the KEY OWNER's user and gets that
    * user's list — empty unless that human has linked something.
    */
   app.get("/v1/auth/sso/identities", async (request, reply) => {

@@ -22,7 +22,6 @@ import {
 
 const TEST_URL = process.env.DATABASE_URL_TEST;
 const APP_URL = process.env.DATABASE_URL_TEST_APP;
-const SERVICE_TOKEN = "svc-token";
 const ADMIN_EMAIL = "admin@test.local";
 const SESSION_SECRET = "test-secret";
 const PASSWORD = "correct-horse";
@@ -91,7 +90,6 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.4 RBAC (two-role, two-user)", () 
     appRole = createDb(APP_URL!); // what the SERVER connects as — the point of this suite
     app = buildApp({
       db: appRole.db,
-      adminToken: SERVICE_TOKEN,
       // Reconcile on EVERY tick, so a firing assertion never races the 30 s production throttle.
       reconcileThrottleMs: 0,
       adminEmail: ADMIN_EMAIL,
@@ -409,7 +407,6 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.4 RBAC (two-role, two-user)", () 
   it("reconcileThrottleMs collapses two consecutive snapshots into one reconcile write", async () => {
     const throttled = buildApp({
       db: appRole.db,
-      adminToken: SERVICE_TOKEN,
       reconcileThrottleMs: 60_000,
       adminEmail: ADMIN_EMAIL,
       sessionSecret: SESSION_SECRET,

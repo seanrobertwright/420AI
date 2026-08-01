@@ -32,6 +32,7 @@ import {
   countPendingCatalogs,
   countRecentAuthFailures,
   findLiveSession,
+  isApiKeyLive,
   withOrg,
   type DbClient,
 } from "@420ai/db";
@@ -277,8 +278,12 @@ export default async function monitorRoutes(app: FastifyInstance): Promise<void>
     }
     const userId = principal.userId;
     // M15 15.6 — captured BEFORE the hijack, alongside the other pre-hijack guards. Null for an
-    // `ADMIN_TOKEN` caller, which has no session (see the per-tick re-check below).
+    // API-KEY caller, which has no session (D-15.9-5; see the per-tick re-check below).
     const sid = request.sessionId;
+    // M15 15.9 — likewise, and for the same reason: after `reply.hijack()` the request object is
+    // still readable, but capturing both credentials together here keeps the per-tick re-check
+    // below reading two locals rather than reaching back into `request`.
+    const keyId = request.apiKeyId;
 
     reply.raw.writeHead(200, {
       "content-type": "text/event-stream",
@@ -334,13 +339,29 @@ export default async function monitorRoutes(app: FastifyInstance): Promise<void>
         // queries; this is ONE primary-key probe, added to a tick that already opens a transaction
         // spanning eight reads plus a reconcile write. The cost is noise; the gap was a hole.
         //
-        // `sid === null` means an `ADMIN_TOKEN` caller, which has no session row to check. That
-        // tier is un-revocable by construction until D-M15-7 retires it in 15.9 — skipping the
-        // probe here changes nothing about that, and failing closed on it would break the desktop
-        // app's monitor for a guarantee `ADMIN_TOKEN` never offered.
+        // M15 15.9 — THE SAME OBLIGATION NOW APPLIES TO API KEYS, and this comment previously said
+        // the opposite. It justified skipping the probe when `sid === null` on the grounds that
+        // such a caller was necessarily an `ADMIN_TOKEN` holder, whose tier was "un-revocable by
+        // construction". That was true of `ADMIN_TOKEN` and is FALSE of an API key: a key is
+        // revocable, expirable, and its owner can be removed from the org. Inheriting the old skip
+        // would have re-opened, one tier over, the exact hole 15.6 closed here — revoke a key and
+        // the desktop app's open stream keeps delivering the org's live snapshot for as long as it
+        // holds the socket, with every other route already 401ing.
+        //
+        // Exactly ONE of the two is non-null for an authenticated caller (a key mints no session,
+        // D-15.9-5), so this is two guards, not a branch — and if a THIRD credential tier is ever
+        // added it inherits the same obligation. A connect-time-only gate does not revoke.
+        //
+        // `isApiKeyLive`, deliberately NOT `findLiveApiKey`: the latter is the auth hot path and
+        // its caller stamps `last_used_at`. Probing with it here would make every connected client
+        // a write per tick — precisely the audit-B.4 shape `shouldReconcile` above exists to
+        // remove, and precisely why `sessions` has no such column at all.
         if (sid) {
           const live = await findLiveSession(app.db, sid);
           if (!live) return terminate("session revoked");
+        }
+        if (keyId && !(await isApiKeyLive(app.db, keyId))) {
+          return terminate("api key revoked");
         }
         // M15 15.2: `userId` comes from the principal resolved ONCE before the stream
         // started, so the old `userId ? … : empty` fallback is dead. Teardown wiring

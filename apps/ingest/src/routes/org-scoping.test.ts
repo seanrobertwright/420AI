@@ -76,6 +76,15 @@ const ALLOWED_WITHOUT_WITHORG: Record<string, string> = {
   "mfa.ts":
     "reads totp_credentials/mfa_recovery_codes to complete authentication before any org context " +
     "exists; both are identity tables with no org_id and no policy (D-15.8-13)",
+  // M15 15.9 — the SAME argument again, one table further along. `api_keys` is an IDENTITY table
+  // with no `org_id` and no policy (D-15.9-1), read INSIDE `resolvePrincipal` at the one moment
+  // before any org context exists, because resolving the row is part of what establishes it. All
+  // three routes in the file act on `principal.userId` and touch no tenant table at all — the
+  // `userId` predicate inside every repository call IS the whole scoping, and there is no policy
+  // for `withOrg` to activate.
+  "api-keys.ts":
+    "reads/writes api_keys, an identity table with no org_id and no policy (D-15.9-1), resolved " +
+    "inside resolvePrincipal before any org context exists",
   // The BOOTSTRAP paths (D-15.3-3) — circular with respect to tenancy by construction.
   "pair.ts": "redeems the pairing code IN ORDER TO discover the org (bootstrap-permissive)",
   // M15 15.5 REMOVED `pairing-codes.ts`. Its exemption read "writes a row for a TARGET user whose

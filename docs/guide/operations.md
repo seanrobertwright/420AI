@@ -53,7 +53,7 @@ in a log. Example: `LOG_LEVEL=debug npm run ingest:dev`.
 returns a JSON snapshot — not Prometheus; a single-user box runs no scraper:
 
 ```sh
-curl -s localhost:8420/v1/metrics -H "authorization: Bearer $ADMIN_TOKEN" | jq
+curl -s localhost:8420/v1/metrics -H "authorization: Bearer $API_KEY" | jq
 # { "uptimeSeconds": 1234, "requests": 42, "byStatusClass": {"2xx":40,"4xx":2},
 #   "ingest": {"recordsInserted":0,"eventsUpserted":0}, "memory": 81000000 }
 ```
@@ -186,7 +186,7 @@ npm run db:reprice
 **Or over HTTP** (admin-gated; the dashboard would reach it via the server-side proxy):
 
 ```sh
-curl -X POST localhost:8420/v1/replay/reprice -H "authorization: Bearer $ADMIN_TOKEN"
+curl -X POST localhost:8420/v1/replay/reprice -H "authorization: Bearer $API_KEY"
 # 200 {"repriced":42,"catalogVersion":"v-2026-06"}
 # no active catalog → 409; no/invalid bearer → 401
 ```
@@ -221,9 +221,9 @@ In short:
 # 1. sign offline with the CONNECTOR private key (note --connector)
 npx tsx scripts/sign-catalog.ts --connector connector-catalog.json --key .secrets/connector-catalog-private-key.pem > signed.json
 # 2. upload (admin) → pending; a bad/tampered signature → 400
-curl -X POST "$INGEST_URL/v1/connector-catalog" -H "authorization: Bearer $ADMIN_TOKEN" -H "content-type: application/json" -d @signed.json
+curl -X POST "$INGEST_URL/v1/connector-catalog" -H "authorization: Bearer $API_KEY" -H "content-type: application/json" -d @signed.json
 # 3. approve (admin) → active (prior active atomically superseded)
-curl -X POST "$INGEST_URL/v1/connector-catalog/<id>/approve" -H "authorization: Bearer $ADMIN_TOKEN"
+curl -X POST "$INGEST_URL/v1/connector-catalog/<id>/approve" -H "authorization: Bearer $API_KEY"
 ```
 
 The collector pulls the active catalog at startup via the **machine-authed** `GET
@@ -302,7 +302,7 @@ pure event table). Parquet is **events-only** — the report and transcript expo
 and stay text (`md`/`json`/`jsonl`).
 
 ```sh
-curl -s -H "authorization: Bearer $ADMIN_TOKEN" \
+curl -s -H "authorization: Bearer $API_KEY" \
   "$INGEST_URL/v1/exports/events?format=parquet&projectId=<uuid>" -o events.parquet
 # then, in DuckDB:  SELECT count(*) FROM 'events.parquet';
 ```
@@ -425,15 +425,15 @@ there is **NO in-server scheduler** (the same discipline as backups above: the s
 background dispatch loop).
 
 `npm run reports:generate` walks every project (`GET /v1/projects`) and POSTs one report of each
-project type (`POST /v1/projects/:id/reports`) authenticated with **`ADMIN_TOKEN`** — the retained
+project type (`POST /v1/projects/:id/reports`) authenticated with an **API key** (`API_KEY`) — the
 machine/service credential (12.3), which is exactly the machine-to-machine path it exists for. It
-reads `INGEST_URL` + `ADMIN_TOKEN` from the environment, **times every request out at 30 s** so a
+reads `INGEST_URL` + `API_KEY` from the environment, **times every request out at 30 s** so a
 stalled ingest can't hang the job, prints one line per artifact, and **exits non-zero if any call
 fails** (so a cron wrapper can alert).
 
 ```sh
 # all six project report types, every project:
-INGEST_URL=http://localhost:8420 ADMIN_TOKEN=<token> npm run reports:generate
+INGEST_URL=http://localhost:8420 API_KEY=<k420_...> npm run reports:generate
 # a subset and/or a single project (note the `--` so npm forwards the flags):
 npm run reports:generate -- --types project.efficiency,project.cost_over_time --project <uuid>
 ```
@@ -443,9 +443,9 @@ of the event-fingerprint upsert), so report history accrues. Schedule it via the
 backups (12.4d):
 
 - **Windows Task Scheduler:** a weekly task running
-  `"C:\Program Files\Git\bin\sh.exe" -lc "cd /c/Users/seanr/OneDrive/Documents/420AI && INGEST_URL=http://localhost:8420 ADMIN_TOKEN=<token> npm run reports:generate"`.
+  `"C:\Program Files\Git\bin\sh.exe" -lc "cd /c/Users/seanr/OneDrive/Documents/420AI && INGEST_URL=http://localhost:8420 API_KEY=<k420_...> npm run reports:generate"`.
 - **cron (Linux/macOS):**
-  `0 6 * * 1 cd /path/to/420AI && INGEST_URL=http://localhost:8420 ADMIN_TOKEN=<token> npm run reports:generate >> reports.log 2>&1`
+  `0 6 * * 1 cd /path/to/420AI && INGEST_URL=http://localhost:8420 API_KEY=<k420_...> npm run reports:generate >> reports.log 2>&1`
 
 ## 15.3 — Application role & Row-Level Security
 
@@ -545,15 +545,26 @@ regression.
 
 ### Break-glass (D-M15-7)
 
-There is **no HTTP god-token** and no privileged connection anywhere in the server — deliberately.
-Cross-org access requires **direct database access with the owner URL**:
+There is **no HTTP god-token** and no privileged connection anywhere in the server — deliberately,
+and as of **M15 15.9 that is now literally true**: `ADMIN_TOKEN`, the last credential that behaved
+like one, has been removed. No bearer token grants cross-org access, and none can be minted: an API
+key is capped at its owner's rung inside a single org (D-15.9-4), and so is a session.
+
+Cross-org access therefore requires **direct database access with the owner URL** — never an HTTP
+credential:
 
 ```sh
 docker exec -it 420ai-archive psql -U 420ai -d 420ai
 ```
 
-The owner bypasses RLS, so this sees everything. Treat it as the audited emergency path it is: take
-a backup first (12.4d), and prefer a read-only query over a mutation.
+The owner role bypasses RLS, so this sees everything. Treat it as the audited emergency path it is:
+take a backup first (12.4d), and prefer a read-only query over a mutation.
+
+**Do not try to reconstruct an admin bearer as a shortcut.** If you are locked out of the UI, the
+supported recovery is to set `ADMIN_PASSWORD` in `.env` and restart — the boot seed re-hashes it onto
+the `ADMIN_EMAIL` user (`server.ts`) — then log in and mint a key. Re-introducing a shared token
+would give back exactly the four properties 15.9 removed: un-attributable, un-revocable, un-expiring,
+always `owner`.
 
 ### Troubleshooting
 
@@ -681,7 +692,7 @@ curl.exe -s localhost:8420/v1/auth/sessions -H "Authorization: Bearer $TOKEN"
 # indistinguishable, so this is not an enumeration oracle); 400 if it is not a UUID.
 curl.exe -s -X DELETE localhost:8420/v1/auth/sessions/<id> -H "Authorization: Bearer $TOKEN"
 
-# end the current session        → 204 (204 for an ADMIN_TOKEN caller too: nothing to revoke)
+# end the current session        → 204 (204 for an API-KEY caller too: nothing to revoke)
 curl.exe -s -X POST localhost:8420/v1/auth/logout -H "Authorization: Bearer $TOKEN"
 
 # sign out EVERYWHERE, this device included → 200 {"revoked": n}
@@ -700,7 +711,9 @@ Revocation also happens automatically, at three triggers:
 snapshots on a timer, so a connect-time check alone would have kept streaming to a revoked — or
 removed — user indefinitely. It now re-checks the session every tick and tears the stream down with
 an `event: error` frame carrying `{"error":"session revoked"}`, within roughly one poll interval.
-`ADMIN_TOKEN` streams are exempt: that tier has no session row (D-M15-7 retires it in 15.9).
+API-KEY streams are **not** exempt: they carry no session row, so the tick re-checks the KEY
+instead (`isApiKeyLive`) and terminates the stream with `api key revoked`. M15 15.9 closed that gap —
+the old `ADMIN_TOKEN` exemption was safe only because that tier could not be revoked at all.
 
 `PATCH /v1/members/:userId` (a role change) deliberately does **not** revoke: `role` is re-resolved
 from `memberships` on every request, so a demotion is already live on the target's next call.
@@ -746,12 +759,12 @@ looking for it in `.env.example`.
 
 ### Troubleshooting
 
-| Symptom                                                          | Cause                                                                                                                                                                                                                                                                                            |
-| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Everyone was signed out after a deploy                           | Expected once, immediately after `0018`. Pre-0018 tokens carry no `sid` and are rejected (D-15.6-5).                                                                                                                                                                                             |
-| The dashboard renders but every panel errors                     | The D-15.6-4 residual: the cookie's MAC is still valid, its session row is not. Log out and back in; the cookie expires on its own within 7 days.                                                                                                                                                |
-| `DELETE /v1/auth/sessions/:id` returns 404 for an id you can see | It belongs to another user. The route collapses "unknown" and "not yours" so it cannot become an enumeration oracle.                                                                                                                                                                             |
-| An `ADMIN_TOKEN` caller's session list looks wrong               | The service token has no session row of its own, so nothing is flagged `current`. Any rows listed are the bootstrap admin USER's own browser logins — empty unless that human has also used `/v1/auth/login`. Its `logout` is a no-op 204 and it keeps working until D-M15-7 retires it in 15.9. |
+| Symptom                                                          | Cause                                                                                                                                                                                                                                                                                                                |
+| ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Everyone was signed out after a deploy                           | Expected once, immediately after `0018`. Pre-0018 tokens carry no `sid` and are rejected (D-15.6-5).                                                                                                                                                                                                                 |
+| The dashboard renders but every panel errors                     | The D-15.6-4 residual: the cookie's MAC is still valid, its session row is not. Log out and back in; the cookie expires on its own within 7 days.                                                                                                                                                                    |
+| `DELETE /v1/auth/sessions/:id` returns 404 for an id you can see | It belongs to another user. The route collapses "unknown" and "not yours" so it cannot become an enumeration oracle.                                                                                                                                                                                                 |
+| An API-KEY caller's session list looks wrong                     | A key has no session row of its own (D-15.9-5), so nothing is flagged `current`. Any rows listed are the key OWNER's own browser logins — empty unless that human has also used `/v1/auth/login`. Its `logout` is a no-op 204 and deliberately does NOT revoke the key; use `DELETE /v1/auth/api-keys/:id` for that. |
 
 ### Session rows are never purged (known residual, deliberate for 15.6)
 
@@ -946,8 +959,11 @@ Three properties worth knowing before a support ticket arrives:
   takes, so a reset mid-flow voids any challenge in flight. The answer is a **generic 401** — the
   same wording a wrong code gets — so it cannot be used to probe whether an account is live.
 
-The `ADMIN_TOKEN` service credential is **never** MFA-gated (D-15.8-15): it has no user session, and
-D-M15-7 retires it in 15.9.
+An **API key** is never MFA-gated (D-15.9-5, inheriting D-15.8-15's reasoning). It has no user session
+to challenge, and it can only exist because an already-authenticated — and, if enrolled, already
+MFA'd — session minted it. Re-challenging on every machine request would make the tier unusable for
+exactly the headless clients it exists for, while adding nothing: the second factor was already
+presented, at mint time.
 
 ### Losing the second factor
 
@@ -1015,3 +1031,113 @@ user's password and SSO link are untouched, and login reverts to minting a sessi
 **silently downgrades every enrolled account to a single factor**, with no signal to the user that
 their second factor stopped being asked for. Rolling forward again does **not** restore the secrets:
 each user must re-enrol and save a new set of recovery codes.
+
+## 15.9 — API keys (and the retirement of `ADMIN_TOKEN`)
+
+M15 15.9 (D-M15-7) adds a **third credential tier** — named, hashed, revocable, per-user **API
+keys** — and **removes `ADMIN_TOKEN`**, which authenticates nothing as of this slice.
+
+### Why the shared token went
+
+`ADMIN_TOKEN` had four properties, all bad, and each one is something a key fixes:
+
+| Property                                                                      | What a key does instead                                             |
+| ----------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| **Un-attributable** — every holder resolved to the same bootstrap admin       | Resolves to a real person; every machine write is traceable to them |
+| **Un-revocable** — revoking meant editing env + restarting, for _all_ clients | `DELETE /v1/auth/api-keys/:id` revokes one key, immediately         |
+| **Un-expiring**                                                               | Optional `expiresInDays`; `NULL` = never, chosen per key            |
+| **Always `owner`** — the reports script held the whole deployment             | Capped at the minter's rung, and re-capped on every request         |
+
+### Issuing a key
+
+Minting requires **re-authentication** (D-15.9-6) — a long-lived credential minted from a stolen
+cookie outlives the session it came from. Listing and revoking do **not**: revocation must never be
+harder than minting.
+
+```sh
+# Mint (over a logged-in session). PowerShell: use curl.exe and a file-based body.
+curl -s -X POST "$INGEST_URL/v1/auth/api-keys" \
+  -H "authorization: Bearer $SESSION" -H "content-type: application/json" \
+  --data-binary "@body.json"
+# body.json: {"name":"desktop","role":"member","currentPassword":"..."}
+# → 201 {"apiKey":{...},"token":"k420_..."}   ← the ONLY time the token ever appears
+
+# List (never returns the token or its hash)
+curl -s "$INGEST_URL/v1/auth/api-keys" -H "authorization: Bearer $SESSION"
+
+# Revoke one
+curl -s -X DELETE "$INGEST_URL/v1/auth/api-keys/<id>" -H "authorization: Bearer $SESSION"
+```
+
+**The plaintext is shown exactly once.** Only its SHA-256 is stored (D-15.9-2), so a lost key is
+re-minted, never recovered. Copy it straight into its client.
+
+**Grant the lowest rung that works.** `role` is optional; omitting it means "inherit my role", which
+is what `ADMIN_TOKEN` effectively did. The desktop app's monitor panel needs only `viewer`, and
+`reports:generate` needs only `member`. You may never mint above your own rung (403).
+
+### The effective role is re-derived on every request
+
+A key's rung is the **lower** of its own `role` and its owner's **current** membership role
+(D-15.9-4) — not a mint-time snapshot. So **demoting someone immediately demotes every key they
+issued**, on the next request, with no rotation. Removing them from the org revokes their keys
+outright, in the same transaction as their sessions (D-15.9-9).
+
+A **password change deliberately does not** revoke keys: a key is not derived from the password, and
+breaking every machine client on a routine rotation would be worse than the threat it addresses. If
+you are rotating because the password _leaked_, revoke the keys explicitly as well.
+
+### Where keys are used
+
+| Client                        | Where it goes                                                     |
+| ----------------------------- | ----------------------------------------------------------------- |
+| Desktop app                   | Settings → **API key** (stored in the OS keychain, never on disk) |
+| `npm run reports:generate`    | `API_KEY` in the environment (see `.env.example`)                 |
+| `collector projects`          | `--token <apiKey>`                                                |
+| Catalog signing / smoke tests | `API_KEY` (see `scripts/CATALOG-SIGNING.md`)                      |
+
+### Upgrading a deployment
+
+1. Ensure `ADMIN_EMAIL` + `ADMIN_PASSWORD` are set and restart — this is now the whole first-run
+   bootstrap. (`ADMIN_TOKEN` never seeded anything; it only authenticated.)
+2. Log in, mint one key **per machine client**, at the lowest rung that works.
+3. Paste each into its client (desktop Settings, `API_KEY`, …).
+4. Delete `ADMIN_TOKEN` from `.env`. Nothing reads it; leaving it is inert but misleading.
+
+Any client still presenting the old token now gets a **401**. That is the intended outcome, and it is
+pinned by a test (`auth.int.test.ts`).
+
+### Revocation reaches an open stream
+
+Revoking a key terminates an **already-open** `GET /v1/monitor/stream` within one tick, exactly as
+15.6 made session revocation do. The stream re-probes the key every tick (`isApiKeyLive`) and closes
+with `event: error` / `api key revoked`. The probe deliberately does **not** stamp `last_used_at` —
+that would be a write per tick per connected client.
+
+### `last_used_at`
+
+Stamped fire-and-forget, at most once per `API_KEY_TOUCH_THROTTLE_MS` (default 60 s) per key. It
+answers "is this key still in use?" to the minute, which is what a revocation decision needs, without
+putting a write on every authenticated read. A key with an old-or-null `last_used_at` is the first
+thing to revoke.
+
+### Troubleshooting
+
+| Symptom                                                             | Cause / fix                                                                                                                                                                     |
+| ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Every client 401s after upgrading                                   | They are still presenting `ADMIN_TOKEN`, which was removed in 15.9. Mint keys (above).                                                                                          |
+| `POST /v1/auth/api-keys` → 401 `reason: password_required`          | Minting re-proves the current password (D-15.9-6). It was wrong or absent.                                                                                                      |
+| `POST /v1/auth/api-keys` → 401 `reason: reauth_required`            | An SSO-only account whose session is older than 15 minutes. Sign out, sign in, mint straight away.                                                                              |
+| `POST /v1/auth/api-keys` → 403 `cannot grant a role above your own` | You asked for a rung above your own. Mint at or below it.                                                                                                                       |
+| A key that worked yesterday is now a `viewer`                       | Its owner was demoted. The effective role is a `min` re-derived per request (D-15.9-4) — this is working as designed.                                                           |
+| A key 401s and you did not revoke it                                | Its owner was removed from the org (which revokes their keys, D-15.9-9), or it expired. The three reasons collapse into one 401 on purpose, so a guessed value reveals nothing. |
+| `DELETE /v1/auth/api-keys/:id` → 404 for a key you can see          | It is not yours. 404 rather than 403 so the route is not an enumeration oracle.                                                                                                 |
+| The desktop panel says "API key not configured"                     | The keychain holds no `apiKey`. An upgraded install's old `adminToken` is dropped on load by design — paste a new key into Settings.                                            |
+
+### Rolling back migration 0021
+
+The down-migration **drops `api_keys`**, which **revokes every key at once**: the desktop app and
+every scheduled script start returning 401 immediately. Rolling forward again does **not** restore
+them — only SHA-256 hashes were ever stored — so each key must be re-minted and re-installed. Roll
+the _code_ back with the schema: a post-15.9 server with no `api_keys` table has no working machine
+credential at all.

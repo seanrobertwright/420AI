@@ -298,6 +298,71 @@ export const ssoIdentities = pgTable(
   ],
 );
 
+/**
+ * M15 15.9 — a named, hashed, revocable, per-user API KEY (D-M15-7). The third credential tier,
+ * and the one that RETIRES `ADMIN_TOKEN`: a shared, un-attributable, un-revocable, un-expiring
+ * god-token becomes one row per machine client, minted by a real human and capped at that human's
+ * rung.
+ *
+ * An IDENTITY table: no `org_id`, and therefore NO RLS at all, for the same reason
+ * `users`/`memberships`/`password_reset_tokens`/`sessions`/`sso_identities`/`totp_credentials`
+ * carry none (D-15.3-4 / D-15.5-1 / D-15.6-3 / D-15.7-3 / D-15.8-13 / D-15.9-1). It is read inside
+ * `resolvePrincipal` — the one moment before any org context exists, because resolving this row is
+ * part of what establishes it. A strict policy here would read zero rows and EVERY API key would
+ * silently 401.
+ *
+ * WHY NOT an `org_id` like `ingest_tokens`, the other machine credential? `ingest_tokens` derives
+ * its org from a MACHINE, which is already an org-owned row. A key derives everything from its
+ * USER. Giving it an `org_id` would create a second, independently-mutable answer to "which org is
+ * this?" that could disagree with the membership — and the membership is the one
+ * `findPrincipalByEmail` reads. One source of truth.
+ *
+ * Column by column, because each one is a decision:
+ *
+ *   - `token_hash` is SHA-256 via `hashToken`, NOT encrypted and NOT scrypt (D-15.9-2), matching
+ *     `ingest_tokens.token_hash` / `invites.token_hash` / `mfa_recovery_codes.code_hash`. The token
+ *     is machine-generated `randomBytes(32)`, so there is no dictionary to defend against, and the
+ *     value is only ever COMPARED, never read back. `.unique()` so the hash lookup is one indexed
+ *     probe, mirroring `password_reset_tokens`. The plaintext is returned EXACTLY ONCE, from the
+ *     mint response, and is unrecoverable thereafter.
+ *   - `role` NULLABLE means "inherit the owner's membership role exactly" — which is what
+ *     `ADMIN_TOKEN` effectively does today, so the desktop app's migration is behaviour-preserving.
+ *     When set, the EFFECTIVE role is the LOWER of (this, the owner's CURRENT membership role),
+ *     re-derived on every request (D-15.9-4). A mint-time-only cap would freeze privilege at
+ *     issuance: demote someone and their key keeps the old rung until somebody rotates it.
+ *     TEXT with no CHECK, matching how `memberships.role` models a closed set; a row holding
+ *     something outside `ROLES` is REJECTED at auth (401), never clamped.
+ *   - `expires_at` NULLABLE means NEVER EXPIRES (D-15.9-8). Compared against the APP clock, matching
+ *     `findLiveSession`. The predicate must therefore be `or(isNull(...), gt(...))` — a bare `gt`
+ *     silently makes every never-expiring key invalid, which presents as "API keys don't work".
+ *   - `last_used_at` EXISTS HERE and deliberately does NOT exist on `sessions` (see that table's
+ *     comment). The reasoning there — touching it puts a WRITE on every authenticated read — is not
+ *     weaker here; it is why the write is THROTTLED IN PROCESS (`API_KEY_TOUCH_THROTTLE_MS`,
+ *     mirroring `app.reconcileLastRunAt`) and fire-and-forget. Without the column, "is this key
+ *     still in use?" is unanswerable and every revocation is a guess.
+ *   - `revoked_at` rather than a DELETE, matching `sessions`: a revoked key stays listable and the
+ *     `IS NULL` predicate makes `revokeAllApiKeys` idempotent by construction.
+ */
+export const apiKeys = pgTable(
+  "api_keys",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
+    // Free-text, truncated by the route — it exists so a human can recognise a key in the list
+    // ("desktop", "nightly reports"), never for a security decision.
+    name: text("name").notNull(),
+    tokenHash: text("token_hash").notNull().unique(),
+    role: text("role"),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("api_keys_by_user").on(t.userId)],
+);
+
 export const ingestTokens = pgTable(
   "ingest_tokens",
   {

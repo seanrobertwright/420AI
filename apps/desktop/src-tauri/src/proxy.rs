@@ -5,14 +5,19 @@
 //! the bearer added here. This mirrors the dashboard's `app/api/monitor/route.ts`
 //! proxy, with Rust as the token-holder instead of the Next server.
 //!
-//! Token + base come from the SERVER-CONFIG KEYCHAIN (Slice 4) — `adminToken` /
-//! `ingestUrl` — falling back to PROCESS ENV (`ADMIN_TOKEN` / `INGEST_URL`) when the
+//! Token + base come from the SERVER-CONFIG KEYCHAIN (Slice 4) — `apiKey` /
+//! `ingestUrl` — falling back to PROCESS ENV (`API_KEY` / `INGEST_URL`) when the
 //! keychain holds no server config, so a headless/dev run behaves exactly as before
 //! (mirrors the dashboard's `apps/dashboard/src/lib/ingest.ts` env path). `/v1/monitor`
-//! is admin-gated, so the saved per-machine ingest credentials would 401 — the admin
-//! token is the only correct source. If neither the keychain nor the env supplies a
-//! token the command returns `Err`, and the panel degrades to local-status-only. The
-//! token is NEVER logged and NEVER returned to the webview.
+//! is principal-gated at `viewer`, so the saved per-machine INGEST credentials would 401 —
+//! they authenticate a machine, not a person. If neither the keychain nor the env supplies a
+//! key the command returns `Err`, and the panel degrades to local-status-only. The
+//! key is NEVER logged and NEVER returned to the webview.
+//!
+//! M15 15.9 (D-M15-7) replaced `ADMIN_TOKEN` here with a per-user API KEY. The practical
+//! difference for this app: the credential it holds is now attributable to a person, capped at
+//! that person's rung, and revocable ON ITS OWN — so a stolen laptop no longer means rotating a
+//! secret every other client shares. A `viewer` key is sufficient for this panel.
 
 use std::time::Duration;
 
@@ -24,18 +29,28 @@ fn monitor_url(base: &str) -> String {
     format!("{}/v1/monitor", base.trim_end_matches('/'))
 }
 
-/// Resolve the admin token + ingest base, preferring the server-config keychain
+/// Resolve the API-key bearer + ingest base, preferring the server-config keychain
 /// (Slice 4) and falling back to process env (headless/dev). An empty keychain string
-/// is treated as unset (so we never send an empty bearer / a blank base). Returns
-/// `Err` only when NEITHER source supplies a token.
+/// is treated as unset (so we never send an empty bearer / a blank base) — the Rust
+/// equivalent of the `||`-not-`??` rule the JS side follows for the same reason.
+/// Returns `Err` only when NEITHER source supplies a key.
+///
+/// M15 15.9 (D-M15-7) — this reads `api_key` / `API_KEY`, and there is deliberately NO fallback to
+/// `admin_token` / `ADMIN_TOKEN`. That fallback was correct while both credentials worked; the
+/// server now accepts no `ADMIN_TOKEN` at all, so falling back to one would replace this
+/// actionable message with an opaque 401 in the Sync & Health panel.
 fn monitor_credentials() -> Result<(String, String), String> {
     let cfg = crate::keychain::load_server();
     let token = cfg
         .as_ref()
-        .map(|c| c.admin_token.trim().to_string())
+        .map(|c| c.api_key.trim().to_string())
         .filter(|t| !t.is_empty())
-        .or_else(|| std::env::var("ADMIN_TOKEN").ok().filter(|t| !t.trim().is_empty()))
-        .ok_or_else(|| "admin token not configured".to_string())?;
+        .or_else(|| std::env::var("API_KEY").ok().filter(|t| !t.trim().is_empty()))
+        .ok_or_else(|| {
+            "API key not configured — mint one in Settings → API keys (ADMIN_TOKEN was retired in \
+             M15 15.9)"
+                .to_string()
+        })?;
     let base = cfg
         .as_ref()
         .map(|c| c.ingest_url.trim().to_string())

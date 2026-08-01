@@ -70,12 +70,13 @@ npx tsx scripts/sign-catalog.ts catalog.json --key .secrets/catalog-private-key.
 
 ```bash
 curl -X POST "$INGEST_URL/v1/catalog" \
-  -H "authorization: Bearer $ADMIN_TOKEN" -H "content-type: application/json" \
+  -H "authorization: Bearer $API_KEY" -H "content-type: application/json" \
   -d @signed.json
 # → 200 { "id": "...", "status": "pending", ... }   (a bad/tampered signature → 400)
 ```
 
-(`$INGEST_URL` defaults to `http://localhost:8420`; `$ADMIN_TOKEN` is the server's admin token.)
+(`$INGEST_URL` defaults to `http://localhost:8420`; `$API_KEY` is an API key at `admin` or
+above — mint one under Settings → API keys. `ADMIN_TOKEN` was retired in M15 15.9.)
 
 > **Or use the dashboard (M14 14.2):** the **Catalog** page has an upload form — paste or pick
 > `signed.json` and it submits through the same-origin proxy (no raw admin token needed). Signing
@@ -87,11 +88,11 @@ While anything is pending, `GET /v1/catalog` lists it and `GET /v1/monitor` show
 ### 4. Approve (or reject) → it goes `active`
 
 ```bash
-curl -X POST "$INGEST_URL/v1/catalog/<id>/approve" -H "authorization: Bearer $ADMIN_TOKEN"
+curl -X POST "$INGEST_URL/v1/catalog/<id>/approve" -H "authorization: Bearer $API_KEY"
 # → 200 { "status": "active" }   (the prior active catalog is atomically superseded; the §20 alert clears)
 
 # or, to discard it:
-curl -X POST "$INGEST_URL/v1/catalog/<id>/reject"  -H "authorization: Bearer $ADMIN_TOKEN"
+curl -X POST "$INGEST_URL/v1/catalog/<id>/reject"  -H "authorization: Bearer $API_KEY"
 ```
 
 From approval onward, the server **re-prices new ingests** under the active catalog and stamps their
@@ -179,9 +180,9 @@ npx tsx scripts/sign-catalog.ts --connector connector-catalog.json --key .secret
 ### 3. Upload → approve (admin), then the collector pulls it
 
 ```bash
-curl -X POST "$INGEST_URL/v1/connector-catalog" -H "authorization: Bearer $ADMIN_TOKEN" -H "content-type: application/json" -d @signed.json
+curl -X POST "$INGEST_URL/v1/connector-catalog" -H "authorization: Bearer $API_KEY" -H "content-type: application/json" -d @signed.json
 # → 200 pending   (bad/tampered signature → 400)
-curl -X POST "$INGEST_URL/v1/connector-catalog/<id>/approve" -H "authorization: Bearer $ADMIN_TOKEN"
+curl -X POST "$INGEST_URL/v1/connector-catalog/<id>/approve" -H "authorization: Bearer $API_KEY"
 # → 200 active   (prior active atomically superseded)
 ```
 
