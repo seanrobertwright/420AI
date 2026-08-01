@@ -8,11 +8,13 @@ import {
   MemberError,
   PasswordResetError,
   SsoIdentityError,
+  MfaError,
 } from "@420ai/db";
 import { createMetrics, registerMetricsHook } from "./metrics.js";
 import authPlugin from "./plugins/auth.js";
 import authRoutes from "./routes/auth.js";
 import ssoRoutes from "./routes/sso.js";
+import mfaRoutes from "./routes/mfa.js";
 import healthRoutes from "./routes/health.js";
 import metricsRoutes from "./routes/metrics.js";
 import pairingCodeRoutes from "./routes/pairing-codes.js";
@@ -209,6 +211,7 @@ export function buildApp(opts: BuildAppOptions): FastifyInstance {
   app.register(authPlugin);
   app.register(authRoutes);
   app.register(ssoRoutes);
+  app.register(mfaRoutes);
   app.register(healthRoutes);
   app.register(pairingCodeRoutes);
   app.register(memberRoutes);
@@ -253,6 +256,17 @@ export function buildApp(opts: BuildAppOptions): FastifyInstance {
     // `last_credential`: unlinking would leave the account unopenable), so both are 409 and the
     // typed `reason` rides along for the dashboard's copy.
     if (err instanceof SsoIdentityError) {
+      return reply.code(409).send({ error: err.message, reason: err.reason });
+    }
+    // M15 15.8 — a second-factor mutation refused by the repository. Its one reason
+    // (`already_enrolled`) is a CONFLICT with state that already exists, on exactly the same terms as
+    // the SSO branch above, so this is a 409 with no other arm.
+    //
+    // NOTE what is deliberately NOT handled here: lockouts. `routes/mfa.ts` answers those itself
+    // (429 + `Retry-After`), because it holds the `lockedUntil` value and an error handler does not.
+    // An earlier version of this branch mapped a `locked` reason that nothing ever constructed —
+    // unreachable code whose comment described behaviour the system could not produce.
+    if (err instanceof MfaError) {
       return reply.code(409).send({ error: err.message, reason: err.reason });
     }
     // Provider failures (non-200/timeout/parse → 502; not-configured → 503). Placed

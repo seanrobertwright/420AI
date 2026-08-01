@@ -13,6 +13,9 @@ export {
   sessions,
   // M15 15.7: a linked external identity (D-M15-5). Identity-owned — no org_id, no RLS.
   ssoIdentities,
+  // M15 15.8: TOTP credentials + recovery codes (D-M15-5). Identity-owned — no org_id, no RLS.
+  totpCredentials,
+  mfaRecoveryCodes,
   ingestTokens,
   rawSourceRecords,
   events,
@@ -79,6 +82,10 @@ export {
   // M15 15.7: the inverse of findUserIdByEmail — an SSO login resolved by (provider, subject)
   // knows only a userId, and the session token is signed with the email.
   findUserEmailById,
+  // M15 15.8: the id-keyed sibling of findAdminCredential. An MFA challenge names a userId (the one
+  // identifier that cannot change between the two login steps), and the verify path re-reads the
+  // credential under the SAME `FOR SHARE` lock the 15.6 login takes.
+  findCredentialById,
   updatePasswordHash,
 } from "./repositories/users.js";
 // M15 15.5 organization invitations (D-M15-5). Same lifecycle as `pairing_codes`; unlike it, an
@@ -104,6 +111,9 @@ export {
 export {
   createSession,
   findLiveSession,
+  // M15 15.8: the age of the CURRENT session, for the one re-auth gate that cannot ask for a
+  // password (an SSO-only account enrolling MFA).
+  findLiveSessionCreatedAt,
   listSessions,
   revokeAllSessions,
   revokeSession,
@@ -118,6 +128,22 @@ export {
   SsoIdentityError,
 } from "./repositories/sso-identities.js";
 export type { SsoIdentityRow } from "./repositories/sso-identities.js";
+// M15 15.8 MFA: a TOTP credential (secret ENCRYPTED at rest) + single-use recovery codes (HASHED).
+// Both tables are identity-owned — no org_id, no RLS (D-15.8-13) — so nothing here takes an `orgId`;
+// `userId` is the second parameter everywhere.
+export {
+  findTotpCredential,
+  upsertUnconfirmedTotp,
+  confirmTotp,
+  recordTotpUse,
+  recordMfaFailure,
+  clearMfa,
+  replaceRecoveryCodes,
+  redeemRecoveryCode,
+  countUnusedRecoveryCodes,
+  MfaError,
+} from "./repositories/mfa.js";
+export type { TotpCredential } from "./repositories/mfa.js";
 // M15 15.5 org member management. `memberships`/`users` carry NO RLS, so the explicit orgId
 // predicate in each of these is the ONLY tenancy boundary — there is no backstop behind it.
 export {

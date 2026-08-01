@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { formatDate } from "@/lib/format";
 import { SsoLinks } from "@/components/settings/sso-links";
+import { MfaCard } from "@/components/settings/mfa-card";
 
 interface Health {
   status: string;
@@ -79,6 +80,12 @@ export function SettingsView({
             existing Settings page rather than a new route. It renders NOTHING when no provider is
             configured, so a deployment without SSO sees exactly what it saw before. */}
         <SsoLinks />
+
+        {/* M15 15.8 — the two-factor enrolment surface. A client island beside <SsoLinks/>, for the
+            same reason: it mutates, and the existing Settings page is where a user looks for their
+            own credentials. It renders nothing until it knows the caller's status, so an enrolled
+            user never sees "not enabled" flash first. */}
+        <MfaCard />
 
         <Card>
           <CardHeader>

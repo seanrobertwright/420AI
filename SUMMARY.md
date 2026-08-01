@@ -242,8 +242,9 @@ through the deferral-audit + scope conversation that produced M12/M13/M14. Full 
   `ADMIN_TOKEN` retired to a bootstrap-only seed (D-M15-7). Slices: **15.0** ✅ Truth + RLS spike ·
   **15.1** ✅ Tenancy schema · **15.2** ✅ Request principal · **15.3** ✅ RLS enforcement · **15.4** ✅ RBAC ·
   **15.5** ✅ Identity core · **15.6** ✅ Sessions + revocation · **15.7** ✅ SSO (Google + GitHub) ·
-  **15.8** MFA · **15.9** API keys + retire `ADMIN_TOKEN` · **15.10** Team surfaces + audit table.
-  **15.0 gates 15.3**; 15.5 gates 15.7.
+  **15.8** ✅ MFA (TOTP + recovery codes) · **15.9** API keys + retire `ADMIN_TOKEN` ·
+  **15.10** Team surfaces + audit table.
+  **15.0 gates 15.3**; 15.5 gates 15.7; 15.6 gates 15.8.
 - **M16 — Cloud-hosted SaaS.** Multi-tenancy, managed archive, quotas/rate limits beyond 12.4,
   billing, hosted onboarding. _Genuinely depends on M15. Biggest architectural shift — local-first
   stays a first-class deployment mode._
@@ -611,8 +612,58 @@ enforced`, the sibling of `skipped ≠ passed`. Closes the Spike-6 hole: a cross
         become "what the provider actually received"; and the unlink guard's race is only visible
         at the **repository** layer with two hand-held transactions (CLAUDE.md's 15.5 corollary,
         applied rather than relearned), with the held connection released in a `finally`.
-  - [ ] **15.8** MFA ·
-        **15.9** API keys + retire `ADMIN_TOKEN` · **15.10** Team surfaces + audit table.
+  - [x] **15.8** MFA (TOTP + recovery codes) — DONE `2026-07-30` (PR #68). The last identity slice, and the
+        one that makes the other five paths mean something: after 15.5-15.7 there were five ways to
+        become authenticated and **all five terminated in a single-factor secret**, over an archive
+        holding decrypted transcripts for a whole org. A **zero-dependency** TOTP core
+        (`apps/ingest/src/mfa/totp.ts` — RFC 4226 HOTP + RFC 6238 TOTP + RFC 4648 base32, checked
+        against the RFCs' own published vectors) follows `password.ts`'s scrypt precedent and keeps
+        the `node:sea` sidecar build untouched (D-15.8-1). Two new **identity** tables —
+        `totp_credentials` (one row per user, secret **encrypted at rest**, D-15.8-6) and
+        `mfa_recovery_codes` (sha256-hashed, single-use, D-15.8-7) — with no `org_id` and no policy
+        (D-15.8-13), joining `NO_RLS_TABLES`; migration `0020`. Enrolment is **two-phase**
+        (D-15.8-10): `confirmed_at IS NULL` gates nothing, so an abandoned enrolment never locks
+        anyone out. THREE THINGS ARE THE SLICE. (1) Login splits into _authenticate now, mint later_,
+        which reopens the race 15.6 closed with a `FOR SHARE` lock held across scrypt — the new gap
+        spans a human reading a phone, and no lock reaches across it. The fix is a
+        **credential-version fingerprint** carried in the challenge and re-checked under THE SAME
+        lock (D-15.8-4), so a password reset mid-flow voids the challenge and a verify-first ordering
+        still has its session revoked; the 5-minute TTL is a bound, **not** the mechanism. (2) The
+        challenge is **stateless and domain-separated** (D-15.8-3), signed under a key _derived_ from
+        `SESSION_SECRET` — a challenge that verified as a session would be a total MFA bypass, so the
+        derived key makes it **unrepresentable** rather than merely unreached, asserted in both
+        directions against the real `session.ts`. (3) **The SSO callback goes through the same gate**
+        (D-15.8-5): one shared `mintSessionOrChallenge`, because "enable MFA unless the attacker uses
+        the Google button" is not MFA. Replay is refused by a monotonic `last_step` (RFC 6238 §5.2 /
+        D-15.8-8, `integer` not `bigint` — `int8` arrives as a JS **string**); attempts are throttled
+        by a per-user atomic increment (RFC 4226 §7.3 / D-15.8-9), because a stateless challenge has
+        nowhere to count and per-IP limits do not bound an attacker who already holds the password.
+        `reencryptAll` gains a fourth pass, or its "every encrypted row under the active key" promise
+        would be false. Two **two-role** suites (23 HTTP + 15 repository); the HTTP suite's central
+        fact is asserted OUT OF BAND through the owner handle — **a login that reports `mfaRequired`
+        must have written no `sessions` row**, since a handler that returns the challenge AND mints a
+        session looks perfectly correct from the client. Two lessons re-learned by measurement rather
+        than memory: the obvious atomic-increment test — a bare `Promise.all` of two calls — **passed
+        against a deliberately broken read-then-write**, because unsynchronised calls on a pool
+        serialise on their own (CLAUDE.md 15.5's wrong-layer corollary, in a new costume); it needed a
+        held `FOR UPDATE` prelude to separate the two implementations deterministically. And the ±1
+        skew window plus a monotonic `last_step` means there is exactly ONE unspent step per 30-second
+        window, which is correct per the RFC and visible to users for ~30 s after enrolling —
+        documented in the operations guide rather than filed as a bug. The code review then found the
+        slice's own asymmetry, fixed before merge (**D-15.8-16**): `enroll` was session-gated and
+        nothing more, while `disable` demanded a live code on the reasoning that "a stolen session
+        cookie must not be able to switch the second factor OFF" — an argument that applies verbatim
+        to switching it ON and had simply not been made. Reproduced end to end: an attacker holding
+        only a cookie enrolled, `enroll/confirm`'s revoke-all signed the owner out, and **a full
+        password reset did not recover the account** (nothing on the reset path clears
+        `totp_credentials`), leaving operator DB access as the only way back. Enrolment now re-proves
+        the current password, or — for an SSO-only account, which has none — requires a session under
+        15 minutes old; the fix is deliberately NOT "make password reset clear MFA", which would let
+        mailbox access strip the factor and defeat the slice. **Deferred to 15.10, stated as
+        deferred:** QR rendering (D-15.8-14) and any org-level "require MFA" policy (D-15.8-2); there
+        is deliberately **no** admin "reset MFA for user X" endpoint, since it needs 15.5's full rank
+        ceiling-and-floor plus an audit record — break-glass is direct DB access (D-M15-7)
+  - [ ] **15.9** API keys + retire `ADMIN_TOKEN` · **15.10** Team surfaces + audit table.
 
 - [ ] **M16–M19 remain committed scope, unsequenced** (§3, PRD §25). Each still needs its own
       deferral-audit + scope conversation before it is executable.

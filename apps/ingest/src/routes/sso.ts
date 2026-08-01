@@ -3,6 +3,7 @@ import {
   acceptInvite,
   createUserWithoutPassword,
   ensurePersonalOrg,
+  findCredentialById,
   findInviteByToken,
   findUserEmailById,
   findUserIdByEmail,
@@ -15,7 +16,10 @@ import {
 import { ssoCallbackBodySchema, ssoStartBodySchema } from "../schemas.js";
 import { isSsoProviderId, type SsoProfile, type SsoProviderId } from "../sso/provider.js";
 import { createPkcePair, randomState } from "../sso/pkce.js";
-import { mintSession } from "./auth.js";
+// `mintSessionOrChallenge` and NOT `mintSession` directly, since M15 15.8 (D-15.8-5): it wraps
+// `mintSession` and stops one step short for an enrolled user, so this file has no reason to import
+// the inner function at all.
+import { mintSessionOrChallenge } from "./auth.js";
 import { authorized, resolvePrincipal } from "../auth.js";
 
 interface SsoStartBody {
@@ -182,6 +186,13 @@ async function resolveSsoLogin(
  * SSO adds NO new enforcement point. Once the policy admits a login it mints an ordinary 15.6
  * session through the shared `mintSession`, so revocation, expiry and `resolvePrincipal` all apply
  * unchanged (pinned by `sso.int.test.ts`'s revoke-all case).
+ *
+ * M15 15.8 — the callback now goes through `mintSessionOrChallenge` (D-15.8-5), so it also READS
+ * `totp_credentials`. The `org-scoping.test.ts` allow-list entry for this file is a claim about its
+ * DB access, and the claim STAYS TRUE — `totp_credentials` and `mfa_recovery_codes` are identity
+ * tables with no `org_id` and no policy (D-15.8-13), on exactly the terms `sso_identities` is — but
+ * the header says so rather than leaving the entry to quietly under-describe the file, which is the
+ * failure mode the removed `pairing-codes.ts` entry documents.
  */
 export default async function ssoRoutes(app: FastifyInstance): Promise<void> {
   /** Resolve `:provider` to a CONFIGURED provider, or undefined → the route answers 404. */
@@ -266,10 +277,27 @@ export default async function ssoRoutes(app: FastifyInstance): Promise<void> {
           .code(outcome.status)
           .send({ error: "sso login refused", reason: outcome.reason });
       }
+      // M15 15.8 (D-15.8-5) — THE SAME GATE AS PASSWORD LOGIN. An enrolled user's SSO login returns
+      // an MFA challenge, not a token. Without this, "enable MFA" would mean "enable MFA unless the
+      // attacker uses the Google button", and the linked identity is exactly what an attacker who
+      // owns the mailbox controls. `resolveSsoLogin` above is untouched — only what happens AFTER it
+      // admits the login changes.
+      //
+      // The password hash comes from a `findCredentialById` READ, never from `undefined`: an SSO-only
+      // user genuinely has `password_hash IS NULL` (`createUserWithoutPassword`), and `null` and
+      // `undefined` must not produce different `cv` fingerprints. A row that vanished between the
+      // policy decision and here fails closed rather than fingerprinting a guess.
+      const cred = await findCredentialById(app.db, outcome.userId);
+      if (!cred) {
+        return reply
+          .code(409)
+          .send({ error: "sso login refused", reason: "link_required" satisfies SsoRefusal });
+      }
       return reply.code(200).send(
-        await mintSession(app.db, request, app.sessionSecret, {
+        await mintSessionOrChallenge(app, app.db, request, {
           userId: outcome.userId,
           email: outcome.email,
+          passwordHash: cred.passwordHash,
         }),
       );
     },

@@ -89,6 +89,20 @@ export function LoginForm() {
         body: JSON.stringify({ email: email.trim(), password }),
       });
       if (res.ok) {
+        // M15 15.8 — an enrolled user's login is NOT complete: the proxy set a challenge cookie and
+        // no session cookie, so hand off to the second step instead of navigating into the app. The
+        // `next` param rides along so the round trip still lands where the middleware bounced from.
+        const body = await res
+          .json()
+          .then((b: { mfaRequired?: boolean }) => b)
+          .catch(() => ({}) as { mfaRequired?: boolean });
+        if (body.mfaRequired) {
+          // `router.push`, not `refresh`: there is no new session for the Server Components to see
+          // yet, and a refresh here would re-render the gated tree with no cookie.
+          const next = encodeURIComponent(safeNext(searchParams.get("next")));
+          router.push(`/login/mfa?next=${next}`);
+          return;
+        }
         // M15 15.7: the same-origin guard now lives in `lib/safe-next.ts`, shared with the SSO
         // callback. One definition — two call sites that must not drift apart.
         router.push(safeNext(searchParams.get("next")));

@@ -150,6 +150,14 @@ const NO_RLS_TABLES = [
   // list and in no other — it is not a tenant table, so the "all 17 tenant tables" count below
   // must stay 17, and every policy count here is derived, so adding it moves no number.
   "sso_identities",
+  // M15 15.8 (D-15.8-13): both keyed by `user_id`, no `org_id`. Read at the one moment before any
+  // org context exists — a second factor is presented BEFORE a session is minted, so there is
+  // nothing to scope by yet. They belong in THIS list and in no other: they are not tenant tables,
+  // so the "all 17 tenant tables" count below must stay 17, and because every policy count in this
+  // file is DERIVED from these list lengths, adding two entries moves no expected number. That is
+  // exactly the assertion 0020's missing policy block needs.
+  "totp_credentials",
+  "mfa_recovery_codes",
   "pricing_catalogs",
   "connector_catalogs",
   "ingest_auth_failures",

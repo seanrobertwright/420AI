@@ -8,6 +8,7 @@ import {
   createUserWithPassword,
   ensurePersonalOrg,
   findAdminCredential,
+  findTotpCredential,
   findInviteByToken,
   findUserIdByEmail,
   getOrgName,
@@ -27,6 +28,7 @@ import {
 } from "../schemas.js";
 import { hashPassword, verifyPassword } from "../password.js";
 import { signSession, SESSION_TTL_SECONDS } from "../session.js";
+import { credentialVersion, signChallenge } from "../mfa/challenge.js";
 import { resolvePrincipal, authorized, isUuid } from "../auth.js";
 
 interface LoginBody {
@@ -94,6 +96,56 @@ export async function mintSession(
   );
   const { token, exp } = signSession(email, sessionSecret, SESSION_TTL_SECONDS, sid);
   return { token, expiresAt: new Date(exp * 1000).toISOString() };
+}
+
+/**
+ * M15 15.8 — THE ONE PLACE a completed authentication becomes either a session or an MFA challenge.
+ *
+ * Both login paths call it — password login below, and the SSO callback in `routes/sso.ts` — so
+ * "an enrolled user gets asked for a second factor" cannot be true on one path and false on the
+ * other (D-15.8-5). That is not a tidiness argument: if MFA guarded only the password path, an
+ * attacker who compromises the linked Google account signs in with no second factor at all and the
+ * enrolment was theatre. One shared helper makes the two paths agree by construction rather than by
+ * two implementations that happen to match today.
+ *
+ * `passwordHash` is a REQUIRED parameter, not read from the database here, and that is the whole
+ * point: the caller must pass the value it read under its own `FOR SHARE` lock, so the `cv`
+ * fingerprint in the challenge describes the credential state the login actually authenticated
+ * against. Re-reading it here would put an unlocked read between the two and reopen the race
+ * (D-15.8-4 / GOTCHA-1). It is `string | null` and never `undefined` — an SSO-only user genuinely
+ * has a null hash (`createUserWithoutPassword`), and `null` and `undefined` must not produce
+ * different fingerprints.
+ *
+ * An UNCONFIRMED credential does not gate (D-15.8-10): a user who abandoned enrolment logs in
+ * exactly as before. This is the check that keeps that promise, and it is `confirmedAt`, never the
+ * mere existence of the row.
+ *
+ * `mintSession` stays exported and UNCHANGED; this wraps it. Changing its signature would ripple
+ * into `sso.ts` and both int suites for no gain, and the three paths that mint for a user being
+ * CREATED (invite-accept, signup, SSO signup) must keep calling it directly — a user who does not
+ * exist yet cannot have a second factor.
+ */
+export async function mintSessionOrChallenge(
+  app: FastifyInstance,
+  db: DbClient,
+  request: FastifyRequest,
+  { userId, email, passwordHash }: { userId: string; email: string; passwordHash: string | null },
+): Promise<
+  { token: string; expiresAt: string } | { mfaRequired: true; challenge: string; expiresAt: string }
+> {
+  const totp = await findTotpCredential(db, userId);
+  if (!totp?.confirmedAt) {
+    return mintSession(db, request, app.sessionSecret, { userId, email });
+  }
+  const { token, exp } = signChallenge(app.sessionSecret, {
+    userId,
+    credentialVersion: credentialVersion(app.sessionSecret, passwordHash),
+  });
+  return {
+    mfaRequired: true,
+    challenge: token,
+    expiresAt: new Date(exp * 1000).toISOString(),
+  };
 }
 
 /**
@@ -168,7 +220,17 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
         // carries the same `sub` that `findPrincipalByEmail` will look up on every later request.
         // M15 15.6: the row is created BEFORE the token is signed — a token can never name a `sid`
         // that does not exist, so `resolvePrincipal` failing closed on an unknown `sid` is safe.
-        return mintSession(tx, request, app.sessionSecret, { userId: cred.id, email: cred.email });
+        //
+        // M15 15.8: for an ENROLLED user this returns a short-lived MFA challenge instead of a
+        // session, and no `sessions` row is written at all. The lock and the transaction above are
+        // UNCHANGED — `cred.passwordHash` is passed through so the challenge's `cv` fingerprint is
+        // computed from the LOCKED read, which is what lets `POST /v1/auth/mfa/verify` prove nothing
+        // changed in between (D-15.8-4 / GOTCHA-1).
+        return mintSessionOrChallenge(app, tx, request, {
+          userId: cred.id,
+          email: cred.email,
+          passwordHash: cred.passwordHash,
+        });
       });
       if (outcome === "invalid") {
         return reply.code(401).send({ error: "invalid email or password" });
@@ -419,7 +481,17 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
   /** POST /v1/auth/password — change your OWN password. Session-gated; requires the current one. */
   app.post<{ Body: ChangePasswordBody }>(
     "/v1/auth/password",
-    { schema: { body: changePasswordBodySchema } },
+    {
+      schema: { body: changePasswordBodySchema },
+      // M15 15.8 — added late, and the gap it closes predates this slice. This route VERIFIES the
+      // current password, so without a limit an attacker holding a stolen session cookie can grind
+      // it here at one scrypt per request — a password-guessing oracle behind a session, which is
+      // exactly the credential a session alone should not yield. Every sibling that touches a
+      // password already carried this (login, signup, both reset routes, invite-accept); this one
+      // and 15.8's `POST /v1/auth/mfa/enroll` were the two outliers, found while reviewing the
+      // latter and fixed together rather than one at a time.
+      config: { rateLimit: app.rateLimitLogin },
+    },
     async (request, reply) => {
       const principal = await resolvePrincipal(app, request);
       if (!principal) {

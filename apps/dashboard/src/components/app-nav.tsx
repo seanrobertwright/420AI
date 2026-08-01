@@ -26,8 +26,21 @@ const LINKS: { href: string; label: string }[] = [
   { href: "/settings", label: "Settings" },
 ];
 
+/**
+ * The UNAUTHENTICATED surfaces, which render no nav and probe no identity.
+ *
+ * M15 15.8 — this became a LIST because `/login/mfa` was added and the two `pathname === "/login"`
+ * checks below silently did not cover it, so the second step of a login rendered the full app nav
+ * (Monitor, Settings, **Logout**) to a visitor with no session: every link bounced straight to
+ * `/login` and abandoned the challenge in flight. Caught by comparing screenshots of the two pages
+ * during the 15.8 walkthrough, not by a test — and it is the SAME exact-equality shape as the
+ * middleware's `PUBLIC` array, which is why both are lists now rather than string comparisons.
+ */
+const UNAUTHENTICATED_PATHS = ["/login", "/login/mfa"];
+
 export function AppNav() {
   const pathname = usePathname();
+  const unauthenticated = UNAUTHENTICATED_PATHS.includes(pathname);
   // M14 14.3: probe the admin identity through the same-origin proxy (the browser never holds the
   // token — /api/auth/me adds the bearer server-side). Hooks stay ABOVE the /login early-return
   // below (Rules of Hooks); the fetch guards on `pathname` instead.
@@ -35,7 +48,7 @@ export function AppNav() {
   useEffect(() => {
     // One-shot: skip the login surface, and once the (session-invariant) email is known do NOT
     // re-probe on every client navigation — the re-run when `email` flips null→value is a no-op.
-    if (pathname === "/login" || email) return;
+    if (unauthenticated || email) return;
     let alive = true;
     fetch("/api/auth/me")
       .then((r) => (r.ok ? r.json() : null))
@@ -46,10 +59,10 @@ export function AppNav() {
     return () => {
       alive = false;
     };
-  }, [pathname, email]);
+  }, [unauthenticated, email]);
 
-  // The login page is its own standalone surface — no nav (and no logout to show while logged out).
-  if (pathname === "/login") return null;
+  // The login surfaces are standalone — no nav, and no logout to show while logged out.
+  if (unauthenticated) return null;
 
   // M12 12.3 logout: POST the same-origin logout route (clears the httpOnly cookie), then a hard
   // nav to /login so the middleware re-gates with no session.
