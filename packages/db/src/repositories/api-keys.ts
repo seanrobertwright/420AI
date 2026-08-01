@@ -1,6 +1,6 @@
-import { and, desc, eq, gt, isNull, or } from "drizzle-orm";
-import type { DbClient } from "../client.js";
-import { apiKeys } from "../schema.js";
+import { and, desc, eq, gt, isNull, or, sql } from "drizzle-orm";
+import type { DbClient, Tx } from "../client.js";
+import { apiKeys, users } from "../schema.js";
 import { API_KEY_PREFIX, generateToken, hashToken } from "../tokens.js";
 
 /**
@@ -80,6 +80,110 @@ export async function createApiKey(
   // No `!`: a single-row `INSERT ... RETURNING` always yields one row, and drizzle types it
   // non-optional here. An assertion would read as a suppressed check that is not being made.
   return { key, token };
+}
+
+/** Why a mint was refused. Both map to 409; the route sends the discriminant as `reason`. */
+export type MintRefusal = "at_capacity" | "duplicate_name";
+
+/**
+ * Mint a key with BOTH guards applied — the per-user cap and the per-user live-name uniqueness.
+ * The route calls this; `createApiKey` above stays the unguarded primitive that tests and the
+ * bootstrap seeder use, so neither guard has to be bypassed with a flag.
+ *
+ * TYPED `Tx`, NOT `DbClient`, so "this runs in a transaction" is unrepresentable-if-false rather
+ * than merely documented — the same discipline `consumeSecondFactor` uses. The count and the insert
+ * MUST commit together or the cap is advisory.
+ *
+ * THE TWO GUARDS USE TWO DIFFERENT MECHANISMS, and each is named because "it's in a transaction"
+ * is not one (CLAUDE.md 15.5):
+ *
+ *   CAP — an exclusive `SELECT … FOR UPDATE` on the OWNER'S `users` ROW. `SELECT count(*)` takes no
+ *   locks, so under READ COMMITTED two concurrent mints would both read `n` and both insert,
+ *   landing at `n + 2` over a cap of `n + 1`. Locking the *existing key rows* would not help — the
+ *   race is two INSERTs, and an INSERT is invisible to a lock on rows that already exist. Locking
+ *   the single `users` row is what serialises them: the second mint blocks until the first commits,
+ *   then counts a state that already includes it. This is the revoke-vs-INSERT gap `revokeAllApiKeys`
+ *   documents as NOT closed, closed here at the only end where it can be.
+ *
+ *   NAME — the `api_keys_user_live_name` PARTIAL UNIQUE INDEX (migration 0022). No read-then-write
+ *   guard at all: the index refuses the second inserter at the storage layer. The `23505` is caught
+ *   below and converted, because a unique violation escaping as a 500 would be a correctness bug
+ *   wearing a server error.
+ *
+ * The name guard is deliberately NOT also done with a SELECT. Two mechanisms for one invariant is
+ * how they drift; the index is the one that cannot be raced.
+ */
+export async function mintApiKey(
+  tx: Tx,
+  userId: string,
+  opts: { name: string; role?: string | null; expiresAt?: Date | null },
+  maxPerUser: number,
+): Promise<{ ok: true; key: ApiKeyRow; token: string } | { ok: false; reason: MintRefusal }> {
+  // The serialisation point. Discard the result — we want the LOCK, not the row.
+  await tx.select({ id: users.id }).from(users).where(eq(users.id, userId)).for("update").limit(1);
+
+  const live = await countLiveApiKeys(tx, userId);
+  if (live >= maxPerUser) return { ok: false, reason: "at_capacity" };
+
+  try {
+    const { key, token } = await createApiKey(tx, userId, opts);
+    return { ok: true, key, token };
+  } catch (err) {
+    // 23505 = unique_violation. The ONLY unique constraints on this table are `token_hash` (a
+    // 32-byte random collision — astronomically improbable, and a retry would be the wrong answer
+    // anyway) and `api_keys_user_live_name`. Narrowed on the constraint NAME rather than on the
+    // code alone, so a future constraint cannot be silently reported as a duplicate name.
+    if (isUniqueViolation(err, "api_keys_user_live_name")) {
+      return { ok: false, reason: "duplicate_name" };
+    }
+    throw err;
+  }
+}
+
+/**
+ * True when `err` is a Postgres unique violation (23505) on `constraint`.
+ *
+ * WALKS THE `cause` CHAIN, and that is not defensive padding — drizzle wraps driver errors in a
+ * `DrizzleQueryError` whose `cause` is the pg error carrying `code`/`constraint`. A check on the
+ * top-level object alone silently returns false, the 23505 escapes `mintApiKey`, and a duplicate
+ * name surfaces as a **500** instead of a 409. Measured: the concurrency/duplicate test in
+ * `api-keys.int.test.ts` failed exactly this way before the chain walk was added.
+ *
+ * Bounded to 5 hops so a self-referential `cause` cannot spin.
+ */
+function isUniqueViolation(err: unknown, constraint: string): boolean {
+  let current: unknown = err;
+  for (let depth = 0; depth < 5 && typeof current === "object" && current !== null; depth++) {
+    const e = current as { code?: unknown; constraint?: unknown; cause?: unknown };
+    if (e.code === "23505" && e.constraint === constraint) return true;
+    current = e.cause;
+  }
+  return false;
+}
+
+/**
+ * How many LIVE keys this user holds — the cap's input. Live means the same thing it means
+ * everywhere else in this file (not revoked, not expired), so an expired key does not consume a
+ * slot the owner cannot see in `listApiKeys`.
+ *
+ * `count(*)::int`, not `numeric`: node-postgres returns `numeric` as a STRING (CLAUDE.md), which
+ * would make `live >= maxPerUser` a string/number comparison that is wrong above single digits —
+ * `"10" >= 10` is true but `"9" >= 10` is also... coerced correctly, whereas a bare `count(*)`
+ * returning `int8` arrives as a string and `"9" >= 10` is false while `"10" >= 10` is true only by
+ * coercion. Casting removes the whole class.
+ */
+export async function countLiveApiKeys(db: DbClient, userId: string): Promise<number> {
+  const [row] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(apiKeys)
+    .where(
+      and(
+        eq(apiKeys.userId, userId),
+        isNull(apiKeys.revokedAt),
+        or(isNull(apiKeys.expiresAt), gt(apiKeys.expiresAt, new Date())),
+      ),
+    );
+  return row?.n ?? 0;
 }
 
 /**
@@ -190,6 +294,16 @@ export async function listApiKeys(db: DbClient, userId: string): Promise<ApiKeyR
  * `userId` is the second parameter and is NOT optional — the `revokeSession` rule. Without it any
  * authenticated caller could revoke any key id they could guess, and the route has no other
  * ownership check.
+ *
+ * DELIBERATELY NOT FILTERED ON EXPIRY, unlike every other predicate in this file
+ * (`findLiveApiKey` / `isApiKeyLive` / `listApiKeys` all add the `expires_at` clause). An EXPIRED
+ * key is therefore invisible to `listApiKeys` and still revocable here — a real asymmetry, and the
+ * intended one: a UI holding a slightly stale list should get an idempotent 204 when the user clicks
+ * Revoke, not a 404 for a row it is still showing, and stamping `revoked_at` on an already-inert key
+ * costs nothing and can only reduce the key's reachability.
+ *
+ * Stated because the next reader's instinct is to "align the four predicates", which would turn a
+ * friendly 204 into a 404 regression on exactly the path an operator uses under time pressure.
  */
 export async function revokeApiKey(db: DbClient, userId: string, id: string): Promise<boolean> {
   const revoked = await db

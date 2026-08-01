@@ -360,7 +360,21 @@ export const apiKeys = pgTable(
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index("api_keys_by_user").on(t.userId)],
+  (t) => [
+    index("api_keys_by_user").on(t.userId),
+    // M15 15.9 — one LIVE key per (user, name). PARTIAL on `revoked_at IS NULL`, and the partiality
+    // is the whole point: a plain unique index would make the most common operation — revoke
+    // "desktop", mint a new "desktop" — fail forever, because the revoked row would keep occupying
+    // the name. Scoped per user, not global: two people may both call a key "desktop".
+    //
+    // A UNIQUE INDEX rather than a route-level check, deliberately (CLAUDE.md 15.5: "name the
+    // mechanism — a lock, a unique index, or an isolation level"). A `SELECT … then INSERT` guard
+    // takes no locks and two concurrent mints would both pass it; the index refuses the second at
+    // the storage layer with no lock and no race.
+    uniqueIndex("api_keys_user_live_name")
+      .on(t.userId, t.name)
+      .where(sql`${t.revokedAt} is null`),
+  ],
 );
 
 export const ingestTokens = pgTable(

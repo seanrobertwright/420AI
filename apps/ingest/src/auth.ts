@@ -190,8 +190,49 @@ export function shouldTouchApiKey(
 ): boolean {
   const last = lastTouchedAt.get(id) ?? 0;
   const due = nowMs - last >= throttleMs;
-  if (due) lastTouchedAt.set(id, nowMs);
+  if (due) {
+    if (lastTouchedAt.size >= API_KEY_TOUCH_MAP_SWEEP_AT)
+      sweepStaleTouches(lastTouchedAt, throttleMs, nowMs);
+    lastTouchedAt.set(id, nowMs);
+  }
   return due;
+}
+
+/**
+ * Above this many entries, `shouldTouchApiKey` sweeps the inert ones before inserting. Not a
+ * capacity limit — the sweep is exact, so the map never holds an entry it would not have honoured.
+ *
+ * 4096 is chosen to be far above any real deployment's live-key count (so the sweep effectively
+ * never runs) while still bounding the pathological case. It is deliberately NOT tuned: the map is
+ * not attacker-growable, so this is a backstop, not a defence.
+ */
+const API_KEY_TOUCH_MAP_SWEEP_AT = 4096;
+
+/**
+ * Drop entries older than the throttle window.
+ *
+ * SAFE BY CONSTRUCTION, which is why this is a sweep and not an LRU: an entry whose age already
+ * exceeds `throttleMs` would return `due = true` on its next lookup whether it is present or
+ * absent — `?? 0` makes a missing entry maximally stale. So removing it cannot change any future
+ * decision, only the memory holding it. An LRU, by contrast, could evict a RECENT entry and
+ * silently permit an extra write.
+ *
+ * WHY THIS EXISTS AT ALL: the map is keyed by `api_keys.id` and entries are never otherwise
+ * removed, so a long-lived process that rotates keys accumulates one dead entry per retired key
+ * forever. It is NOT attacker-growable — `shouldTouchApiKey` is only reached after `findLiveApiKey`
+ * has already resolved a real row, so an unknown token adds nothing — which is why a bounded sweep
+ * is sufficient and a cache-eviction policy would be over-engineering. `reconcileLastRunAt` has the
+ * same unbounded shape and the same real-world bound; if a third such map appears, that is the
+ * signal to extract one helper rather than write a third.
+ */
+function sweepStaleTouches(
+  lastTouchedAt: Map<string, number>,
+  throttleMs: number,
+  nowMs: number,
+): void {
+  for (const [key, touchedAt] of lastTouchedAt) {
+    if (nowMs - touchedAt >= throttleMs) lastTouchedAt.delete(key);
+  }
 }
 
 /**

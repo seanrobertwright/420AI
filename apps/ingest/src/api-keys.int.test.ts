@@ -541,6 +541,80 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.9 API keys (two-role, HTTP)", () 
     expect(stamped, "last_used_at must be stamped by an authenticated key request").not.toBeNull();
   });
 
+  // ── 8b. THE MINT GUARDS (code-review finding 5) ────────────────────────────────────────────
+
+  it("REFUSES a duplicate live name with 409 duplicate_name, and allows it after a revoke", async () => {
+    const session = await login("owner@example.com");
+    const { apiKey } = await mint(session, { name: "desktop" });
+
+    const dup = await app.inject({
+      method: "POST",
+      url: "/v1/auth/api-keys",
+      headers: json(session),
+      payload: { name: "desktop", currentPassword: PASSWORD },
+    });
+    // 409, not 500 — the unique violation must be CAUGHT and converted. drizzle wraps the pg error,
+    // so an unwrapped `err.code` check would let the 23505 escape as a server error; that regression
+    // is what this assertion pins.
+    expect(dup.statusCode, `duplicate name: ${dup.body}`).toBe(409);
+    expect(dup.json()).toMatchObject({ reason: "duplicate_name" });
+
+    // Rotating a key by the same name is the most common operation there is — the index is PARTIAL
+    // on `revoked_at IS NULL` precisely so this works.
+    await app.inject({
+      method: "DELETE",
+      url: `/v1/auth/api-keys/${apiKey.id}`,
+      headers: asUser(session),
+    });
+    const reminted = await mint(session, { name: "desktop" });
+    expect(reminted.apiKey.name).toBe("desktop");
+  });
+
+  it("REFUSES past the per-user cap with 409 at_capacity, and a revoke frees a slot", async () => {
+    const session = await login("owner@example.com");
+    // Mint up to the cap. The constant is not exported on purpose (it is a route policy), so this
+    // drives the OBSERVABLE contract instead: keep minting until the route refuses.
+    const minted: string[] = [];
+    let refusal: { statusCode: number; body: string } | null = null;
+    for (let i = 0; i < 40; i++) {
+      const res = await app.inject({
+        method: "POST",
+        url: "/v1/auth/api-keys",
+        headers: json(session),
+        payload: { name: `key-${i}`, currentPassword: PASSWORD },
+      });
+      if (res.statusCode === 201) {
+        minted.push((res.json() as { apiKey: WireApiKey }).apiKey.id);
+        continue;
+      }
+      refusal = { statusCode: res.statusCode, body: res.body };
+      break;
+    }
+    expect(refusal, "the cap must eventually refuse, not mint forever").not.toBeNull();
+    expect(refusal!.statusCode).toBe(409);
+    expect(JSON.parse(refusal!.body)).toMatchObject({ reason: "at_capacity" });
+
+    // A user who hits the cap must be able to recover WITHOUT operator help.
+    const freed = await app.inject({
+      method: "DELETE",
+      url: `/v1/auth/api-keys/${minted[0]}`,
+      headers: asUser(session),
+    });
+    expect(freed.statusCode).toBe(204);
+    const after = await mint(session, { name: "after-revoke" });
+    expect(after.apiKey.name).toBe("after-revoke");
+  });
+
+  it("the cap is PER USER — one user at capacity does not block another", async () => {
+    const memberSession = await login("member@example.com");
+    const { apiKey } = await mint(memberSession, { name: "desktop" });
+    expect(apiKey.name).toBe("desktop");
+    // The colleague may reuse the same NAME too: uniqueness is scoped per user.
+    const ownerSession = await login("owner@example.com");
+    const theirs = await mint(ownerSession, { name: "desktop" });
+    expect(theirs.apiKey.name).toBe("desktop");
+  });
+
   // ── 9. TIER ISOLATION ──────────────────────────────────────────────────────────────────────
 
   it("a session token still works alongside keys — the tiers do not interfere", async () => {

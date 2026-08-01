@@ -136,6 +136,14 @@ describe.skipIf(!TEST_URL)("migration rollback (rollbackLast, integration)", () 
     return r.rowCount === 1;
   }
 
+  /** Does 0022's per-user live-name unique index exist? Its down drops it; 0021 is untouched. */
+  async function apiKeyNameIndexExists(): Promise<boolean> {
+    const r = await pool.query(
+      "select 1 from pg_indexes where schemaname = 'public' and indexname = 'api_keys_user_live_name'",
+    );
+    return r.rowCount === 1;
+  }
+
   /** Does the M15 15.9 `api_keys` table exist? 0021 creates it; its down drops it. */
   async function apiKeysTableExists(): Promise<boolean> {
     const r = await pool.query(
@@ -153,23 +161,28 @@ describe.skipIf(!TEST_URL)("migration rollback (rollbackLast, integration)", () 
     return Number(r.rows[0]!.n);
   }
 
-  it("rolls back the latest migration (0021 api_keys) and a re-migrate restores it", async () => {
+  it("rolls back the latest migration (0022 api-key name index) and a re-migrate restores it", async () => {
     // M15 D-M15-13 drill, run in CI rather than by hand. `rollbackLast` reverses THE LATEST
     // migration, so this test retargets with every slice that adds one — 15.5's version named 0017,
     // 15.6's named 0018, 15.7's named 0019 and 15.8's named 0020. The assertions those made survive
     // here as UNTOUCHED-BY-0021 invariants below, which is the whole value of retargeting rather
     // than rewriting: the drill gets stricter with every slice instead of just moving.
     //
-    // The load-bearing assertion for 15.9 is once again the POLICY COUNT NOT MOVING. 0021 is the
-    // FOURTH migration in a row that adds a table and NO policy (D-15.9-1: `api_keys` is an identity
-    // table, read inside `resolvePrincipal` before any org context exists), so "59 before, 59 after
-    // the rollback, 59 after the re-migrate" is what pins that absence as a decision. If a future
-    // reader adds a policy to it, this drill fails before `rls.int.test.ts` even runs — and the
-    // production symptom that policy would cause is every API key silently 401ing.
-    expect(await trackedCount()).toBe(22);
+    // The load-bearing assertion for 15.9 is once again the POLICY COUNT NOT MOVING. 0021/0022 are
+    // the fourth and fifth migrations in a row that touch `api_keys` and add NO policy (D-15.9-1:
+    // it is an identity table, read inside `resolvePrincipal` before any org context exists), so
+    // "59 before, 59 after the rollback, 59 after the re-migrate" is what pins that absence as a
+    // decision. If a future reader adds a policy to it, this drill fails before `rls.int.test.ts`
+    // even runs — and the production symptom that policy would cause is every API key silently
+    // 401ing.
+    //
+    // 0022 is INDEX-ONLY, so unlike 0021 its rollback is lossless: `api_keys` and every row in it
+    // survive. That asymmetry is asserted below rather than assumed.
+    expect(await trackedCount()).toBe(23);
     expect(await policyCount()).toBe(59); // 15 org + project_grants org + invites org + 42 restrictive
     expect(await restrictivePolicyCount()).toBe(42); // 39 from 0016 + 3 for `invites`
     expect(await apiKeysTableExists()).toBe(true);
+    expect(await apiKeyNameIndexExists()).toBe(true);
     expect(await mfaTablesExist()).toBe(2);
     expect(await ssoIdentitiesTableExists()).toBe(true);
     expect(await sessionsTableExists()).toBe(true);
@@ -180,13 +193,13 @@ describe.skipIf(!TEST_URL)("migration rollback (rollbackLast, integration)", () 
     expect(await mixedCaseEmailCount()).toBe(0);
 
     const result = await rollbackLast(TEST_URL!, { downDir, journalPath });
-    expect(result).toEqual({ rolledBack: "0021_typical_gabe_jones" });
-    expect(await trackedCount()).toBe(21);
-    // `api_keys` is gone — and NOTHING ELSE moved. 0021's down names exactly one object.
-    // Note what this rollback COSTS, which the down SQL states plainly: EVERY API KEY IS REVOKED AT
-    // ONCE (the desktop app and every scheduled script start 401ing), and rolling forward does not
-    // restore them — only sha256 hashes were ever stored, so each must be re-minted.
-    expect(await apiKeysTableExists()).toBe(false);
+    expect(result).toEqual({ rolledBack: "0022_curved_mandroid" });
+    expect(await trackedCount()).toBe(22);
+    // ONLY the index is gone. 0022's down names exactly one object, and unlike 0021's it is
+    // LOSSLESS: the table and every key in it survive, no credential stops working, and the only
+    // consequence is that a user may again hold two live keys with the same name.
+    expect(await apiKeyNameIndexExists()).toBe(false);
+    expect(await apiKeysTableExists()).toBe(true);
     expect(await policyCount()).toBe(59);
     expect(await restrictivePolicyCount()).toBe(42);
     // 15.8's MFA tables, 15.7's identities, 15.6's sessions, 15.5's identity core, 15.4's table and
@@ -204,9 +217,10 @@ describe.skipIf(!TEST_URL)("migration rollback (rollbackLast, integration)", () 
     // Emails stay lowercased across the rollback (0017's down deliberately does not undo it).
     expect(await mixedCaseEmailCount()).toBe(0);
 
-    // Re-apply: an idempotent re-migrate brings 0021 back + restores the tracking row.
+    // Re-apply: an idempotent re-migrate brings 0022 back + restores the tracking row.
     await runMigrations(TEST_URL!);
-    expect(await trackedCount()).toBe(22);
+    expect(await trackedCount()).toBe(23);
+    expect(await apiKeyNameIndexExists()).toBe(true);
     expect(await apiKeysTableExists()).toBe(true);
     expect(await mfaTablesExist()).toBe(2);
     expect(await ssoIdentitiesTableExists()).toBe(true);

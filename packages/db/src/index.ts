@@ -128,6 +128,10 @@ export type { SessionRow } from "./repositories/sessions.js";
 // `orgId` and `userId` is the second parameter wherever scoping is needed.
 export {
   createApiKey,
+  // The GUARDED mint the route uses: per-user cap (serialised on the owner's `users` row) plus the
+  // partial-unique-index name check. `createApiKey` stays the unguarded primitive for seeding.
+  mintApiKey,
+  countLiveApiKeys,
   findLiveApiKey,
   // Liveness WITHOUT touching last_used_at — for the SSE per-tick re-check, which must not become
   // a per-tick write per connected client (audit B.4).
@@ -137,7 +141,7 @@ export {
   revokeApiKey,
   touchApiKeyLastUsed,
 } from "./repositories/api-keys.js";
-export type { ApiKeyRow } from "./repositories/api-keys.js";
+export type { ApiKeyRow, MintRefusal } from "./repositories/api-keys.js";
 // M15 15.7 SSO identities. Identity-owned — no org_id, no RLS (D-15.7-3), scoped by userId only.
 export {
   findUserIdBySsoIdentity,

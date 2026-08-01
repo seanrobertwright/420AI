@@ -122,6 +122,36 @@ describe("shouldTouchApiKey (D-15.9-7)", () => {
     expect(shouldTouchApiKey(seen, "k1", 0, T0)).toBe(true);
   });
 
+  /**
+   * The sweep (code-review finding 4). Entries older than the window are inert — `?? 0` makes a
+   * MISSING entry maximally stale, so a swept entry and a kept-but-stale entry produce the same
+   * decision. These assertions pin that equivalence, which is the whole reason a sweep is safe
+   * where an LRU would not be (an LRU could evict a RECENT entry and permit an extra write).
+   */
+  it("sweeping a stale entry does not change the next decision", () => {
+    const withEntry = new Map<string, number>([["k1", T0]]);
+    const swept = new Map<string, number>();
+    const later = T0 + 60_000;
+    expect(shouldTouchApiKey(withEntry, "k1", 60_000, later)).toBe(
+      shouldTouchApiKey(swept, "k1", 60_000, later),
+    );
+  });
+
+  it("keeps FRESH entries when it sweeps, so the throttle still holds", () => {
+    // Fill past the sweep threshold with stale entries, plus one fresh key that must survive.
+    const seen = new Map<string, number>();
+    for (let i = 0; i < 5000; i++) seen.set(`stale-${i}`, T0);
+    const later = T0 + 60_000;
+    seen.set("fresh", later); // inside the window at `later`
+    expect(seen.size).toBeGreaterThan(4096);
+
+    // A due touch triggers the sweep.
+    expect(shouldTouchApiKey(seen, "trigger", 60_000, later)).toBe(true);
+    expect(seen.size, "stale entries must be dropped").toBeLessThan(1000);
+    // THE LOAD-BEARING HALF: the fresh entry survived, so it is still throttled.
+    expect(shouldTouchApiKey(seen, "fresh", 60_000, later)).toBe(false);
+  });
+
   it("stamps BEFORE returning, so two overlapping callers cannot both see a stale last", () => {
     // The `shouldReconcile` discipline: the map is written on the same tick the decision is made,
     // never after the caller's await.

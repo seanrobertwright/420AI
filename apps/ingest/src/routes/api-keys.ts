@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { createApiKey, listApiKeys, revokeApiKey } from "@420ai/db";
+import { listApiKeys, mintApiKey, revokeApiKey } from "@420ai/db";
 import { hasRole } from "@420ai/shared";
 import { createApiKeyBodySchema } from "../schemas.js";
 import { authorized, isUuid, resolvePrincipal } from "../auth.js";
@@ -40,6 +40,22 @@ interface CreateApiKeyBody {
 }
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/**
+ * The most LIVE keys one user may hold at once.
+ *
+ * THE NUMBER IS A JUDGEMENT, NOT A MEASUREMENT, and saying so is more useful than implying
+ * otherwise: there is no usage data behind it yet. It is chosen to sit far above any legitimate
+ * pattern — a person with a laptop, a desktop, a cron host and a CI runner needs four — while still
+ * bounding unbounded accumulation, so the first user to hit it has almost certainly been minting
+ * instead of revoking, which is exactly when a nudge helps.
+ *
+ * It is a CEILING ON ACCUMULATION, not a security control: minting already requires a live session
+ * AND the current password AND passes the login rate limit, so this is not what stands between an
+ * attacker and a key. Revisit with real data at 15.10, when the management UI makes key counts
+ * visible for the first time.
+ */
+const MAX_API_KEYS_PER_USER = 25;
 
 export default async function apiKeyRoutes(app: FastifyInstance): Promise<void> {
   /**
@@ -104,17 +120,37 @@ export default async function apiKeyRoutes(app: FastifyInstance): Promise<void> 
           ? null
           : new Date(Date.now() + request.body.expiresInDays * MS_PER_DAY);
 
-      const { key, token } = await createApiKey(app.db, principal.userId, {
-        name: request.body.name,
-        role: requestedRole ?? null,
-        expiresAt,
-      });
+      // TRANSACTIONAL because `mintApiKey`'s cap is a count-then-insert: the count and the insert
+      // must commit together or the cap is advisory. See that function for the two mechanisms —
+      // a `FOR UPDATE` on the owner's `users` row for the cap, the partial unique index for the
+      // name. No `withOrg`: `api_keys` is an identity table with no policy (D-15.9-1), so there is
+      // nothing for an org context to activate.
+      const minted = await app.db.transaction((tx) =>
+        mintApiKey(
+          tx,
+          principal.userId,
+          { name: request.body.name, role: requestedRole ?? null, expiresAt },
+          MAX_API_KEYS_PER_USER,
+        ),
+      );
+      if (!minted.ok) {
+        // 409, not 400: the request is well-formed and would have succeeded against a different
+        // state. The `reason` discriminant is what lets a client tell "revoke something first" from
+        // "pick another name" without parsing prose.
+        return reply.code(409).send({
+          error:
+            minted.reason === "at_capacity"
+              ? `at most ${MAX_API_KEYS_PER_USER} live API keys per user`
+              : "a live api key with that name already exists",
+          reason: minted.reason,
+        });
+      }
 
       return reply.code(201).send({
-        apiKey: serializeApiKey(key),
+        apiKey: serializeApiKey(minted.key),
         // THE ONLY PLACE THIS EVER APPEARS. `GET` below returns the row without it, and no column
         // holds it — the response is the credential's entire lifetime outside the client.
-        token,
+        token: minted.token,
       });
     },
   );

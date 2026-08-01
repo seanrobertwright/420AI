@@ -5,8 +5,10 @@ import { API_KEY_PREFIX, hashToken } from "../tokens.js";
 import { ensurePersonalOrg } from "./organizations.js";
 import { setUserPassword } from "./users.js";
 import {
+  countLiveApiKeys,
   createApiKey,
   findLiveApiKey,
+  mintApiKey,
   isApiKeyLive,
   listApiKeys,
   revokeAllApiKeys,
@@ -230,6 +232,114 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.9 API keys repository (two-role)"
     await createApiKey(appRole.db, userA, { name: "one" });
     expect(await revokeAllApiKeys(appRole.db, userA)).toBe(1);
     expect(await revokeAllApiKeys(appRole.db, userA)).toBe(0);
+  });
+
+  // ── the mint guards (code-review finding 5) ────────────────────────────────────────────────
+
+  it("mintApiKey succeeds under the cap and reports the live count", async () => {
+    // POSITIVE FIRST: the guards must not be a blanket refusal.
+    const r = await owner.db.transaction((tx) => mintApiKey(tx, userA, { name: "one" }, 3));
+    expect(r.ok).toBe(true);
+    expect(await countLiveApiKeys(appRole.db, userA)).toBe(1);
+  });
+
+  it("REFUSES at the cap, and a revoke frees a slot", async () => {
+    for (const name of ["a", "b"]) {
+      const r = await owner.db.transaction((tx) => mintApiKey(tx, userA, { name }, 2));
+      expect(r.ok, `minting ${name}`).toBe(true);
+    }
+    const full = await owner.db.transaction((tx) => mintApiKey(tx, userA, { name: "c" }, 2));
+    expect(full).toEqual({ ok: false, reason: "at_capacity" });
+
+    // The cap counts LIVE keys, so revoking one must free a slot — otherwise a user who hit the
+    // cap could never recover without operator help.
+    const [first] = await listApiKeys(appRole.db, userA);
+    expect(await revokeApiKey(appRole.db, userA, first!.id)).toBe(true);
+    const after = await owner.db.transaction((tx) => mintApiKey(tx, userA, { name: "c" }, 2));
+    expect(after.ok).toBe(true);
+  });
+
+  it("the cap is PER USER, not global", async () => {
+    await owner.db.transaction((tx) => mintApiKey(tx, userA, { name: "a" }, 1));
+    const theirs = await owner.db.transaction((tx) => mintApiKey(tx, userB, { name: "a" }, 1));
+    expect(theirs.ok, "userB has their own budget, and may reuse the name").toBe(true);
+  });
+
+  it("REFUSES a duplicate LIVE name, and allows re-minting it after a revoke", async () => {
+    const first = await owner.db.transaction((tx) => mintApiKey(tx, userA, { name: "desktop" }, 9));
+    expect(first.ok).toBe(true);
+    const dup = await owner.db.transaction((tx) => mintApiKey(tx, userA, { name: "desktop" }, 9));
+    expect(dup).toEqual({ ok: false, reason: "duplicate_name" });
+
+    // THE REASON THE INDEX IS PARTIAL. Rotating a key by the same name is the most common
+    // operation there is; a plain unique index would make it fail forever.
+    expect(await revokeApiKey(appRole.db, userA, (first as { key: { id: string } }).key.id)).toBe(
+      true,
+    );
+    const reminted = await owner.db.transaction((tx) =>
+      mintApiKey(tx, userA, { name: "desktop" }, 9),
+    );
+    expect(reminted.ok, "re-minting a revoked name must work").toBe(true);
+  });
+
+  it("an EXPIRED key consumes no slot (the cap counts LIVE, matching listApiKeys)", async () => {
+    await createApiKey(appRole.db, userA, {
+      name: "expired",
+      expiresAt: new Date(Date.now() - 1_000),
+    });
+    expect(await countLiveApiKeys(appRole.db, userA)).toBe(0);
+    const r = await owner.db.transaction((tx) => mintApiKey(tx, userA, { name: "fresh" }, 1));
+    expect(r.ok).toBe(true);
+  });
+
+  /**
+   * THE CONCURRENCY TEST, AT THE RIGHT LAYER (CLAUDE.md 15.5). Two HTTP requests would serialise on
+   * their own and pass with or without the lock — a green test advertising a guarantee nobody
+   * checked. Only two HAND-HELD transactions discriminate: A takes the `FOR UPDATE` on the owner's
+   * `users` row and holds it; B must still be UNSETTLED after a wait, because it is blocked.
+   *
+   * Without the lock, B would count 0 (A is uncommitted), see room under a cap of 1, and insert —
+   * landing at 2 over a cap of 1.
+   *
+   * The release is in a `finally`: when 15.5's equivalent assertion first failed it skipped the
+   * release, the held transaction kept its pooled connection, and five later tests timed out.
+   */
+  it("two concurrent mints cannot both pass a cap of 1 (FOR UPDATE serialises them)", async () => {
+    let releaseA: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      releaseA = resolve;
+    });
+    let settled = false;
+
+    try {
+      const txA = owner.db.transaction(async (tx) => {
+        const r = await mintApiKey(tx, userA, { name: "a" }, 1);
+        await gate; // hold the lock open
+        return r;
+      });
+      // Let A reach its insert and take the lock before B starts.
+      await new Promise((r) => setTimeout(r, 250));
+
+      const txB = owner.db
+        .transaction((tx) => mintApiKey(tx, userA, { name: "b" }, 1))
+        .then((r) => {
+          settled = true;
+          return r;
+        });
+
+      await new Promise((r) => setTimeout(r, 500));
+      expect(settled, "B must be BLOCKED on A's row lock, not racing past it").toBe(false);
+
+      releaseA();
+      const [a, b] = await Promise.all([txA, txB]);
+      // Exactly one wins, and the loser is refused for the RIGHT reason: it re-counted after the
+      // lock released and saw A's committed row.
+      expect(a.ok).toBe(true);
+      expect(b).toEqual({ ok: false, reason: "at_capacity" });
+      expect(await countLiveApiKeys(appRole.db, userA)).toBe(1);
+    } finally {
+      releaseA();
+    }
   });
 
   // ── the throttled touch (D-15.9-7) ─────────────────────────────────────────────────────────

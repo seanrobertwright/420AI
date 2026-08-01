@@ -5,5 +5,11 @@
     "rootDir": "src"
   },
   "references": [{ "path": "../../packages/shared" }, { "path": "../../packages/db" }],
+  // NOTE (M15 15.9): `src/test-support/**` is deliberately NOT excluded here, and the pruning of it
+  // from `dist/` happens in this workspace's `build` script instead. Excluding it raises TS6307 —
+  // an excluded file that an INCLUDED file imports is an error under a composite project — so the
+  // exclude would have to cover every `*.int.test.ts` that imports it too. Unlike `apps/collector`,
+  // this workspace deliberately DOES typecheck its integration suites, and trading that coverage
+  // away to tidy one emitted file would be a bad bargain.
   "include": ["src/**/*"]
 }
