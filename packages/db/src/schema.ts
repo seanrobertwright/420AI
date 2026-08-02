@@ -1079,13 +1079,19 @@ export const mfaRecoveryCodes = pgTable(
 /**
  * M15 15.10 — the APPEND-ONLY audit trail (D-15.10-2). Who did what, to whom, when.
  *
- * THE RLS SHAPE IS A FOURTH CLASSIFICATION, and it exists because every audit-worthy action in
+ * THE RLS SHAPE IS A FIFTH CLASSIFICATION (`APPEND_ONLY_TABLES` in `rls.int.test.ts`, alongside
+ * STRICT, BOOTSTRAP, ROLE-GATED-BOOTSTRAP and NO_RLS), and it exists because every audit-worthy
+ * action in
  * this repo originates from one of exactly TWO kinds of call site:
  *
  *   | call site                                          | org context set? | role in context |
  *   | -------------------------------------------------- | ---------------- | --------------- |
  *   | `routes/members.ts`, `routes/org.ts` — `withOrg`    | yes              | the caller's    |
- *   | `routes/api-keys.ts`, `mfa.ts`, `auth.ts`, `sso.ts` | NO               | none            |
+ *   | `routes/api-keys.ts`, `auth.ts`, `sso.ts`          | NO               | none            |
+ *
+ * `routes/mfa.ts` is on the same allow-list but appends NOTHING — self-service credential
+ * changes are outside `AUDIT_ACTIONS` by decision. The only audited MFA action is the
+ * ADMIN-initiated reset, which lives in `members.ts` and is `withOrg`-wrapped.
  *   |   — identity tables, on `ALLOWED_WITHOUT_WITHORG`   |                  |                 |
  *
  * So the repo's 13-table STRICT org policy is unusable here: it REJECTS the insert from the

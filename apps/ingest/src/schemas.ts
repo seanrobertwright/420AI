@@ -486,9 +486,11 @@ export const patchMemberRoleBodySchema = {
 /**
  * PATCH /v1/org body — the organization's new display name (M15 15.10).
  *
- * BOUNDED at 200, matching the file's habit of bounding every free-text field at the edge: the
- * column is unbounded `text`, and the only reader of a 10 KB org name is the break-glass operator
- * paging through `select * from audit_events`. `minLength: 1` because an empty name renders as a
+ * BOUNDED at 200, matching the file's habit of bounding every free-text field at the edge. The
+ * column is unbounded `text`, and a 10 KB name would land in THREE RENDERED SURFACES — the
+ * Settings `<OrgCard/>`, the `/team` page header, and the PUBLIC invite page's "Join {orgName}"
+ * heading, which is shown to a visitor with no session — as well as in the break-glass
+ * operator's `select * from audit_events`. `minLength: 1` because an empty name renders as a
  * blank card with no way back — the rename endpoint would have to be re-driven by hand to fix it.
  */
 export const patchOrgBodySchema = {

@@ -8,7 +8,7 @@
 --
 --   * `routes/members.ts` and `routes/org.ts` run inside `withOrg(..., principal.role, ...)`, so an
 --     org context IS set and the role in context is the caller's (`admin`, `owner`, ...);
---   * `routes/api-keys.ts`, `routes/mfa.ts`, `routes/auth.ts` and `routes/sso.ts` are the IDENTITY
+--   * `routes/api-keys.ts`, `routes/auth.ts` and `routes/sso.ts` are the IDENTITY
 --     routes on `org-scoping.test.ts`'s ALLOWED_WITHOUT_WITHORG list. They run with NO org context
 --     at all, by design — the row they read is part of what ESTABLISHES that context.
 --
@@ -28,7 +28,8 @@
 --   * the app role cannot rewrite or erase history;
 --   * the OWNER reads everything — the D-M15-7 break-glass channel, intact.
 --
--- `FORCE ROW LEVEL SECURITY` IS DELIBERATELY OMITTED, against all 13 strict tables. FORCE removes
+-- `FORCE ROW LEVEL SECURITY` IS DELIBERATELY OMITTED, against all 17 tenant tables that set it
+-- (13 strict + 3 bootstrap + `invites`; `rls.int.test.ts` asserts that count). FORCE removes
 -- the table-OWNER exemption, and the owner is exactly who performs the documented break-glass read.
 -- It is a no-op today (the owner is also a superuser — a separate exemption) and actively harmful
 -- the day the owner stops being one, a plausible hardening step. `rls.int.test.ts` asserts

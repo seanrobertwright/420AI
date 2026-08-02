@@ -190,7 +190,8 @@ Then create a pairing code and pair:
 
 ```bash
 # M15 15.9 — pairing-code issuance needs a principal at `admin`. Log in once, mint a key, use it.
-# (There is no management UI until 15.10, so this is a curl step. PowerShell: use curl.exe.)
+# (Settings → API keys does this in the dashboard as of M15 15.10; the curl form is kept here
+#  because it scripts. PowerShell: use curl.exe.)
 SESSION=$(curl -s -X POST localhost:8420/v1/auth/login -H "content-type: application/json" \
   -d "{\"email\":\"$ADMIN_EMAIL\",\"password\":\"$ADMIN_PASSWORD\"}" | jq -r .token)
 API_KEY=$(curl -s -X POST localhost:8420/v1/auth/api-keys -H "authorization: Bearer $SESSION" \

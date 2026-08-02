@@ -346,7 +346,8 @@ than from memory.
   which would have made every `api_key.minted` audit a 500 surfacing much later as "minting is
   broken". The 15.4 RESTRICTIVE role policies are equally unusable, because a `viewer` is explicitly
   permitted to revoke their own key and that must produce a row rather than a 500. The answer is a
-  **fourth classification**: RLS enabled, exactly one `PERMISSIVE ... FOR INSERT WITH CHECK (true)`
+  **fifth classification** (`APPEND_ONLY_TABLES`, beside STRICT / BOOTSTRAP / ROLE-GATED-BOOTSTRAP
+  / NO_RLS): RLS enabled, exactly one `PERMISSIVE ... FOR INSERT WITH CHECK (true)`
   policy, and no `SELECT`/`UPDATE`/`DELETE` policy — default-deny does the rest, so the app **appends
   always and reads zero rows even WITH a matching org context** (it is the ABSENT SELECT policy, not
   a failing predicate, which is what makes "write-only" a database guarantee). Three corollaries:
@@ -354,7 +355,8 @@ than from memory.
     `UPDATE`/`DELETE` is a silent 0-row no-op — safe, undiagnosable. Both were measured; only one is
     debuggable. Same shape as 15.4's "a backstop that cannot be loud is not a complete gate".
   - **Omit `FORCE ROW LEVEL SECURITY` when the table's only reader is break-glass**, against the
-    13-table habit. FORCE removes the table-OWNER exemption, and the owner IS the D-M15-7 reader.
+    17 tenant tables that set it (13 strict + 3 bootstrap + `invites`). FORCE removes the
+    table-OWNER exemption, and the owner IS the D-M15-7 reader.
     Assert `relforcerowsecurity = false` explicitly so nobody "completes the pattern" later.
   - **Denormalize the actor/target email onto an audit row**, against the repo's normalized habit,
     and the second reason is decisive: the only reader runs one `select *` under `psql`, and for

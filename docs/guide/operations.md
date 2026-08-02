@@ -869,7 +869,9 @@ released username.
 
 `Disconnect` refuses with **409 `last_credential`** when it would remove the only way into an
 account — an SSO-created user has no password at all. Set a password first (or connect a second
-provider). If you are already locked out, the ordinary password-reset flow still works and requires
+provider). If you are already locked out, the ordinary password-reset flow still works — but note the
+emailed `/reset/<token>` PAGE is still headless as of 15.10 (see §15.10 "Deferred"), so the
+link 404s and the recipient must pass the token to `POST /v1/auth/password-reset/confirm` and requires
 control of the mailbox.
 
 > **Password reset needs a mail transport, and without one an SSO-created user has NO recovery
@@ -1177,7 +1179,9 @@ Two things an operator needs to know before anything else:
   `${APP_BASE_URL}/invite/<token>` since 15.5, and that page did not exist until this slice — so the
   onboarding path 404'd and the only way to add a colleague was to read the token out of a JSON
   response and pass it over chat. If `APP_BASE_URL` is wrong in your ingest env, the link in the
-  email is wrong; nothing else uses it.
+  email is wrong — and note the same value ALSO derives the password-reset link
+  (`routes/auth.ts`) and the SSO `redirect_uri` (D-15.7-6, `routes/sso.ts`), so changing it
+  means re-registering both OAuth apps (§15.7). It is not invite-only.
 - **With no SMTP configured, `POST /v1/members/invite` returns the token in its response** and the
   `/team` UI shows it once, for you to pass on out of band (D-15.5-10). That is the supported
   single-box workflow, not a degraded mode.
@@ -1231,7 +1235,12 @@ The down-migration drops `audit_events`, which **destroys the entire audit histo
 Every other destructive down in this repo drops a _projection_ — `events` re-derive from
 `raw_source_records`, rollups re-derive from `events`. This table is derived from nothing: no other
 table records who changed a role, who evicted whom, or who minted which key. Rolling forward again
-gives you an **empty** table. If the history matters, `pg_dump -t audit_events` first.
+gives you an **empty** table. If the history matters, dump it first — inside the container, the
+way every other dump in this repo runs (the host is not assumed to have `pg_dump`):
+
+```bash
+docker compose exec -T archive pg_dump -U 420ai -d 420ai -t audit_events > audit_events.sql
+```
 
 It is also not silent on the write side. A post-15.10 server against a pre-15.10 schema **fails every
 audited mutation** — invite, role change, removal, MFA reset, rename, key mint and revoke all 500 —
@@ -1244,6 +1253,12 @@ schema.
 Multi-org membership and the org switcher (→ M16 with tenant slugs and hosting); an audit-log viewer
 or export; and four surfaces that remain **headless but curl-reachable** — the gated self-signup
 page, the password-reset pages, an active-sessions list, and MFA QR rendering.
+
+**The password-reset one has a user-visible consequence, so state it plainly:** ingest emails
+`${APP_BASE_URL}/reset/<token>`, and that page does not exist — the link 404s exactly as
+`/invite/<token>` did before this slice. Until it ships, a locked-out user (including an
+SSO-only account, whose documented recovery in §15.7 is this flow) must extract the token from
+the URL and call `POST /v1/auth/password-reset/confirm` directly.
 
 | Symptom                                                     | Cause and fix                                                                                                                                                                               |
 | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

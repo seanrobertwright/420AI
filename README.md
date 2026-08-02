@@ -131,7 +131,8 @@ AI-interpretation-second**. The repo is an npm-workspaces monorepo:
 **Pair a machine and capture sessions** (collector CLI, run with `tsx` — no build needed):
 
 ```sh
-# Log in, mint an `admin` API key (M15 15.9 — no UI until 15.10), create a pairing code, pair
+# Log in, mint an `admin` API key (M15 15.9; Settings → API keys does this in the dashboard as
+# of 15.10 — the curl form is kept because it scripts), create a pairing code, pair
 SESSION=$(curl -s -X POST localhost:8420/v1/auth/login -H "content-type: application/json" \
   -d "{\"email\":\"$ADMIN_EMAIL\",\"password\":\"$ADMIN_PASSWORD\"}" | jq -r .token)
 API_KEY=$(curl -s -X POST localhost:8420/v1/auth/api-keys -H "authorization: Bearer $SESSION" \

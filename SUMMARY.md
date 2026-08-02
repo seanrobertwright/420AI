@@ -85,7 +85,8 @@ origins deferred; per-origin gate in
 negative), restore-from-backup drill, Cursor `watch → archive → Monitor` round-trip, live SMTP send
 (local Mailpit), scheduled-reports cold run, and 12.3 auth QA (`.agents/qa/m12-slice3/`).
 
-**M15 (Multi-user & access control) is **DONE** — 15.10 closed it on `2026-08-02` (PR #70).** Ten slices:
+**M15 (Multi-user & access control)** is **DONE** — 15.10 closed it on `2026-08-02` (PR #70).
+Eleven slices (15.0's truth + RLS spike, then 15.1-15.10):
 org-level tenancy + RLS backstop, four fixed roles, all four identity paths, sessions, SSO, MFA, API
 keys (and the retirement of `ADMIN_TOKEN`), and finally the team surfaces + the append-only
 `audit_events` table. **What's next — M16–M19 remain committed and unsequenced.** Originally: On 2026-07-21 the post-V1 bucket
@@ -238,7 +239,7 @@ through the deferral-audit + scope conversation that produced M12/M13/M14. Full 
 > across ~15 tables (incl. `events`, `raw_source_records`) plus a backfill. **M15 is a data
 > migration** — sizing it from the old sentence under-scopes it.
 
-- **M15 — Multi-user & access control — is **DONE** `2026-08-02`** (promoted 2026-07-25;
+- **M15 — Multi-user & access control** is **DONE** `2026-08-02` (promoted 2026-07-25;
   [`.agents/plans/m15-multi-user-access-control.md`](./.agents/plans/m15-multi-user-access-control.md)).
   Org-level tenancy (D-M15-1), RLS as a backstop behind primary application scoping (D-M15-3), four
   fixed roles + per-project grants (D-M15-4), all four identity paths + reset + MFA (D-M15-5),
@@ -394,7 +395,8 @@ original M10 "hardening bundle" (exports, catalog signing, replay metadata, pers
 
 ## 6. Immediate next steps
 
-- [x] **M15 Multi-user & access control — DONE `2026-08-02`** (all ten slices; 15.10 was the last).
+- [x] **M15 Multi-user & access control — DONE `2026-08-02`** (all eleven slices, 15.0-15.10;
+      15.10 was the last).
       **NEXT: M16–M19 remain committed and unsequenced** — each still needs its own deferral-audit +
       scope conversation before it is executable, and M16 additionally inherits D-15.10-1's deferred
       multi-org membership + org switcher. Promoted 2026-07-25 by the
