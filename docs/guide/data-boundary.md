@@ -34,8 +34,8 @@ Change** that requires fresh approval before it captures again
 > **EVERY REGISTERED CONNECTOR IS ENABLED BY DEFAULT.** This is the most important sentence on the
 > page, so it comes before the table rather than after it.
 > `apps/collector/src/connectors/connector-config.ts:33-34` defines the config map as _"a missing id
-> ⇒ enabled (default-on)"_, `:37` calls the empty override set _"the safe default — so every
-> connector is enabled"_, and `filterConnectors` (`:67-71`) removes only connectors **explicitly**
+> ⇒ enabled (default-on)"_, `:37` calls the empty override set _"the safe default — no overrides, so
+> every connector is enabled"_, and `filterConnectors` (`:67-71`) removes only connectors **explicitly**
 > disabled. There is no allow-list. A connector whose source paths exist on your machine **will**
 > capture unless you turn it off.
 

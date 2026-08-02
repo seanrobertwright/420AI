@@ -43,5 +43,5 @@ below is its §11 template, verbatim.
 
 ## Entries
 
-_None yet. The first entry is due in research Phase 1 (weeks 2–4) — Phase 0 item 7 of §15 asks for
+_None yet. The first entry is due in **Week 1**: §15 ("First seven days checklist") item 7 asks for
 the log to be started with "the first question 420AI should answer."_
