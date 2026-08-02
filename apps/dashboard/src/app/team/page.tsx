@@ -1,4 +1,4 @@
-import { ingestUrl, adminHeaders } from "@/lib/ingest";
+import { getIngestJson } from "@/lib/ingest";
 import { PageShell } from "@/components/page-shell";
 import { TeamView } from "@/components/team/team-view";
 
@@ -6,11 +6,11 @@ import { TeamView } from "@/components/team/team-view";
  * M15 15.10 — `/team`: the roster, the pending invites, and the four mutations that nine slices
  * shipped as curl-only endpoints.
  *
- * A Server Component fetches the two READS that every account can perform (`/v1/members` and
- * `/v1/org`, both gated at `viewer`) so the roster is in the first paint. The invites panel is
- * deliberately NOT fetched here: `GET /v1/invites` is `admin`-gated, and a 403 during a server
- * render would have to be branched on anyway — so the island fetches it itself and treats a 403 as
- * "no panel", never as an error. The page must still render for a `viewer`.
+ * A Server Component fetches the two READS every account can perform (`/v1/members` and `/v1/org`,
+ * both gated at `viewer`) so the roster is in the first paint. The invites panel is deliberately NOT
+ * fetched here: `GET /v1/invites` is `admin`-gated, and a 403 is an EXPECTED answer for a viewer
+ * rather than an error — so the island fetches it itself and treats 403 as "no panel". The page must
+ * still render for a viewer.
  */
 export const dynamic = "force-dynamic";
 
@@ -29,24 +29,28 @@ interface Org {
   yourRole: string;
 }
 
-/** GET ingest JSON on the server→ingest hop (D8), returning null on any non-200/throw. */
-async function getJson<T>(path: string): Promise<T | null> {
-  try {
-    const res = await fetch(`${ingestUrl()}${path}`, {
-      headers: await adminHeaders(),
-      cache: "no-store",
-    });
-    return res.ok ? ((await res.json()) as T) : null;
-  } catch {
-    return null;
-  }
-}
-
 export default async function TeamPage() {
   const [membersResponse, org] = await Promise.all([
-    getJson<{ members: Member[] }>("/v1/members"),
-    getJson<Org>("/v1/org"),
+    getIngestJson<{ members: Member[] }>("/v1/members"),
+    getIngestJson<Org>("/v1/org"),
   ]);
+
+  /*
+   * AN UNREACHABLE ARCHIVE IS NOT AN EMPTY TEAM. `getIngestJson` returns null on any non-200 or
+   * throw, and substituting `[]` would render "Team · 0 members" with an empty table — a statement
+   * that is never true in a healthy deployment, since the caller is by construction a member of
+   * their own org. `TeamView` only re-fetches INVITES on mount, so that lie would persist until a
+   * manual reload. Say what actually happened instead.
+   */
+  if (!membersResponse) {
+    return (
+      <PageShell title="Team">
+        <p className="text-muted-foreground text-sm">
+          Could not reach the archive. Refresh to try again.
+        </p>
+      </PageShell>
+    );
+  }
 
   return (
     <PageShell
@@ -57,7 +61,9 @@ export default async function TeamPage() {
           : undefined
       }
     >
-      <TeamView members={membersResponse?.members ?? []} yourRole={org?.yourRole ?? "viewer"} />
+      {/* `yourRole` falls back to `viewer` when /v1/org is unreachable: fail CLOSED, so a blip
+          hides controls rather than offering ones the server will refuse. */}
+      <TeamView members={membersResponse.members} yourRole={org?.yourRole ?? "viewer"} />
     </PageShell>
   );
 }

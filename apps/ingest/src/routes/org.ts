@@ -1,5 +1,12 @@
 import type { FastifyInstance } from "fastify";
-import { getOrg, listMembers, recordAuditEvent, renameOrg, withOrg } from "@420ai/db";
+import {
+  getOrg,
+  getOrgForUpdate,
+  listMembers,
+  recordAuditEvent,
+  renameOrg,
+  withOrg,
+} from "@420ai/db";
 import { patchOrgBodySchema } from "../schemas.js";
 import { authorized, resolvePrincipal } from "../auth.js";
 
@@ -89,9 +96,16 @@ export default async function orgRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(400).send({ error: "organization name cannot be blank" });
       }
       const updated = await withOrg(app.db, principal.orgId, principal.role, async (tx) => {
-        // Read the OLD name first, inside the transaction, so `{from}` describes the state the
-        // rename actually replaced rather than whatever a concurrent rename left behind.
-        const before = await getOrg(tx, principal.orgId);
+        // Read the OLD name under a `FOR UPDATE` LOCK — and the lock is the mechanism, not the
+        // transaction. CLAUDE.md's 15.5 lesson is exactly this: a shared transaction buys ATOMICITY,
+        // NOT ISOLATION, and the earlier version of this comment claimed the transaction alone made
+        // `{from}` accurate, which is the same false assertion 15.5 recorded as the real defect.
+        //
+        // Without the lock, two concurrent renames both read the same `before.name`; the second
+        // UPDATE blocks on the row lock, then commits over the first, and its audit row claims to
+        // have replaced a value it never saw — a permanently wrong entry in the one table the
+        // application cannot correct. With it, the loser re-reads after the winner commits.
+        const before = await getOrgForUpdate(tx, principal.orgId);
         if (!before) return undefined;
         const after = await renameOrg(tx, principal.orgId, name);
         if (!after) return undefined;

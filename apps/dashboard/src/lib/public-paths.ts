@@ -19,7 +19,7 @@
  * and omitting it made the second step redirect to `/login?next=/login/mfa` forever — reading as
  * "the password form is broken".
  */
-export const PUBLIC_PATHS = ["/login", "/login/mfa"];
+export const PUBLIC_PATHS = ["/login", "/login/mfa"] as const;
 
 /**
  * Paths matched by PREFIX, for surfaces whose path carries a parameter.
@@ -36,7 +36,11 @@ export const PUBLIC_PATHS = ["/login", "/login/mfa"];
  * route the day it is added, unreviewed. A prefix is a standing grant; add them one surface at a
  * time.
  */
-export const PUBLIC_PREFIXES = ["/invite/"];
+// `as const` on BOTH: these two arrays are the session gate's allow-list, and as mutable
+// `string[]` any importer could `PUBLIC_PREFIXES.push("/")` and open every route in the app
+// with the compiler raising nothing. The unit test pins the CONTENTS; only the type can pin
+// that nothing appends to them at runtime.
+export const PUBLIC_PREFIXES = ["/invite/"] as const;
 
 /** True when `pathname` needs no session. The API-auth prefix is handled by the caller. */
 export function isPublicPath(pathname: string): boolean {

@@ -62,6 +62,8 @@ export {
   getOrgName,
   // M15 15.10: the org settings surface. `renameOrg` is owner-gated at the route.
   getOrg,
+  // Locked variant, for the rename's read-then-write only (see its comment).
+  getOrgForUpdate,
   renameOrg,
 } from "./repositories/organizations.js";
 export type { OrgRow } from "./repositories/organizations.js";

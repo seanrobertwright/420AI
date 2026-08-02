@@ -1,5 +1,5 @@
 import { asc, eq } from "drizzle-orm";
-import type { DbClient } from "../client.js";
+import type { DbClient, Tx } from "../client.js";
 import { memberships, organizations } from "../schema.js";
 
 /**
@@ -134,6 +134,37 @@ export async function getOrg(db: DbClient, orgId: string): Promise<OrgRow | unde
     .from(organizations)
     .where(eq(organizations.id, orgId))
     .limit(1);
+  return row;
+}
+
+/**
+ * The same read, taking a ROW LOCK. For a read-then-write decision only.
+ *
+ * THE MECHANISM IS THE `FOR UPDATE` LOCK ON THE `organizations` ROW, and naming it here rather than
+ * saying "it's in a transaction" is the whole point — CLAUDE.md's 15.5 lesson is that a shared
+ * transaction buys ATOMICITY, not ISOLATION, and that the comment claiming otherwise WAS the defect.
+ * A plain `SELECT` takes no locks, so under READ COMMITTED two concurrent renames both read the same
+ * `before.name`, the second `UPDATE` blocks on the row lock and then commits over the first, and the
+ * audit row records a `{from}` that was never the value this update actually replaced — a false
+ * entry in the one table the application can never correct.
+ *
+ * With the lock, the loser blocks until the winner commits and then re-reads the current row
+ * (Postgres re-evaluates after the lock releases), so its `{from}` describes the state it really
+ * replaced.
+ *
+ * `Tx`, not `DbClient`: a `FOR UPDATE` outside a transaction releases immediately and buys nothing,
+ * so the type makes the requirement true by construction rather than by convention — the same reason
+ * `repositories/members.ts` takes a `Tx` for the last-owner guard. `getOrg` above stays unlocked and
+ * is what every plain read (`GET /v1/org`) should use; taking a lock there would serialise readers
+ * for no benefit.
+ */
+export async function getOrgForUpdate(tx: Tx, orgId: string): Promise<OrgRow | undefined> {
+  const [row] = await tx
+    .select(orgRowColumns)
+    .from(organizations)
+    .where(eq(organizations.id, orgId))
+    .limit(1)
+    .for("update");
   return row;
 }
 
