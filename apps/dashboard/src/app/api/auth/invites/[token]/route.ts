@@ -21,12 +21,14 @@ import { ingestUrl } from "@/lib/ingest";
  */
 export const dynamic = "force-dynamic";
 
-export async function GET(_req: NextRequest, { params }: { params: Promise<{ token: string }> }) {
+export async function GET(req: NextRequest, { params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
   let res: Response;
   try {
     res = await fetch(`${ingestUrl()}/v1/auth/invites/${encodeURIComponent(token)}`, {
       cache: "no-store",
+      // A visitor who closes the tab mid-preview cancels the upstream hop too.
+      signal: req.signal,
     });
   } catch {
     return NextResponse.json({ error: "ingest unreachable" }, { status: 502 });

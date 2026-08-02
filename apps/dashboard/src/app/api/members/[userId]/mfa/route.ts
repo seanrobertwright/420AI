@@ -10,9 +10,9 @@ import { proxyJson } from "@/lib/proxy";
 export const dynamic = "force-dynamic";
 
 export async function DELETE(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ userId: string }> },
 ) {
   const { userId } = await params;
-  return proxyJson(`/v1/members/${userId}/mfa`, { method: "DELETE" });
+  return proxyJson(`/v1/members/${userId}/mfa`, { method: "DELETE", signal: req.signal });
 }

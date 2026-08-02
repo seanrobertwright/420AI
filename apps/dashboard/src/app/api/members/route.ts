@@ -1,3 +1,4 @@
+import type { NextRequest } from "next/server";
 import { proxyJson } from "@/lib/proxy";
 
 /**
@@ -10,6 +11,6 @@ import { proxyJson } from "@/lib/proxy";
  */
 export const dynamic = "force-dynamic";
 
-export async function GET() {
-  return proxyJson("/v1/members");
+export async function GET(req: NextRequest) {
+  return proxyJson("/v1/members", { signal: req.signal });
 }

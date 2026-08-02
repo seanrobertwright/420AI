@@ -18,13 +18,14 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ us
     method: "PATCH",
     body,
     contentType: "application/json",
+    signal: req.signal,
   });
 }
 
 export async function DELETE(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ userId: string }> },
 ) {
   const { userId } = await params;
-  return proxyJson(`/v1/members/${userId}`, { method: "DELETE" });
+  return proxyJson(`/v1/members/${userId}`, { method: "DELETE", signal: req.signal });
 }

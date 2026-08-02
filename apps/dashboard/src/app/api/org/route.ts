@@ -11,11 +11,16 @@ import { proxyJson } from "@/lib/proxy";
  */
 export const dynamic = "force-dynamic";
 
-export async function GET() {
-  return proxyJson("/v1/org");
+export async function GET(req: NextRequest) {
+  return proxyJson("/v1/org", { signal: req.signal });
 }
 
 export async function PATCH(req: NextRequest) {
   const body = await req.text();
-  return proxyJson("/v1/org", { method: "PATCH", body, contentType: "application/json" });
+  return proxyJson("/v1/org", {
+    method: "PATCH",
+    body,
+    contentType: "application/json",
+    signal: req.signal,
+  });
 }

@@ -64,6 +64,14 @@ function outranks(actorRole: string, targetRole: string): boolean {
 
 export function TeamView({ members, yourRole }: { members: Member[]; yourRole: string }) {
   const router = useRouter();
+  /**
+   * FIRST-PAINT SEED ONLY. React ignores a changed `members` prop once this component is mounted,
+   * so `router.refresh()` re-rendering the server page does NOT update this table — `refreshAll()`
+   * owns every subsequent update by re-fetching `/api/members` itself. The two are deliberately
+   * redundant: the server fetch is what puts the roster in the first paint, the client fetch is
+   * what keeps it current. Do not drop the client re-fetch on the assumption that
+   * `router.refresh()` covers it; the table would silently stop updating after every mutation.
+   */
   const [roster, setRoster] = useState<Member[]>(members);
   /** `null` = not loaded yet; `[]` = loaded and empty; `"forbidden"` = a viewer, render no panel. */
   const [invites, setInvites] = useState<Invite[] | "forbidden" | null>(null);
@@ -113,9 +121,34 @@ export function TeamView({ members, yourRole }: { members: Member[]; yourRole: s
     };
   }, [loadInvites]);
 
+  /**
+   * A 401 on THIS page almost always means the mutation just performed targeted the caller.
+   *
+   * `outranks` permits EQUAL rank by design, so an owner may legitimately press "Reset 2FA" or
+   * "Remove" on their own row — and both revoke the target's sessions, deliberately (clearing MFA
+   * while leaving a session alive is strictly worse than doing nothing). The session revoked is the
+   * one making the request, so every subsequent fetch 401s: without this branch the loaders swallow
+   * that to `null`, the roster silently freezes at its pre-mutation state, and the user is left
+   * looking at a success message on a page that no longer works.
+   *
+   * A HARD navigation, not `router.push`: only a full request makes the middleware re-gate with the
+   * (now absent) cookie. Same reason `app-nav.tsx`'s logout does it this way.
+   *
+   * Returns true when it has taken over, so callers stop rather than also showing an error.
+   */
+  function bounceIfSignedOut(status: number): boolean {
+    if (status !== 401) return false;
+    window.location.href = "/login";
+    return true;
+  }
+
   /** One place that turns a failed mutation into copy, so every 403 reads the same (15.4). */
   function reportFailure(status: number, fallback: string): void {
-    if (status === 403) setError(FORBIDDEN_MESSAGE);
+    // Belt-and-braces behind `bounceIfSignedOut`: if a 401 ever reaches here, say the one true
+    // thing about it rather than "Could not change that role", which reads as transient and
+    // invites the retry that cannot work.
+    if (status === 401) setError("Your session has ended. Sign in again.");
+    else if (status === 403) setError(FORBIDDEN_MESSAGE);
     else if (status === 409) setError("That change conflicts with the current state.");
     else if (status === 404) setError("That person is no longer in this organization.");
     else setError(fallback);
@@ -141,6 +174,7 @@ export function TeamView({ members, yourRole }: { members: Member[]; yourRole: s
         body: JSON.stringify({ email: inviteEmail, role: inviteRole }),
       });
       if (!res.ok) {
+        if (bounceIfSignedOut(res.status)) return;
         if (res.status === 409) {
           // The three-way rejection (already a member / user exists / invite pending) — the
           // upstream message names which, and it is more useful than anything generic here.
@@ -180,6 +214,7 @@ export function TeamView({ members, yourRole }: { members: Member[]; yourRole: s
         body: JSON.stringify({ role }),
       });
       if (!res.ok) {
+        if (bounceIfSignedOut(res.status)) return;
         reportFailure(res.status, "Could not change that role.");
         return;
       }
@@ -198,6 +233,7 @@ export function TeamView({ members, yourRole }: { members: Member[]; yourRole: s
     try {
       const res = await fetch(`/api/members/${userId}`, { method: "DELETE" });
       if (!res.ok) {
+        if (bounceIfSignedOut(res.status)) return;
         // 409 here is the LAST-OWNER guard specifically, so it gets its own wording.
         if (res.status === 409) setError("An organization must always have at least one owner.");
         else reportFailure(res.status, "Could not remove that member.");
@@ -218,6 +254,7 @@ export function TeamView({ members, yourRole }: { members: Member[]; yourRole: s
     try {
       const res = await fetch(`/api/members/${userId}/mfa`, { method: "DELETE" });
       if (!res.ok) {
+        if (bounceIfSignedOut(res.status)) return;
         reportFailure(res.status, "Could not reset two-factor authentication.");
         return;
       }
@@ -239,6 +276,7 @@ export function TeamView({ members, yourRole }: { members: Member[]; yourRole: s
     try {
       const res = await fetch(`/api/invites/${id}`, { method: "DELETE" });
       if (!res.ok && res.status !== 404) {
+        if (bounceIfSignedOut(res.status)) return;
         reportFailure(res.status, "Could not revoke that invitation.");
         return;
       }
@@ -391,8 +429,15 @@ export function TeamView({ members, yourRole }: { members: Member[]; yourRole: s
                 <p className="text-xs font-medium">
                   No mailer is configured, so pass this link on yourself. It is shown once.
                 </p>
+                {/* AN ABSOLUTE URL, not a path. This is the SUPPORTED no-SMTP workflow
+                    (D-15.5-10), so a solo self-hosted operator hits it on every onboarding — and
+                    the copy above says "pass this link on", which a bare `/invite/<token>` is not.
+                    The origin comes from the browser, so it is by definition the host the admin is
+                    already reaching the dashboard on. `handoffToken` is only ever set by a client
+                    mutation, so `window` exists by the time this renders; the guard is for the
+                    server pass, where it is null and this block does not render at all. */}
                 <code className="block break-all font-mono text-xs">
-                  {`/invite/${handoffToken}`}
+                  {`${typeof window === "undefined" ? "" : window.location.origin}/invite/${handoffToken}`}
                 </code>
               </div>
             ) : null}

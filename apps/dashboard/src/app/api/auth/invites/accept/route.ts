@@ -40,6 +40,10 @@ export async function POST(req: NextRequest) {
       headers: { "content-type": "application/json" },
       body,
       cache: "no-store",
+      // Cancels the upstream hop on disconnect. NOTE this does NOT roll back a user that ingest
+      // already created — the accept is transactional server-side, and abandoning the request
+      // mid-flight leaves whatever committed. The signal bounds the SOCKET, not the write.
+      signal: req.signal,
     });
   } catch {
     return NextResponse.json({ error: "ingest unreachable" }, { status: 502 });

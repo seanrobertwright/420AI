@@ -12,7 +12,20 @@
 import { NextResponse } from "next/server";
 import { ingestUrl, adminHeaders } from "@/lib/ingest";
 
-type Init = { method?: string; body?: BodyInit | null; contentType?: string };
+type Init = {
+  method?: string;
+  body?: BodyInit | null;
+  contentType?: string;
+  /**
+   * M15 15.10 — the caller's `request.signal`, so a client disconnect cancels the server→ingest hop
+   * instead of leaving it running to completion. OPTIONAL, and that is deliberate: every pre-15.10
+   * caller omits it and behaves exactly as before, so this is additive rather than a change to ~30
+   * existing routes. `proxyStream` has always threaded a signal (the M9 leak lesson was about an
+   * SSE stream held open); these JSON hops are short and bounded, so the win is smaller — but the
+   * discipline belongs in ONE place rather than being re-decided per route.
+   */
+  signal?: AbortSignal;
+};
 
 /**
  * Proxy a JSON request to ingest, adding the admin bearer on the server→ingest hop.
@@ -30,6 +43,7 @@ export async function proxyJson(path: string, init: Init = {}): Promise<NextResp
       },
       body: init.body ?? null,
       cache: "no-store",
+      ...(init.signal ? { signal: init.signal } : {}),
     });
     const text = await res.text(); // ingest always replies JSON; pass through verbatim
     if (!res.ok) {

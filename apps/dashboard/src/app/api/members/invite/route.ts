@@ -19,5 +19,6 @@ export async function POST(req: NextRequest) {
     method: "POST",
     body,
     contentType: "application/json",
+    signal: req.signal,
   });
 }

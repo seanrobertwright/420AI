@@ -20,8 +20,8 @@ import { proxyJson } from "@/lib/proxy";
  */
 export const dynamic = "force-dynamic";
 
-export async function GET() {
-  return proxyJson("/v1/auth/api-keys");
+export async function GET(req: NextRequest) {
+  return proxyJson("/v1/auth/api-keys", { signal: req.signal });
 }
 
 export async function POST(req: NextRequest) {
@@ -30,9 +30,10 @@ export async function POST(req: NextRequest) {
     method: "POST",
     body,
     contentType: "application/json",
+    signal: req.signal,
   });
 }
 
-export async function DELETE() {
-  return proxyJson("/v1/auth/api-keys", { method: "DELETE" });
+export async function DELETE(req: NextRequest) {
+  return proxyJson("/v1/auth/api-keys", { method: "DELETE", signal: req.signal });
 }

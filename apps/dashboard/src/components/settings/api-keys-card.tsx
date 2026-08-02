@@ -122,6 +122,26 @@ export function ApiKeysCard() {
     }
   }
 
+  /**
+   * GUARDED AND CAUGHT, mirroring `pairing/pairing-view.tsx` — and this is the one control where it
+   * matters most, because the value it copies is shown exactly once.
+   *
+   * `navigator.clipboard` is UNDEFINED outside a secure context. `localhost` counts as secure, so an
+   * unguarded call works in dev and in every test while throwing on a self-hosted box reached at
+   * `http://192.168.x.x:3000` — which is this product's actual deployment shape. The optional call
+   * covers that; the `catch` covers a rejected write (permission denied, document not focused).
+   * Either way the token stays visible in the block above, so manual selection is a real fallback.
+   */
+  async function copyToken(): Promise<void> {
+    if (!minted) return;
+    try {
+      await navigator.clipboard?.writeText(minted.token);
+      setCopied(true);
+    } catch {
+      /* clipboard blocked or unavailable — the token is visible above to copy manually */
+    }
+  }
+
   async function revoke(id: string): Promise<void> {
     setBusy(id);
     setError(null);
@@ -180,9 +200,7 @@ export function ApiKeysCard() {
             <div className="flex gap-2">
               <button
                 type="button"
-                onClick={() => {
-                  void navigator.clipboard.writeText(minted.token).then(() => setCopied(true));
-                }}
+                onClick={() => void copyToken()}
                 className="border-border hover:bg-muted rounded-md border px-2 py-1 text-xs font-medium"
               >
                 {copied ? "Copied" : "Copy"}
