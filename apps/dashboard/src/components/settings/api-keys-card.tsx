@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { formatDate } from "@/lib/format";
@@ -27,6 +26,13 @@ import { formatDate } from "@/lib/format";
  *
  * The password is held only for the duration of the request and cleared in a `finally` — a password
  * lingering in island state is one stray re-render away from being somewhere it should not be.
+ *
+ * NO `router.refresh()` ANYWHERE IN THIS FILE, deliberately. This island owns its own data — it
+ * fetches `/api/auth/api-keys` itself and `settings/page.tsx` passes it nothing — so refreshing the
+ * server component could not change a single rendered value here. It is not free either: the
+ * Settings page's server pass re-fetches `/v1/monitor`, and per CLAUDE.md's 15.4 lesson that GET
+ * performs an alert-firing RECONCILE (a read that writes). Contrast `team/team-view.tsx`, where
+ * `router.refresh()` IS load-bearing because the PageShell subtitle comes from a server fetch.
  */
 
 interface ApiKey {
@@ -39,7 +45,6 @@ interface ApiKey {
 }
 
 export function ApiKeysCard() {
-  const router = useRouter();
   const [keys, setKeys] = useState<ApiKey[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -111,8 +116,12 @@ export function ApiKeysCard() {
       setMinted({ name: body.apiKey.name, token: body.token });
       setName("");
       setPasswordNeeded(false);
-      setKeys(await load());
-      router.refresh();
+      // NEVER write a failed reload into `keys`. `load()` returns null on any non-ok/throw, and
+      // `keys === null` renders "No API keys." — so a blip on the follow-up GET would tell the user
+      // they hold none, immediately after the green block showed them one they just minted.
+      // `team-view.tsx`'s `if (m) setRoster(m)` guards the same way.
+      const after = await load();
+      if (after) setKeys(after);
     } catch {
       setError("Archive unreachable.");
     } finally {
@@ -123,22 +132,33 @@ export function ApiKeysCard() {
   }
 
   /**
-   * GUARDED AND CAUGHT, mirroring `pairing/pairing-view.tsx` — and this is the one control where it
-   * matters most, because the value it copies is shown exactly once.
+   * `copied` IS ONLY EVER SET AFTER A RESOLVED WRITE, and that is the whole point of this shape.
    *
-   * `navigator.clipboard` is UNDEFINED outside a secure context. `localhost` counts as secure, so an
-   * unguarded call works in dev and in every test while throwing on a self-hosted box reached at
-   * `http://192.168.x.x:3000` — which is this product's actual deployment shape. The optional call
-   * covers that; the `catch` covers a rejected write (permission denied, document not focused).
-   * Either way the token stays visible in the block above, so manual selection is a real fallback.
+   * `navigator.clipboard` is UNDEFINED outside a secure context — `localhost` counts as secure, so
+   * anything that works in dev and in every test can still fail on a self-hosted box reached at
+   * `http://192.168.x.x:3000`, which is this product's actual deployment shape.
+   *
+   * An optional call (`navigator.clipboard?.writeText(...)`) is NOT the fix, and is in fact worse
+   * than no guard: it resolves to `undefined` without throwing, so the `catch` never runs and the
+   * button flips to "Copied" having copied nothing. The user then presses Dismiss and the minted
+   * plaintext — which exists exactly once and is never re-fetchable — is gone. So the absence is
+   * detected EXPLICITLY and reported, and the write is awaited before claiming success.
+   *
+   * Both failure paths tell the user the one thing that still works: the token is rendered above,
+   * so manual selection is a real fallback. (`pairing/pairing-view.tsx` catches a rejection the
+   * same way, but its value can be re-fetched — this one cannot, so it also needs the copy.)
    */
   async function copyToken(): Promise<void> {
     if (!minted) return;
+    if (!navigator.clipboard) {
+      setError("Copying is unavailable here — select the token above and copy it manually.");
+      return;
+    }
     try {
-      await navigator.clipboard?.writeText(minted.token);
+      await navigator.clipboard.writeText(minted.token);
       setCopied(true);
     } catch {
-      /* clipboard blocked or unavailable — the token is visible above to copy manually */
+      setError("Copy was blocked — select the token above and copy it manually.");
     }
   }
 
@@ -153,8 +173,8 @@ export function ApiKeysCard() {
         setError("Could not revoke that key.");
         return;
       }
-      setKeys(await load());
-      router.refresh();
+      const after = await load();
+      if (after) setKeys(after);
     } catch {
       setError("Archive unreachable.");
     } finally {
@@ -171,8 +191,8 @@ export function ApiKeysCard() {
         setError("Could not revoke your keys.");
         return;
       }
-      setKeys(await load());
-      router.refresh();
+      const after = await load();
+      if (after) setKeys(after);
     } catch {
       setError("Archive unreachable.");
     } finally {
@@ -261,7 +281,7 @@ export function ApiKeysCard() {
           </button>
         </form>
 
-        {keys && keys.length > 0 ? (
+        {keys === null ? null : keys.length > 0 ? (
           <div className="space-y-2">
             {keys.map((k) => (
               <div key={k.id} className="flex items-center justify-between gap-4">
@@ -304,6 +324,10 @@ export function ApiKeysCard() {
             </button>
           </div>
         ) : (
+          // `keys === null` is handled above and renders NOTHING, so this copy is only ever
+          // shown for a LOADED, genuinely empty list. Before, a failed load and a first paint both
+          // rendered "No API keys." — telling a user who holds live keys that they hold none, and
+          // taking the "Revoke all keys" panic button away with them at the worst moment.
           <p className="text-muted-foreground text-xs">No API keys.</p>
         )}
 

@@ -14,6 +14,7 @@ import {
 import { cn } from "@/lib/utils";
 import { formatDate } from "@/lib/format";
 import { FORBIDDEN_MESSAGE } from "@/lib/mutation-error";
+import { ROLES, hasRole, type Role } from "@420ai/shared/roles";
 
 /**
  * M15 15.10 — the team surface's client island. Mirrors `settings/sso-links.tsx` exactly: a
@@ -32,8 +33,19 @@ import { FORBIDDEN_MESSAGE } from "@/lib/mutation-error";
  * error occurred". The roster must load either way.
  */
 
-const ROLES = ["viewer", "member", "admin", "owner"] as const;
-const RANK: Record<string, number> = { viewer: 0, member: 1, admin: 2, owner: 3 };
+/**
+ * THE LADDER IS IMPORTED, NOT RE-DECLARED - from `@420ai/shared/roles`, the same module
+ * `apps/ingest/src/routes/members.ts` uses. The earlier local copy re-introduced exactly the
+ * anti-pattern `roles.ts` exists to document: a `Record<string, number>` guarded by
+ * `!== undefined`, which PASSES for "toString"/"constructor"/"__proto__" (all inherited from
+ * `Object.prototype`, none of them `undefined`) and returns false only because `Function >= 2`
+ * coerces to `NaN >= 2` - the right answer BY ACCIDENT, in the one function whose whole job is
+ * failing closed. `hasRole` uses `Object.hasOwn` and asks the question directly.
+ *
+ * Imported from the `/roles` SUBPATH, never the package root: the barrel re-exports
+ * `catalog-signing` and eight parsers, and this is a "use client" island, so a root import would
+ * drag all of that into the browser bundle. `roles.ts` is dependency-free.
+ */
 
 interface Member {
   userId: string;
@@ -57,9 +69,9 @@ interface Invite {
  * that will 403.
  */
 function outranks(actorRole: string, targetRole: string): boolean {
-  const a = RANK[actorRole];
-  const t = RANK[targetRole];
-  return a !== undefined && t !== undefined && a >= t;
+  // `actorRole` is deliberately NOT cast - it arrives from a TEXT column with no CHECK, and
+  // `hasRole` takes a `string` for exactly that reason. Only the MINIMUM is narrowed.
+  return hasRole(actorRole, targetRole as Role);
 }
 
 export function TeamView({ members, yourRole }: { members: Member[]; yourRole: string }) {
@@ -73,7 +85,13 @@ export function TeamView({ members, yourRole }: { members: Member[]; yourRole: s
    * `router.refresh()` covers it; the table would silently stop updating after every mutation.
    */
   const [roster, setRoster] = useState<Member[]>(members);
-  /** `null` = not loaded yet; `[]` = loaded and empty; `"forbidden"` = a viewer, render no panel. */
+  /**
+   * `[]` = loaded and empty - `"forbidden"` = a viewer, render no panel - `null` = NOT LOADED YET
+   * **OR THE LOAD FAILED**, deliberately collapsed because both mean "do not render a panel".
+   * Be clear about the cost: there is no error copy for the failure case, so an admin whose
+   * `/api/invites` hop 500s sees a permanent absence rather than a message. A 401 is the one
+   * failure pulled out separately, because it has a real remedy (bounce to /login).
+   */
   const [invites, setInvites] = useState<Invite[] | "forbidden" | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -87,20 +105,30 @@ export function TeamView({ members, yourRole }: { members: Member[]; yourRole: s
    */
   const [handoffToken, setHandoffToken] = useState<string | null>(null);
 
-  const isAdmin = RANK[yourRole] !== undefined && RANK[yourRole] >= RANK.admin;
+  const isAdmin = hasRole(yourRole, "admin");
 
-  const loadMembers = useCallback(async (): Promise<Member[] | null> => {
-    return fetch("/api/members")
-      .then((r) => (r.ok ? (r.json() as Promise<{ members: Member[] }>) : null))
-      .then((d) => d?.members ?? null)
-      .catch(() => null);
+  const loadMembers = useCallback(async (): Promise<Member[] | "unauthenticated" | null> => {
+    try {
+      const res = await fetch("/api/members");
+      // REPORTED, never collapsed to null. A 401 is not "the load failed" - it is "the session
+      // making these requests no longer exists", which needs a different response entirely.
+      if (res.status === 401) return "unauthenticated";
+      if (!res.ok) return null;
+      const body = (await res.json()) as { members: Member[] };
+      return body.members ?? null;
+    } catch {
+      return null;
+    }
   }, []);
 
-  const loadInvites = useCallback(async (): Promise<Invite[] | "forbidden" | null> => {
+  const loadInvites = useCallback(async (): Promise<
+    Invite[] | "forbidden" | "unauthenticated" | null
+  > => {
     try {
       const res = await fetch("/api/invites");
       // 403 is the EXPECTED answer for a viewer, not a failure — see the header.
       if (res.status === 403) return "forbidden";
+      if (res.status === 401) return "unauthenticated";
       if (!res.ok) return null;
       const body = (await res.json()) as { invites: Invite[] };
       return body.invites ?? [];
@@ -112,7 +140,14 @@ export function TeamView({ members, yourRole }: { members: Member[]; yourRole: s
   useEffect(() => {
     let cancelled = false;
     void loadInvites().then((i) => {
-      if (!cancelled) setInvites(i);
+      if (cancelled) return;
+      // A 401 on the FIRST load means the cookie died before the page was even used - bounce
+      // rather than rendering a permanently panel-less page.
+      if (i === "unauthenticated") {
+        bounceIfSignedOut(401);
+        return;
+      }
+      setInvites(i);
     });
     // Armed before the first await resolves, so a navigation mid-fetch cannot setState on an
     // unmounted island.
@@ -154,8 +189,23 @@ export function TeamView({ members, yourRole }: { members: Member[]; yourRole: s
     else setError(fallback);
   }
 
+  /**
+   * THE SELF-TARGET PATH LANDS HERE, not in any `!res.ok` branch - which is why the 401 check has
+   * to exist in BOTH places, and why guarding only the failure branches left the defect live.
+   *
+   * Reset 2FA / Remove on your OWN row is legal (`outranks` allows equal rank) and returns 204, so
+   * the mutation SUCCEEDS, control reaches `setNotice(...)`, and then this runs. By now the server
+   * has revoked the acting session, so every fetch below 401s. Collapsing that to `null` froze the
+   * roster at its pre-mutation state underneath a success message - and the middleware cannot
+   * rescue the user, because `verifySessionEdge` checks only the cookie HMAC and expiry, both of
+   * which still pass for a REVOKED session. Nothing else would ever redirect them.
+   */
   async function refreshAll(): Promise<void> {
     const [m, i] = await Promise.all([loadMembers(), loadInvites()]);
+    if (m === "unauthenticated" || i === "unauthenticated") {
+      bounceIfSignedOut(401);
+      return;
+    }
     if (m) setRoster(m);
     setInvites(i);
     router.refresh();

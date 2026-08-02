@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { FORBIDDEN_MESSAGE } from "@/lib/mutation-error";
@@ -18,6 +17,11 @@ import { FORBIDDEN_MESSAGE } from "@/lib/mutation-error";
  * hide the card from exactly the deployment that needs it. (See `renameOrg`'s comment for why the
  * flag is deliberately not cleared on rename.)
  *
+ * NO `router.refresh()`: this island owns its own data (`settings/page.tsx` passes it nothing), so
+ * a server re-render cannot change anything rendered here — and it would re-run `GET /v1/monitor`,
+ * which performs an alert reconcile (CLAUDE.md 15.4). `<SsoLinks/>`/`<MfaCard/>` call it, but they
+ * predate that observation; do not re-add it here by pattern-matching.
+ *
  * Renaming is `owner`-only upstream, so the field is shown only to an owner — courtesy, not
  * enforcement; the 403 is the gate. The rename exists because `ensurePersonalOrg` seeds the org
  * name from the user's EMAIL ADDRESS, so without it a colleague's first sight of the org is
@@ -33,7 +37,6 @@ interface Org {
 }
 
 export function OrgCard() {
-  const router = useRouter();
   const [org, setOrg] = useState<Org | null>(null);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -75,10 +78,13 @@ export function OrgCard() {
         setError(res.status === 403 ? FORBIDDEN_MESSAGE : "Could not rename the organization.");
         return;
       }
+      // Guarded for the same reason `api-keys-card.tsx` guards its reload: `load()` returns null
+      // on any non-ok/throw, and `org === null` makes this card render NOTHING — so a blip on the
+      // follow-up GET would make the whole Organization card vanish right after a successful
+      // rename, which reads as "the rename deleted the org".
       const refreshed = await load();
-      setOrg(refreshed);
+      if (refreshed) setOrg(refreshed);
       setSaved(true);
-      router.refresh();
     } catch {
       setError("Archive unreachable.");
     } finally {
