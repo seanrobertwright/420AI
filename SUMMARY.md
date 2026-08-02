@@ -664,7 +664,7 @@ enforced`, the sibling of `skipped ≠ passed`. Closes the Spike-6 hole: a cross
         deferred:** QR rendering (D-15.8-14) and any org-level "require MFA" policy (D-15.8-2); there
         is deliberately **no** admin "reset MFA for user X" endpoint, since it needs 15.5's full rank
         ceiling-and-floor plus an audit record — break-glass is direct DB access (D-M15-7)
-  - [x] **15.9** API keys + retire `ADMIN_TOKEN` — DONE `2026-08-01` (PR #NN). The last CREDENTIAL
+  - [x] **15.9** API keys + retire `ADMIN_TOKEN` — DONE `2026-08-01` (PR #69). The last CREDENTIAL
         slice, and the one that closes M15's own oldest hole: `ADMIN_TOKEN` violated every property
         the previous nine slices established — **un-attributable** (every holder resolved to the same
         bootstrap admin, so 15.10's audit table would have recorded one identity for three clients),
