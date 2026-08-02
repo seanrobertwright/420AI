@@ -151,7 +151,11 @@ export async function resolvePrincipal(
  *   - otherwise ⇒ the `min`. NOT merely a mint-time cap: re-deriving it here is what makes a
  *     DEMOTION take effect on the key's next request rather than on key rotation, exactly as
  *     `findPrincipalByEmail` already re-resolves a session's role (D-15.6-7). Conversely a
- *     PROMOTION does not silently upgrade an existing key past the rung it was minted at.
+ *     PROMOTION does not upgrade a key past the rung it was minted at — BUT ONLY WHEN `keyRole` IS
+ *     SET. A null-role key tracks its owner in BOTH directions by definition, and since omitting
+ *     `role` is the documented default, that is the common case: promote the owner and every
+ *     role-less key they hold is promoted with them, silently and without rotation. Mint with an
+ *     explicit `role` if you want a ceiling that survives the owner's promotion.
  *
  * `membershipRole` is a `string`, not a `Role`, for the reason `Principal.role` is — it comes from
  * a TEXT column with no CHECK. It is deliberately NOT validated here: `hasRole` fails closed on an

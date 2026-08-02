@@ -8,6 +8,7 @@ import {
   ensurePersonalOrg,
   memberships,
   setUserPassword,
+  users,
   upsertUnconfirmedTotp,
 } from "@420ai/db";
 import { buildApp } from "./app.js";
@@ -369,6 +370,43 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.9 API keys (two-role, HTTP)", () 
    * ever reached it would have no session to age-check. It fails closed on both branches, and the
    * password branch is the one that applies to a password-holding account.
    */
+  /**
+   * T3 (PR review) — THE SSO BRANCH, which the test below documents but cannot reach.
+   *
+   * That test uses a password-holding account, so `requireRecentAuth` takes the PASSWORD branch and
+   * it is really a duplicate of the missing-password case. The claim it makes — "a key caller has
+   * `sessionId === null`, so the SSO branch would have no session to age-check" — needs an account
+   * with `password_hash IS NULL` to be exercised at all.
+   */
+  it("a key belonging to an SSO-ONLY account cannot mint (no session to age-check)", async () => {
+    // Mint over a fresh session while the account still has a password…
+    const session = await login("owner@example.com");
+    const { token } = await mint(session, { name: "sso-owned" });
+    expect(await meStatus(token)).toBe(200); // positive first
+
+    // …then make the account SSO-only, so the re-auth gate must fall to the session-age branch.
+    await owner.db.update(users).set({ passwordHash: null }).where(eq(users.id, userOwner));
+
+    // The SESSION can still mint — it is under 15 minutes old (the SSO branch's positive case).
+    const bySession = await app.inject({
+      method: "POST",
+      url: "/v1/auth/api-keys",
+      headers: json(session),
+      payload: { name: "via-recent-session" },
+    });
+    expect(bySession.statusCode, `SSO-only recent session: ${bySession.body}`).toBe(201);
+
+    // The KEY cannot: it carries no session, so there is nothing to age-check and it fails closed.
+    const byKey = await app.inject({
+      method: "POST",
+      url: "/v1/auth/api-keys",
+      headers: json(token),
+      payload: { name: "bootstrapped" },
+    });
+    expect(byKey.statusCode, "a key must not bootstrap another key").toBe(401);
+    expect(byKey.json()).toMatchObject({ reason: "reauth_required" });
+  });
+
   it("a key cannot mint a second key without the password (no privilege bootstrapping)", async () => {
     const session = await login("owner@example.com");
     const { token } = await mint(session);
@@ -613,6 +651,67 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.9 API keys (two-role, HTTP)", () 
     const ownerSession = await login("owner@example.com");
     const theirs = await mint(ownerSession, { name: "desktop" });
     expect(theirs.apiKey.name).toBe("desktop");
+  });
+
+  // ── 8c. REVOKE-ALL (PR-review finding: the sole owner had no way to purge) ─────────────────
+
+  /**
+   * Before this route, `revokeAllApiKeys` had exactly ONE call site — member removal — which an
+   * admin cannot apply to an owner (the 15.5 floor check) and nobody can apply to a SOLE owner (the
+   * last-owner guard). So the default single-admin deployment could not purge keys at all, only
+   * delete them one at a time. "Kill everything I have" has to be reachable by the person most
+   * likely to need it.
+   */
+  it("DELETE /v1/auth/api-keys revokes every key the caller holds, and is idempotent", async () => {
+    const session = await login("owner@example.com");
+    const a = await mint(session, { name: "one" });
+    const b = await mint(session, { name: "two" });
+    expect(await meStatus(a.token)).toBe(200); // positive first
+    expect(await meStatus(b.token)).toBe(200);
+
+    const res = await app.inject({
+      method: "DELETE",
+      url: "/v1/auth/api-keys",
+      headers: asUser(session),
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toEqual({ revoked: 2 });
+
+    expect(await meStatus(a.token)).toBe(401);
+    expect(await meStatus(b.token)).toBe(401);
+
+    // Idempotent by the `revoked_at IS NULL` predicate — a second press answers 0, not an error.
+    const again = await app.inject({
+      method: "DELETE",
+      url: "/v1/auth/api-keys",
+      headers: asUser(session),
+    });
+    expect(again.json()).toEqual({ revoked: 0 });
+  });
+
+  it("revoke-all touches only the CALLER's keys", async () => {
+    const ownerSession = await login("owner@example.com");
+    const memberSession = await login("member@example.com");
+    const theirs = await mint(memberSession, { name: "colleague" });
+    await mint(ownerSession, { name: "mine" });
+
+    await app.inject({ method: "DELETE", url: "/v1/auth/api-keys", headers: asUser(ownerSession) });
+    expect(await meStatus(theirs.token), "a colleague's key must survive").toBe(200);
+  });
+
+  it("a KEY can press the panic button too (revocation is never re-auth gated)", async () => {
+    // Deliberate: a stolen key can revoke its owner's keys, INCLUDING itself. That follows from
+    // D-15.9-6 (revocation must never be harder than minting) and is documented in the ops guide
+    // as a DoS consideration — asserted here so the behaviour is a decision, not an accident.
+    const session = await login("owner@example.com");
+    const { token } = await mint(session, { name: "self" });
+    const res = await app.inject({
+      method: "DELETE",
+      url: "/v1/auth/api-keys",
+      headers: asUser(token),
+    });
+    expect(res.statusCode).toBe(200);
+    expect(await meStatus(token), "it revoked itself").toBe(401);
   });
 
   // ── 9. TIER ISOLATION ──────────────────────────────────────────────────────────────────────

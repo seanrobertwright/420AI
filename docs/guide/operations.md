@@ -1137,7 +1137,17 @@ thing to revoke.
 | Minting returns `409 at_capacity`                                   | You hold `MAX_API_KEYS_PER_USER` live keys. Revoke the ones whose `lastUsedAt` is old or null — that column exists precisely to make this decision answerable.                                                                                                                                                                     |
 | Minting returns `409 duplicate_name`                                | A LIVE key of yours already has that name. Names are unique per user among live keys so the revoke list stays unambiguous; revoke the old one first, then re-mint under the same name.                                                                                                                                             |
 
-### Rolling back migration 0021
+### Rolling back migrations 0022 and 0021
+
+`db:rollback` applies **only the latest** migration, and 15.9 ships two — so the first invocation
+does **not** do what the paragraph below describes. Read this order carefully; getting it backwards
+is how someone destroys every key believing the first rollback was safe.
+
+**First `db:rollback` → 0022** (drop the `api_keys_user_live_name` index). **Lossless**: no key stops
+working, no row is touched, and the only behavioural change is that `409 duplicate_name` stops firing
+and a user may again hold two live keys with the same name.
+
+**A second `db:rollback` → 0021**, and that one is the destructive one:
 
 The down-migration **drops `api_keys`**, which **revokes every key at once**: the desktop app and
 every scheduled script start returning 401 immediately. Rolling forward again does **not** restore

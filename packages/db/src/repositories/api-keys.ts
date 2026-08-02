@@ -102,8 +102,12 @@ export type MintRefusal = "at_capacity" | "duplicate_name";
  *   landing at `n + 2` over a cap of `n + 1`. Locking the *existing key rows* would not help — the
  *   race is two INSERTs, and an INSERT is invisible to a lock on rows that already exist. Locking
  *   the single `users` row is what serialises them: the second mint blocks until the first commits,
- *   then counts a state that already includes it. This is the revoke-vs-INSERT gap `revokeAllApiKeys`
- *   documents as NOT closed, closed here at the only end where it can be.
+ *   then counts a state that already includes it. THIS CLOSES MINT vs MINT, AND NOTHING ELSE — an
+ *   earlier version of this comment claimed it also closed the revoke-vs-INSERT gap
+ *   `revokeAllApiKeys` documents, and that was false in the way CLAUDE.md 15.5 warns about: a
+ *   concurrent revoke is a blind `UPDATE api_keys`, and `removeMember` touches `memberships`, so
+ *   NEITHER ever requests a lock on this `users` row and neither can block on it. That gap stays
+ *   open, exactly as `revokeAllApiKeys`'s own comment says it does — believe that one.
  *
  *   NAME — the `api_keys_user_live_name` PARTIAL UNIQUE INDEX (migration 0022). No read-then-write
  *   guard at all: the index refuses the second inserter at the storage layer. The `23505` is caught
@@ -124,6 +128,35 @@ export async function mintApiKey(
 
   const live = await countLiveApiKeys(tx, userId);
   if (live >= maxPerUser) return { ok: false, reason: "at_capacity" };
+
+  // RECLAIM AN EXPIRED KEY'S NAME. Without this the slice shipped a dead end, reproduced against a
+  // live database: the partial index is `WHERE revoked_at IS NULL` and CANNOT also test expiry — a
+  // partial-index predicate must be IMMUTABLE and `now()` is only STABLE — while every other
+  // definition of "live" here DOES exclude expired rows. So an expired-but-unrevoked key was
+  // invisible to `listApiKeys`, consumed no cap slot, could not be revoked (the list never yields
+  // its id) and still refused its own name with `duplicate_name`. That is exactly the day-91
+  // "my `desktop` key expired, mint a new `desktop`" path, with no in-product remedy.
+  //
+  // Revoking it is honest rather than a workaround: the row is already inert — it cannot
+  // authenticate, `isApiKeyLive` is false for it — so stamping `revoked_at` changes no capability
+  // and simply makes the storage layer agree with every other predicate in this file.
+  //
+  // SAFE UNDER CONCURRENCY because it runs inside the `FOR UPDATE` critical section above: two
+  // mints of the same name serialise, so the second sees the first's committed row and is correctly
+  // refused by the index rather than reclaiming a name that is now live again.
+  await tx
+    .update(apiKeys)
+    .set({ revokedAt: new Date() })
+    .where(
+      and(
+        eq(apiKeys.userId, userId),
+        eq(apiKeys.name, opts.name),
+        isNull(apiKeys.revokedAt),
+        // Strictly expired — never a live key. `IS NOT NULL` matters: a never-expiring key must
+        // NOT be swept, or minting would silently revoke the working key it collides with.
+        gt(sql`now()`, apiKeys.expiresAt),
+      ),
+    );
 
   try {
     const { key, token } = await createApiKey(tx, userId, opts);
@@ -342,8 +375,13 @@ export async function revokeApiKey(db: DbClient, userId: string, id: string): Pr
  *   inserted yet, so a mint racing a member removal could create a key this revoke runs straight
  *   past. Nothing in THIS function can fix that. Unlike the session case it is not closed at the
  *   other end either — but the exposure is bounded differently: the racing key's owner has just
- *   lost their membership, so `findPrincipalByEmail` resolves no principal on the very next
- *   request and the survivor authenticates as nobody (401). The row is orphaned, not usable.
+ *   lost their membership IN THAT ORG. The key path resolves via `findPrincipalByUserId` — NOT
+ *   `findPrincipalByEmail`, which an earlier version of this comment named; that is the session
+ *   path's resolver — and its `innerJoin memberships` fails closed for the org they left. State the
+ *   residual honestly rather than claiming more: `ensurePersonalOrg` means the user usually still
+ *   holds a PERSONAL-org membership, so the orphaned key may still resolve a principal there. That
+ *   principal grants nothing in the org they were removed from, so this is not cross-tenant — but
+ *   it is not "authenticates as nobody" either.
  */
 export async function revokeAllApiKeys(db: DbClient, userId: string): Promise<number> {
   const revoked = await db

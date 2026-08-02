@@ -12,7 +12,9 @@
 -- that credential's behaviour; rolling the SCHEMA back under a post-15.9 server leaves the
 -- deployment with no working machine credential at all. Roll the code back with it.
 --
--- `db:rollback` applies only the LATEST migration, so this file is the whole rollback surface. No
+-- `db:rollback` applies only the LATEST migration, and 0022 now sits ABOVE this one — so reaching
+-- this file takes TWO invocations: the first drops the `api_keys_user_live_name` index (lossless),
+-- the second runs what is below. This file is therefore NOT the whole rollback surface any more. No
 -- `users`, `memberships`, `sessions` or `sso_identities` row is touched, and pre-0021 code ignores
 -- the table entirely.
 DROP TABLE IF EXISTS "api_keys";

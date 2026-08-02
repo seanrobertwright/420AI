@@ -145,8 +145,9 @@ export function SyncHealth() {
           <div className="text-sm">
             <p className="text-destructive">{serverError}</p>
             <p className="text-muted-foreground mt-1 text-xs">
-              The server fleet view needs an API key — mint one in the dashboard under Settings →
-              API keys, then paste it into Settings here.
+              The server fleet view needs an API key. There is no management UI yet — mint one with{" "}
+              <code>POST /v1/auth/api-keys</code> over a logged-in session, then paste it into
+              Settings here.
             </p>
           </div>
         ) : snapshot ? (

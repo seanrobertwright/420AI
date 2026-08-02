@@ -1,6 +1,6 @@
 //! Server-side monitor proxy (M11 Slice 2).
 //!
-//! The webview never holds the admin token — it calls this `#[command]`, and Rust
+//! The webview never holds the API key — it calls this `#[command]`, and Rust
 //! (the privileged hop) fetches the admin-gated ingest `/v1/monitor` endpoint with
 //! the bearer added here. This mirrors the dashboard's `app/api/monitor/route.ts`
 //! proxy, with Rust as the token-holder instead of the Next server.
@@ -47,8 +47,12 @@ fn monitor_credentials() -> Result<(String, String), String> {
         .filter(|t| !t.is_empty())
         .or_else(|| std::env::var("API_KEY").ok().filter(|t| !t.trim().is_empty()))
         .ok_or_else(|| {
-            "API key not configured — mint one in Settings → API keys (ADMIN_TOKEN was retired in \
-             M15 15.9)"
+            // NAME A REMEDY THAT EXISTS. An earlier draft said "mint one in Settings → API keys"
+            // in the dashboard — there is no such page until 15.10, so the one message an operator
+            // sees when this degrades pointed at a screen that is not there.
+            "API key not configured. There is no management UI yet (15.10) — mint one with \
+             POST /v1/auth/api-keys over a logged-in session, then paste it into Settings here. \
+             See docs/guide/operations.md §15.9. ADMIN_TOKEN was retired in M15 15.9."
                 .to_string()
         })?;
     let base = cfg

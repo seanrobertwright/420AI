@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { listApiKeys, mintApiKey, revokeApiKey } from "@420ai/db";
+import { listApiKeys, mintApiKey, revokeAllApiKeys, revokeApiKey } from "@420ai/db";
 import { hasRole } from "@420ai/shared";
 import { createApiKeyBodySchema } from "../schemas.js";
 import { authorized, isUuid, resolvePrincipal } from "../auth.js";
@@ -173,6 +173,40 @@ export default async function apiKeyRoutes(app: FastifyInstance): Promise<void> 
     }
     const rows = await listApiKeys(app.db, principal.userId);
     return reply.code(200).send({ apiKeys: rows.map(serializeApiKey) });
+  });
+
+  /**
+   * DELETE /v1/auth/api-keys — revoke EVERY key the caller holds.
+   *
+   * Added by the 15.9 PR review, which found `revokeAllApiKeys` had exactly ONE call site (member
+   * removal). That path cannot be applied to an owner by an admin (the 15.5 floor check) and cannot
+   * be applied to a sole owner by anyone (the last-owner guard) — so the DEFAULT single-admin
+   * deployment had no way to purge keys at all, only to delete them one at a time from a list.
+   * "Kill everything I have" must be expressible by the person most likely to need it, and at the
+   * moment they need it.
+   *
+   * The sibling of `POST /v1/auth/sessions/revoke-all`, gated identically at `viewer`: revoking
+   * your OWN credentials is not a privileged act on the org, and a panic button a read-only account
+   * cannot press is not a panic button.
+   *
+   * NOT re-auth gated, consistent with the rest of this tier (D-15.9-6) — revocation must never be
+   * harder than minting. Returns `{revoked: n}`, how many were LIVE, so a second call answers 0
+   * rather than erroring (`revokeAllApiKeys` is idempotent by its `revoked_at IS NULL` predicate).
+   *
+   * REGISTERED BEFORE the `:id` route below only for readability — Fastify's radix router matches a
+   * static path and a parametric one distinctly, so the two cannot shadow each other regardless of
+   * order.
+   */
+  app.delete("/v1/auth/api-keys", async (request, reply) => {
+    const principal = await resolvePrincipal(app, request);
+    if (!principal) {
+      return reply.code(401).send({ error: "admin authorization required" });
+    }
+    if (!authorized(principal, "viewer")) {
+      return reply.code(403).send({ error: "insufficient role" });
+    }
+    const revoked = await revokeAllApiKeys(app.db, principal.userId);
+    return reply.code(200).send({ revoked });
   });
 
   /**

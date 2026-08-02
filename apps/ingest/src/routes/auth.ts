@@ -14,6 +14,7 @@ import {
   getOrgName,
   listSessions,
   normalizeEmail,
+  revokeAllApiKeys,
   revokeAllSessions,
   revokeSession,
   updatePasswordHash,
@@ -473,6 +474,22 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
         // live is exactly the half-state the atomicity note above warns about, and it is the more
         // dangerous half — the victim believes they have locked the attacker out.
         await revokeAllSessions(tx, userId);
+        // M15 15.9 (D-15.9-9, AMENDED by the 15.9 PR review) — AND EVERY API KEY.
+        //
+        // D-15.9-9 says a PASSWORD CHANGE must not revoke keys, and that stays true: a routine
+        // rotation breaking the desktop app and every cron is worse than the threat. A RESET is a
+        // different event with the opposite default. The recovery story this route's comment above
+        // names — "somebody took over my account" — is precisely the case where the attacker had
+        // the password long enough to mint a `k420_` key, and a key is not derived from the
+        // password, never expires by default, and survives every session revoke. Leaving it live
+        // hands the attacker a persistence primitive that OUTLIVES the remediation, which is the
+        // exact threat `reauth.ts` gates minting against in the first place.
+        //
+        // So the asymmetry is now change-vs-RESET, not sessions-vs-keys, and it is deliberate on
+        // both sides. Same transaction, for the reason stated above: a password written while a
+        // minted key stays live is the more dangerous half-state, because the victim believes they
+        // have locked the attacker out.
+        await revokeAllApiKeys(tx, userId);
       });
       return reply.code(204).send();
     },

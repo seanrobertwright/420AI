@@ -282,6 +282,46 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.9 API keys repository (two-role)"
     expect(reminted.ok, "re-minting a revoked name must work").toBe(true);
   });
 
+  /**
+   * THE DEAD END THE PR REVIEW FOUND, pinned. The partial unique index is `WHERE revoked_at IS NULL`
+   * and CANNOT test expiry (a partial-index predicate must be IMMUTABLE; `now()` is only STABLE),
+   * while every other liveness predicate here DOES exclude expired rows. So before `mintApiKey`
+   * reclaimed the name, an expired key was invisible to `listApiKeys`, unrevocable (no id to pass)
+   * and still refused its own name — the day-91 "my `desktop` key expired" path, with no remedy
+   * short of operator DB access.
+   */
+  it("reclaims an EXPIRED key's name so it can be re-minted", async () => {
+    await createApiKey(appRole.db, userA, {
+      name: "desktop",
+      expiresAt: new Date(Date.now() - 1_000),
+    });
+    expect(await listApiKeys(appRole.db, userA), "expired ⇒ invisible to the owner").toHaveLength(
+      0,
+    );
+    const again = await owner.db.transaction((tx) => mintApiKey(tx, userA, { name: "desktop" }, 9));
+    expect(again.ok, "an expired name must be reclaimable").toBe(true);
+  });
+
+  it("does NOT sweep a never-expiring key when reclaiming a name", async () => {
+    // The guard that keeps the reclaim honest: `expires_at IS NULL` means "never", so a bare
+    // comparison would revoke the WORKING key the mint collides with — turning a 409 into silent
+    // credential destruction.
+    const { token } = await createApiKey(appRole.db, userA, { name: "desktop" });
+    const dup = await owner.db.transaction((tx) => mintApiKey(tx, userA, { name: "desktop" }, 9));
+    expect(dup).toEqual({ ok: false, reason: "duplicate_name" });
+    expect(await findLiveApiKey(appRole.db, token), "the live key must survive").toBeDefined();
+  });
+
+  it("does NOT sweep a FUTURE-expiring key when reclaiming a name", async () => {
+    const { token } = await createApiKey(appRole.db, userA, {
+      name: "desktop",
+      expiresAt: new Date(Date.now() + 600_000),
+    });
+    const dup = await owner.db.transaction((tx) => mintApiKey(tx, userA, { name: "desktop" }, 9));
+    expect(dup).toEqual({ ok: false, reason: "duplicate_name" });
+    expect(await findLiveApiKey(appRole.db, token), "not yet expired ⇒ must survive").toBeDefined();
+  });
+
   it("an EXPIRED key consumes no slot (the cap counts LIVE, matching listApiKeys)", async () => {
     await createApiKey(appRole.db, userA, {
       name: "expired",

@@ -116,4 +116,35 @@ describe.skipIf(!TEST_URL)("observability + rate limiting (HTTP e2e via inject)"
     expect(r2.statusCode).toBe(401);
     expect(r3.statusCode).toBe(429);
   });
+
+  /**
+   * M15 15.9 (PR-review finding T2) — POST /v1/auth/api-keys carries the SAME limit, and until this
+   * test nothing covered it.
+   *
+   * This is the only suite that passes `rateLimit` to `buildApp`; every other one leaves
+   * `rateLimitLogin === false`, so `config: { rateLimit: app.rateLimitLogin }` could be deleted from
+   * the mint route and the entire suite would stay green while the vector its comment describes
+   * reopened — an attacker holding a stolen session grinding the password at one scrypt per request.
+   *
+   * Driven UNAUTHENTICATED on purpose: the limiter runs ahead of the handler, so it fires without
+   * needing a session, which keeps the test independent of the login limit it shares a window with.
+   * A valid body is sent because Fastify validates the body BEFORE the handler — an empty payload
+   * would 400 and prove nothing.
+   */
+  it("rate-limits POST /v1/auth/api-keys past its limit (429 on the 3rd call)", async () => {
+    const mint = () =>
+      app.inject({
+        method: "POST",
+        url: "/v1/auth/api-keys",
+        headers: { "content-type": "application/json" },
+        payload: { name: "grind", currentPassword: "wrong" },
+      });
+    const r1 = await mint();
+    const r2 = await mint();
+    const r3 = await mint();
+    // No bearer ⇒ 401 from the gate on the first two; the third never reaches the handler.
+    expect(r1.statusCode).toBe(401);
+    expect(r2.statusCode).toBe(401);
+    expect(r3.statusCode, "the mint route MUST carry the login rate limit").toBe(429);
+  });
 });

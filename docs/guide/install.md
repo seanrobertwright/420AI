@@ -62,18 +62,25 @@ _starts_ those from the repo (its **Server directory** = the repo root). So set 
 git clone <your-fork> 420AI && cd 420AI
 npm install                         # wires the npm workspaces
 
-cp .env.example .env                # then fill the two secrets below
+cp .env.example .env                # then fill the secrets below
 ```
 
-Generate the two required secrets and paste them into `.env`:
+Generate the two required secrets and paste them into `.env` (plus `ADMIN_EMAIL`/`ADMIN_PASSWORD`,
+which since M15 15.9 are what make the deployment reachable at all):
 
 ```bash
 # ARCHIVE_ENCRYPTION_KEY — 32 bytes, base64 (field encryption; never stored in the DB)
 node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 
-# ADMIN_TOKEN — gates POST /v1/pairing-codes and every admin read (incl. the dashboard)
+# SESSION_SECRET — signs login cookies; MUST be identical in ingest and the dashboard
 node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
 ```
+
+> **M15 15.9 — there is no `ADMIN_TOKEN` any more.** It was a shared, un-attributable, un-revocable
+> bearer, and it now authenticates nothing. Admin-gated calls use either a **login session** or a
+> per-user **API key** (`k420_…`) minted after you log in — see
+> [operations §15.9](./operations.md). Set `ADMIN_EMAIL` + `ADMIN_PASSWORD` below: that pair is the
+> whole first-run bootstrap, and without it nothing can authenticate at all.
 
 Then bring the database up and apply migrations (migrations read `DATABASE_URL` from the repo-root
 `.env`, so this step is the same on both paths):
@@ -94,7 +101,8 @@ All ingest/db vars load from the **repo-root `.env`**. Required ones are marked 
 | Var                          | Purpose                                                              | Default                                       |
 | ---------------------------- | -------------------------------------------------------------------- | --------------------------------------------- |
 | ● `DATABASE_URL`             | Archive connection (dev DB)                                          | `postgres://420ai:420ai@localhost:5433/420ai` |
-| ● `ADMIN_TOKEN`              | Admin bearer for pairing-code issuance + all admin reads             | _(you generate)_                              |
+| ● `SESSION_SECRET`           | Login-cookie HMAC; identical in ingest and the dashboard             | _(you generate)_                              |
+| ● `ADMIN_PASSWORD`           | First-run admin login — without it NOTHING can authenticate (15.9)   | _(you choose)_                                |
 | ● `ARCHIVE_ENCRYPTION_KEY`   | 32-byte base64 field-encryption key                                  | _(you generate)_                              |
 | `DATABASE_URL_TEST`          | Integration-test DB (self-skips if unset)                            | `…/420ai_test`                                |
 | `INGEST_PORT`                | Ingest API port                                                      | `8420`                                        |
@@ -156,7 +164,7 @@ Open **Settings** in the app. Under **Server config**, fill:
 | **Server directory (repo root)** | the absolute path to your cloned `420AI` repo |
 | **Ingest URL**                   | `http://localhost:8420`                       |
 | **Ingest port (optional)**       | `8420`                                        |
-| **Admin token**                  | the `ADMIN_TOKEN` you generated               |
+| **API key**                      | a `k420_…` key you mint after first login     |
 | **Database URL**                 | `postgres://420ai:420ai@localhost:5433/420ai` |
 | **Archive encryption key**       | the `ARCHIVE_ENCRYPTION_KEY` you generated    |
 
@@ -181,9 +189,17 @@ In **Settings → Server stack**:
 Then create a pairing code and pair:
 
 ```bash
-# Issue a one-time pairing code (admin-gated) from the repo, against the running ingest:
+# M15 15.9 — pairing-code issuance needs a principal at `admin`. Log in once, mint a key, use it.
+# (There is no management UI until 15.10, so this is a curl step. PowerShell: use curl.exe.)
+SESSION=$(curl -s -X POST localhost:8420/v1/auth/login -H "content-type: application/json" \
+  -d "{\"email\":\"$ADMIN_EMAIL\",\"password\":\"$ADMIN_PASSWORD\"}" | jq -r .token)
+API_KEY=$(curl -s -X POST localhost:8420/v1/auth/api-keys -H "authorization: Bearer $SESSION" \
+  -H "content-type: application/json" \
+  -d "{\"name\":\"setup\",\"role\":\"admin\",\"currentPassword\":\"$ADMIN_PASSWORD\"}" | jq -r .token)
+
+# Issue a one-time pairing code from the repo, against the running ingest:
 curl -s -X POST localhost:8420/v1/pairing-codes \
-  -H "authorization: Bearer $ADMIN_TOKEN" -H "content-type: application/json" -d '{}'
+  -H "authorization: Bearer $API_KEY" -H "content-type: application/json" -d '{}'
 ```
 
 In the app's **Pairing** panel: **Archive URL** = `http://localhost:8420`, paste the **Pairing code**,
@@ -213,7 +229,7 @@ curl -s localhost:8420/v1/health       # {"status":"ok",...}
 
 # 2. Issue a pairing code (admin-gated)
 curl -s -X POST localhost:8420/v1/pairing-codes \
-  -H "authorization: Bearer $ADMIN_TOKEN" -H "content-type: application/json" -d '{}'
+  -H "authorization: Bearer $API_KEY" -H "content-type: application/json" -d '{}'
 
 # 3. Pair this machine (writes ~/.420ai/credentials.json — plaintext, mode 0600)
 npx tsx apps/collector/src/cli.ts pair <code> --url http://localhost:8420 --name win-dev
@@ -238,11 +254,11 @@ npm run dashboard:dev      # Next.js dev server
 Next loads env from the dashboard CWD, so pass the token inline or via `apps/dashboard/.env.local`:
 
 ```bash
-INGEST_URL=http://localhost:8420 ADMIN_TOKEN=<your-admin-token> npm run dashboard:dev
+INGEST_URL=http://localhost:8420 SESSION_SECRET=<same-value-as-ingest> npm run dashboard:dev
 ```
 
 Open the dashboard and it redirects to `/monitor` (the Live Monitor). The browser never holds
-`ADMIN_TOKEN` — it talks to ingest only through same-origin proxy routes that add the bearer
+any machine credential — it talks to ingest only through same-origin proxy routes that add the bearer
 server-side. The dashboard ships **only** this page today; everything else is via the API.
 
 ---

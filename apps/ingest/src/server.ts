@@ -248,8 +248,10 @@ const { db } = createDb(appDatabaseUrl);
 await ensureUserByEmail(db, adminEmail);
 
 // Seed the single admin's password (scrypt) from env. Idempotent: re-running on every boot
-// re-hashes ADMIN_PASSWORD, so rotating it + restart re-seeds. If unset, login is disabled
-// (admin has no hash → 401 for everyone) but the rest of the API still works via the service token.
+// re-hashes ADMIN_PASSWORD, so rotating it + restart re-seeds. If unset, login is disabled and
+// M15 15.9 makes that total: NOTHING can authenticate, because the only remaining credentials are a
+// session (which needs this password) and an API key (which can only be minted from a session).
+// There is no service token any more. This is the whole first-run bootstrap — set it.
 //
 // M15 15.6 — THIS IS A CREDENTIAL CHANGE THAT DELIBERATELY DOES NOT REVOKE, and it is the one
 // exception to the rule the other three follow (reset-confirm, password-change, member-removal all

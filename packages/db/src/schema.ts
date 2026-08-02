@@ -340,8 +340,9 @@ export const ssoIdentities = pgTable(
  *     weaker here; it is why the write is THROTTLED IN PROCESS (`API_KEY_TOUCH_THROTTLE_MS`,
  *     mirroring `app.reconcileLastRunAt`) and fire-and-forget. Without the column, "is this key
  *     still in use?" is unanswerable and every revocation is a guess.
- *   - `revoked_at` rather than a DELETE, matching `sessions`: a revoked key stays listable and the
- *     `IS NULL` predicate makes `revokeAllApiKeys` idempotent by construction.
+ *   - `revoked_at` rather than a DELETE, matching `sessions`: the ROW survives for audit, and the
+ *     `IS NULL` predicate makes `revokeAllApiKeys` idempotent by construction. It is NOT listed
+ *     afterwards — `listApiKeys` is live-only, exactly as `listSessions` is.
  */
 export const apiKeys = pgTable(
   "api_keys",
@@ -350,8 +351,10 @@ export const apiKeys = pgTable(
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id),
-    // Free-text, truncated by the route — it exists so a human can recognise a key in the list
-    // ("desktop", "nightly reports"), never for a security decision.
+    // Free-text, length-capped at 80 by the body schema — over-long is a 400, NOT a truncation
+    // (unlike `sessions.user_agent`, which the route really does slice). It exists so a human can
+    // recognise a key in the list ("desktop", "nightly reports"), never for a security decision.
+    // Unique per user among LIVE keys as of migration 0022.
     name: text("name").notNull(),
     tokenHash: text("token_hash").notNull().unique(),
     role: text("role"),

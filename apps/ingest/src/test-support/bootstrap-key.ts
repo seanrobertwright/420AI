@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { createApiKey, ensureUserByEmail, type Db, type Tx } from "@420ai/db";
 
 /**
@@ -33,12 +34,25 @@ import { createApiKey, ensureUserByEmail, type Db, type Tx } from "@420ai/db";
 export async function seedBootstrapKey(
   db: Db | Tx,
   email: string,
-  name = "int-test bootstrap",
+  label?: string,
 ): Promise<string> {
-  // Idempotent, and it also runs `ensurePersonalOrg` — so the owner has a membership and
-  // `findPrincipalByUserId`'s innerJoin resolves. Without the membership the key would
-  // authenticate as nobody, which is the failure this helper exists to make unrepresentable.
+  // `ensureUserByEmail` is idempotent and also runs `ensurePersonalOrg` — so the owner has a
+  // membership and `findPrincipalByUserId`'s innerJoin resolves. Without the membership the key
+  // would authenticate as nobody, which is the failure this helper exists to make unrepresentable.
   const userId = await ensureUserByEmail(db, email);
+  // A UNIQUE NAME PER CALL, and this is load-bearing rather than cosmetic. Migration 0022 added a
+  // partial unique index on `(user_id, name) WHERE revoked_at IS NULL`, so a FIXED name makes this
+  // helper non-idempotent: the second call for the same user raises 23505.
+  //
+  // Most suites never noticed, because their `beforeEach` TRUNCATEs `users` and the key cascades
+  // away first. `observability.int.test.ts` has no TRUNCATE and seeds in `beforeAll` — so it
+  // succeeded only when some earlier file happened to clear the table, and failed outright when run
+  // on its own twice. That is an ORDER-DEPENDENT suite, which is the bug: a green full run was
+  // hiding a file that could not be re-run in isolation.
+  //
+  // The name is arbitrary for a fixture, so making it unique costs nothing and removes the coupling
+  // entirely — the helper is now safe in any suite, in any order, any number of times.
+  const name = `${label ?? "int-test bootstrap"} ${randomUUID().slice(0, 8)}`;
   const { token } = await createApiKey(db, userId, { name });
   return token;
 }

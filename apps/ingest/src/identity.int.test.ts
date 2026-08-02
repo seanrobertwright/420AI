@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { eq, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import {
+  apiKeys,
   createDb,
   ensurePersonalOrg,
   invites,
@@ -697,6 +698,65 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.5 identity core (two-role, multi-
     } finally {
       await open.close();
     }
+  });
+
+  /**
+   * M15 15.9 (PR-review finding) — A PASSWORD RESET MUST REVOKE API KEYS.
+   *
+   * D-15.9-9 says a password CHANGE must not (a routine rotation breaking the desktop app and every
+   * cron is worse than the threat). A RESET is the opposite case: this route's own comment names the
+   * threat as "somebody took over my account, let me reset my password", and that is precisely when
+   * the attacker has had the password long enough to mint a `k420_` key. A key is not derived from
+   * the password, never expires by default, and survives every session revoke — so leaving it live
+   * hands the attacker a persistence primitive that OUTLIVES the remediation.
+   *
+   * Asserted on the ROW, not just the 401: without the row check this would pass anyway today,
+   * because a reset also revokes sessions and the key's owner still resolves. The row is the
+   * designed guarantee.
+   */
+  it("a password RESET revokes the user's API keys, not just their sessions", async () => {
+    const session = await login("viewer@example.com");
+    const minted = await app.inject({
+      method: "POST",
+      url: "/v1/auth/api-keys",
+      headers: json(session),
+      payload: { name: "attacker-persistence", currentPassword: PASSWORD },
+    });
+    expect(minted.statusCode, minted.body).toBe(201);
+    const apiKey = (minted.json() as { token: string }).token;
+
+    // POSITIVE FIRST: the key really works before the reset.
+    const before = await app.inject({
+      method: "GET",
+      url: "/v1/auth/me",
+      headers: { authorization: `Bearer ${apiKey}` },
+    });
+    expect(before.statusCode, "the key must work before the reset").toBe(200);
+
+    await app.inject({
+      method: "POST",
+      url: "/v1/auth/password-reset",
+      headers: { "content-type": "application/json" },
+      payload: { email: "viewer@example.com" },
+    });
+    const confirm = await app.inject({
+      method: "POST",
+      url: "/v1/auth/password-reset/confirm",
+      headers: { "content-type": "application/json" },
+      payload: { token: resetToken(sent[sent.length - 1]!), password: NEW_PASSWORD },
+    });
+    expect(confirm.statusCode, confirm.body).toBe(204);
+
+    const after = await app.inject({
+      method: "GET",
+      url: "/v1/auth/me",
+      headers: { authorization: `Bearer ${apiKey}` },
+    });
+    expect(after.statusCode, "a reset must kill the key").toBe(401);
+
+    const rows = await owner.db.select().from(apiKeys).where(eq(apiKeys.userId, userViewer));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.revokedAt, "the ROW must be stamped, not merely orphaned").not.toBe(null);
   });
 
   // 9 ── PASSWORD RESET ROUND TRIP.

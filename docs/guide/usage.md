@@ -180,7 +180,7 @@ npx tsx apps/collector/src/cli.ts discover                 # map repos → proje
 npx tsx apps/collector/src/cli.ts watch                    # leave running
 # in another shell, anytime:
 npx tsx apps/collector/src/cli.ts queue                    # check backlog
-npx tsx apps/collector/src/cli.ts projects --token $ADMIN_TOKEN
+npx tsx apps/collector/src/cli.ts projects --token $API_KEY
 ```
 
 ---
@@ -196,7 +196,7 @@ Capture records carry a workspace path; **discovery** turns those into named pro
 - The auto-mapping is an editable default. Rename or remap via the admin API:
 
 ```bash
-ADMIN=$ADMIN_TOKEN; BASE=http://localhost:8420
+ADMIN=$API_KEY; BASE=http://localhost:8420   # an `admin`-rung key (M15 15.9)
 curl -s "$BASE/v1/projects" -H "authorization: Bearer $ADMIN"                       # list
 curl -s -X PATCH "$BASE/v1/projects/<id>" -H "authorization: Bearer $ADMIN" \
   -H "content-type: application/json" -d '{"name":"My Project"}'                    # rename
@@ -230,7 +230,7 @@ from the persistent top nav:
 - **Machines** (`/machines`) — collector health, sync backlog, heartbeat, and the workspace→project
   mapping.
 
-The browser never holds `ADMIN_TOKEN`: every page renders server-side and every browser→ingest call goes
+The browser never holds a machine credential: every page renders server-side and every browser→ingest call goes
 through a same-origin proxy Route Handler that adds the admin bearer on the server→ingest hop only.
 
 ### Dashboard mutating surfaces (12.2b)
@@ -264,7 +264,7 @@ Deferred to a later slice: rich Markdown/Mermaid report rendering, catalog **upl
 
 ### Reports, projections & AI insight (ingest API)
 
-Everything else is admin-gated HTTP on the ingest API. Set `ADMIN=$ADMIN_TOKEN` and
+Everything else is admin-gated HTTP on the ingest API. Set `ADMIN=$API_KEY` (an `admin`-rung key) and
 `BASE=http://localhost:8420`.
 
 **Projections (read-only metrics over the event log):**

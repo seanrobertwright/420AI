@@ -40,7 +40,7 @@ pub struct Stored {
 /// The supervised server's config/secrets blob (M11 Slice 4). Held ONLY in the OS
 /// keychain (a second entry, separate from the pairing token), NEVER in a plaintext
 /// file. Rust reads it to inject the secrets as the spawned ingest's env (which wins
-/// over the repo `.env`) and to source the monitor-proxy admin token. The secret
+/// over the repo `.env`) and to source the monitor-proxy API key. The secret
 /// fields are NEVER returned to the webview — `server.rs` maps this to a masked view.
 #[derive(Serialize, Deserialize, Clone, Default)]
 #[serde(rename_all = "camelCase")]
@@ -175,6 +175,43 @@ mod tests {
 
     // A distinct service name so the round-trip never touches a real credential.
     const TEST_SERVICE: &str = "ai.420.desktop.test";
+
+    /// M15 15.9 — THE BACKWARD-COMPATIBILITY CLAIM, ASSERTED.
+    ///
+    /// `ServerConfig::api_key` carries `#[serde(default)]` and its doc comment says that without it
+    /// every previously-stored blob fails to deserialize, and `load()` maps a parse failure to
+    /// `None` — silently presenting a configured user as UNPAIRED, which reads to them as total
+    /// data loss. Until this test that claim had no coverage: the round-trip below constructs a
+    /// CURRENT struct, so it can never exercise a legacy blob.
+    ///
+    /// A pure `from_str` — no keychain, no I/O — over JSON in the shape 15.8 actually wrote: it has
+    /// `adminToken` (now an unknown field, which serde must ignore) and no `apiKey` (which must
+    /// default to empty rather than fail). Delete the `#[serde(default)]` and this test fails; the
+    /// round-trip test does not.
+    #[test]
+    fn a_pre_15_9_blob_still_deserializes_and_defaults_the_api_key() {
+        let legacy = r#"{
+            "serverDir": "C:/repo/420AI",
+            "ingestUrl": "http://localhost:8420",
+            "adminToken": "the-retired-shared-token",
+            "databaseUrl": "postgres://420ai:420ai@localhost:5433/420ai",
+            "databaseUrlApp": "postgres://420ai_app:pw@localhost:5433/420ai",
+            "archiveEncryptionKey": "base64key==",
+            "ingestPort": 8420
+        }"#;
+
+        let cfg: ServerConfig =
+            serde_json::from_str(legacy).expect("a pre-15.9 blob MUST still deserialize");
+
+        // The unknown `adminToken` was ignored, not fatal…
+        assert_eq!(cfg.server_dir, "C:/repo/420AI");
+        assert_eq!(cfg.ingest_url, "http://localhost:8420");
+        assert_eq!(cfg.archive_encryption_key, "base64key==");
+        assert_eq!(cfg.ingest_port, Some(8420));
+        // …and the new field defaulted to empty, which surfaces as the proxy's clear
+        // "API key not configured" rather than as a false unpaired state.
+        assert!(cfg.api_key.is_empty());
+    }
 
     #[test]
     fn server_config_set_get_delete_roundtrips() {

@@ -109,8 +109,10 @@ AI-interpretation-second**. The repo is an npm-workspaces monorepo:
    cp .env.example .env
    # ARCHIVE_ENCRYPTION_KEY — 32 bytes, base64:
    node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
-   # ADMIN_TOKEN — gates admin endpoints:
+   # SESSION_SECRET — signs login cookies (must match in ingest + dashboard):
    node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
+   # …then set ADMIN_EMAIL + ADMIN_PASSWORD. As of M15 15.9 that pair IS the bootstrap:
+   # ADMIN_TOKEN was retired, and an API key can only be minted from a login.
    ```
 4. Start the archive and apply migrations
    ```sh
@@ -129,8 +131,13 @@ AI-interpretation-second**. The repo is an npm-workspaces monorepo:
 **Pair a machine and capture sessions** (collector CLI, run with `tsx` — no build needed):
 
 ```sh
-# Create a pairing code (admin-gated), then pair the collector
-curl -s -X POST localhost:8420/v1/pairing-codes -H "authorization: Bearer $ADMIN_TOKEN" -d '{}'
+# Log in, mint an `admin` API key (M15 15.9 — no UI until 15.10), create a pairing code, pair
+SESSION=$(curl -s -X POST localhost:8420/v1/auth/login -H "content-type: application/json" \
+  -d "{\"email\":\"$ADMIN_EMAIL\",\"password\":\"$ADMIN_PASSWORD\"}" | jq -r .token)
+API_KEY=$(curl -s -X POST localhost:8420/v1/auth/api-keys -H "authorization: Bearer $SESSION" \
+  -H "content-type: application/json" \
+  -d "{\"name\":\"setup\",\"role\":\"admin\",\"currentPassword\":\"$ADMIN_PASSWORD\"}" | jq -r .token)
+curl -s -X POST localhost:8420/v1/pairing-codes -H "authorization: Bearer $API_KEY" -d '{}'
 npx tsx apps/collector/src/cli.ts pair <code> --url http://localhost:8420 --name win-dev
 
 # Run the background capture agent (Ctrl-C drains and stops)
@@ -145,7 +152,7 @@ npx tsx apps/collector/src/cli.ts discover
 **Run the dashboard (Live Monitor):**
 
 ```sh
-npm run dashboard:dev   # reads INGEST_URL + ADMIN_TOKEN from env
+npm run dashboard:dev   # reads INGEST_URL + SESSION_SECRET from env (it forwards YOUR login)
 ```
 
 _For the full setup and day-to-day guide, see [`docs/guide/install.md`](./docs/guide/install.md) and
