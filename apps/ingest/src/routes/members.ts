@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import {
+  clearMfa,
   createInvite,
   findMemberByEmail,
   findMemberByUserId,
@@ -8,6 +9,7 @@ import {
   listInvites,
   listMembers,
   normalizeEmail,
+  recordAuditEvent,
   removeMember,
   revokeAllApiKeys,
   revokeAllSessions,
@@ -114,7 +116,13 @@ export default async function memberRoutes(app: FastifyInstance): Promise<void> 
       // refused LOUDLY, because the alternative ships a path that reads as working and does not:
       // `findPrincipalByEmail` resolves the FIRST membership by (created_at, id), and every
       // existing user already owns a personal org that predates any invite. A second membership
-      // would therefore be permanently shadowed. Multi-org membership + an org switcher is 15.10.
+      // would therefore be permanently shadowed.
+      //
+      // MULTI-ORG MEMBERSHIP + AN ORG SWITCHER IS M16, NOT 15.10 (D-15.10-1). 15.10 shipped the
+      // team surfaces and deliberately did NOT take this on: it reopens `findPrincipalByEmail`,
+      // and additionally needs an active-org claim in the session token, per-org session/key
+      // revocation, and a rewrite of this very refusal. Nothing in 15.10's UI needed it — every
+      // surface there operates within `principal.orgId`.
       //
       // All three checks and the insert share ONE transaction — they were three round trips across
       // two transactions until the 15.5 review — and BE PRECISE ABOUT WHAT THAT BUYS, because the
@@ -146,11 +154,28 @@ export default async function memberRoutes(app: FastifyInstance): Promise<void> 
         // An outstanding invite for the same address is refused rather than duplicated, so a
         // double-click does not leave two live tokens for one colleague.
         if (await findPendingInviteByEmail(tx, principal.orgId, email)) return "pending" as const;
-        return createInvite(tx, principal.orgId, {
+        const created = await createInvite(tx, principal.orgId, {
           email,
           role: requestedRole,
           invitedByUserId: principal.userId,
         });
+        // M15 15.10 (D-15.10-3) — audited IN THIS TRANSACTION, so the invite row and the record of
+        // who created it commit together or not at all. Placed BEFORE the mailer call on purpose:
+        // the event is that an invite was CREATED, which is true regardless of whether SMTP later
+        // succeeded — and the mailer's failure path deliberately still returns 200.
+        //
+        // `target_user_id` is NULL here and that is the case a normalized-only schema could not
+        // record at all: an invited address has no `users` row yet (D-M15-8). `target_email` is the
+        // load-bearing column.
+        await recordAuditEvent(tx, {
+          orgId: principal.orgId,
+          actorUserId: principal.userId,
+          actorEmail: principal.email,
+          action: "member.invited",
+          targetEmail: email,
+          metadata: { role: requestedRole },
+        });
+        return created;
       });
       if (result === "already_member") {
         return reply.code(409).send({ error: "already a member" });
@@ -158,7 +183,7 @@ export default async function memberRoutes(app: FastifyInstance): Promise<void> 
       if (result === "user_exists") {
         return reply
           .code(409)
-          .send({ error: "user already exists — multi-org membership lands in 15.10" });
+          .send({ error: "user already exists — a user may belong to only one organization" });
       }
       if (result === "pending") {
         return reply.code(409).send({ error: "an invite for this address is already pending" });
@@ -236,9 +261,26 @@ export default async function memberRoutes(app: FastifyInstance): Promise<void> 
     if (!isUuid(request.params.id)) {
       return reply.code(400).send({ error: "invalid invite id" });
     }
-    const revoked = await withOrg(app.db, principal.orgId, principal.role, (tx) =>
-      revokeInvite(tx, principal.orgId, request.params.id),
-    );
+    const revoked = await withOrg(app.db, principal.orgId, principal.role, async (tx) => {
+      const ok = await revokeInvite(tx, principal.orgId, request.params.id);
+      // Audited on SUCCESS ONLY (D-15.10-3). A 404 is a refusal, and a refusal is not an event —
+      // auditing them would make this a request log and bury the ten actions that matter.
+      //
+      // `targetEmail` is null and stays null: `revokeInvite` returns a boolean, and WIDENING A
+      // REPOSITORY SIGNATURE FOR A LOG FIELD IS THE WRONG TRADE. The invite id identifies the row
+      // sufficiently for the break-glass reader, who can join it against `invites` if they care.
+      if (ok) {
+        await recordAuditEvent(tx, {
+          orgId: principal.orgId,
+          actorUserId: principal.userId,
+          actorEmail: principal.email,
+          action: "member.invite_revoked",
+          targetEmail: null,
+          metadata: { inviteId: request.params.id },
+        });
+      }
+      return ok;
+    });
     if (!revoked) {
       return reply.code(404).send({ error: "no such pending invite" });
     }
@@ -279,7 +321,24 @@ export default async function memberRoutes(app: FastifyInstance): Promise<void> 
         const target = await findMemberByUserId(tx, principal.orgId, request.params.userId);
         if (!target) return "not_a_member" as const;
         if (!outranks(principal.role, target.role)) return "outranked" as const;
-        return setMemberRole(tx, principal.orgId, request.params.userId, requestedRole);
+        const updated = await setMemberRole(
+          tx,
+          principal.orgId,
+          request.params.userId,
+          requestedRole,
+        );
+        // M15 15.10 — `target` is already in scope from the outrank guard's read; reuse it rather
+        // than re-querying, and capture `target.role` as the FROM value before the update lands.
+        await recordAuditEvent(tx, {
+          orgId: principal.orgId,
+          actorUserId: principal.userId,
+          actorEmail: principal.email,
+          action: "member.role_changed",
+          targetUserId: request.params.userId,
+          targetEmail: target.email,
+          metadata: { from: target.role, to: requestedRole },
+        });
+        return updated;
       });
       if (outcome === "not_a_member") {
         return reply.code(404).send({ error: "no such member in this organization" });
@@ -315,18 +374,18 @@ export default async function memberRoutes(app: FastifyInstance): Promise<void> 
       //
       // Before 15.6 this fell closed only BY ACCIDENT: with the membership gone,
       // `findPrincipalByEmail` stopped resolving and the token 401'd — but only because the user
-      // had no OTHER membership. That mechanism evaporates the moment 15.10 ships multi-org users,
+      // had no OTHER membership. That mechanism evaporates the moment M16 ships multi-org users,
       // at which point a removed colleague's existing token would keep working against their
       // remaining org's data. Revoking explicitly is what makes the guarantee designed rather than
       // incidental.
       //
       // `revokeAllSessions` is keyed on `user_id` with NO org predicate. Correct today, and
-      // REVISIT AT 15.10 — the two halves of that are worth keeping apart:
+      // REVISIT AT M16 — the two halves of that are worth keeping apart:
       //
       //   Today a user belongs to exactly one org (15.5's accept path refuses an email that already
       //   has an account), so "removed from the org" and "no longer has a login" are the same
       //   statement, and a global revoke is the only thing that can be meant.
-      //   Under 15.10's multi-org users it INVERTS: an admin of org A calling this would sign the
+      //   Under M16's multi-org users it INVERTS: an admin of org A calling this would sign the
       //   user out of org B as well, which is a cross-tenant action taken by someone with no
       //   standing in B. At that point this needs either a per-org session model or a revoke scoped
       //   to sessions whose resolved org is this one.
@@ -336,7 +395,7 @@ export default async function memberRoutes(app: FastifyInstance): Promise<void> 
       // a key: a session expires on its own within seven days, whereas a key defaults to never
       // expiring, so leaving one live is a permanent credential held by a former colleague.
       //
-      // Both revokes carry the SAME 15.10 revisit note, and it applies to keys verbatim: today
+      // Both revokes carry the SAME M16 revisit note, and it applies to keys verbatim: today
       // "removed from the org" and "no longer has a login" coincide, so a global revoke is the only
       // thing that can be meant; under multi-org users it inverts, and an admin of org A would be
       // killing a key its owner legitimately uses against org B.
@@ -349,8 +408,20 @@ export default async function memberRoutes(app: FastifyInstance): Promise<void> 
       // `sessions` and `api_keys` carry no policy, so running inside `withOrg` neither helps nor
       // hinders either — the transaction is here for the ATOMICITY.
       if (removed) {
-        await revokeAllSessions(tx, request.params.userId);
-        await revokeAllApiKeys(tx, request.params.userId);
+        const sessionsRevoked = await revokeAllSessions(tx, request.params.userId);
+        const keysRevoked = await revokeAllApiKeys(tx, request.params.userId);
+        // M15 15.10 — the revoke COUNTS are the audit-worthy detail here, not decoration: on an
+        // incident timeline "removed a colleague and killed 4 live keys" is a materially different
+        // event from "removed a colleague who held none". Both revokes already return the count.
+        await recordAuditEvent(tx, {
+          orgId: principal.orgId,
+          actorUserId: principal.userId,
+          actorEmail: principal.email,
+          action: "member.removed",
+          targetUserId: request.params.userId,
+          targetEmail: target.email,
+          metadata: { role: target.role, sessionsRevoked, keysRevoked },
+        });
       }
       return removed;
     });
@@ -359,6 +430,69 @@ export default async function memberRoutes(app: FastifyInstance): Promise<void> 
     }
     if (outcome === "not_a_member" || outcome === false) {
       return reply.code(404).send({ error: "no such member in this organization" });
+    }
+    return reply.code(204).send();
+  });
+
+  /**
+   * DELETE /v1/members/:userId/mfa — M15 15.10: ADMIN-INITIATED MFA RESET for a colleague who has
+   * lost their authenticator.
+   *
+   * 15.8 designed this route and REFUSED TO SHIP IT, on the grounds that it needs two things that
+   * did not exist yet: 15.5's rank ceiling-and-floor, and an audit record. Both exist now, and both
+   * are here. Without them, the remedy for a routine, expected event — someone changed phones — is
+   * the operator opening `psql` under D-M15-7 break-glass.
+   *
+   * THE OUTRANK FLOOR IS THE REASON 15.8 REFUSED, and it is mandatory rather than symmetric-looking:
+   * without it an `admin` strips an `owner`'s second factor, and then — if they also hold or can
+   * trigger a reset of that owner's password — owns the account outright. `outranks` permits EQUAL
+   * rank on purpose (`hasRole` is `>=`), so a co-owner can help a co-owner.
+   *
+   * REVOKING THE TARGET'S SESSIONS IS NOT OPTIONAL. Clearing MFA alone leaves every session the
+   * target had already established alive, so an attacker who had a session keeps it AND has now had
+   * the second factor removed — strictly worse than doing nothing.
+   *
+   * There is deliberately NO self-service equivalent here: that path already exists as
+   * `DELETE /v1/auth/mfa` behind 15.8's re-auth gate. Nothing stops `userId === principal.userId`
+   * on this route and nothing needs to — `outranks` permits equal rank, and either way it is
+   * audited.
+   */
+  app.delete<{ Params: { userId: string } }>("/v1/members/:userId/mfa", async (request, reply) => {
+    const principal = await resolvePrincipal(app, request);
+    if (!principal) {
+      return reply.code(401).send({ error: "admin authorization required" });
+    }
+    if (!authorized(principal, "admin")) {
+      return reply.code(403).send({ error: "insufficient role" });
+    }
+    if (!isUuid(request.params.userId)) {
+      return reply.code(400).send({ error: "invalid user id" });
+    }
+    const outcome = await withOrg(app.db, principal.orgId, principal.role, async (tx) => {
+      const target = await findMemberByUserId(tx, principal.orgId, request.params.userId);
+      if (!target) return "not_a_member" as const;
+      if (!outranks(principal.role, target.role)) return "outranked" as const;
+      // `clearMfa` opens its own transaction for the `FOR UPDATE` lock it takes on the target's
+      // `users` row; passing `tx` makes that a SAVEPOINT inside this one, so the clear, the
+      // revoke and the audit row all commit together. `routes/mfa.ts` calls it the same way.
+      await clearMfa(tx, request.params.userId);
+      await revokeAllSessions(tx, request.params.userId);
+      await recordAuditEvent(tx, {
+        orgId: principal.orgId,
+        actorUserId: principal.userId,
+        actorEmail: principal.email,
+        action: "member.mfa_reset",
+        targetUserId: request.params.userId,
+        targetEmail: target.email,
+        metadata: { role: target.role },
+      });
+      return "reset" as const;
+    });
+    if (outcome === "not_a_member") {
+      return reply.code(404).send({ error: "no such member in this organization" });
+    }
+    if (outcome === "outranked") {
+      return reply.code(403).send({ error: "cannot modify a member who outranks you" });
     }
     return reply.code(204).send();
   });

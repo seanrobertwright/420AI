@@ -369,6 +369,34 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.7 SSO (two-role, HTTP)", () => {
     );
     expect(r.rows[0]!.org_id).toBe(orgA);
     expect(r.rows[0]!.role).toBe("member");
+
+    // M15 15.10 — THE SSO HALF OF `member.joined`, which is the only audit call site with a
+    // distinct payload and had no assertion anywhere.
+    //
+    // Because the write is in-transaction, a THROWING audit call would already fail the assertions
+    // above — but a WRONG one would not. Stamping the invitee's personal org instead of the
+    // inviting org, or the wrong actor, writes a permanently incorrect row into the one table the
+    // application cannot correct, and the break-glass reader has no way to notice.
+    //
+    // Read on the OWNER handle: the app role reads zero rows from `audit_events` by design, so an
+    // assertion made through the server's own connection would pass vacuously.
+    const audit = await owner.db.execute<{
+      org_id: string;
+      actor_user_id: string;
+      target_user_id: string | null;
+      actor_email: string;
+      metadata: Record<string, unknown>;
+    }>(
+      sql`select org_id, actor_user_id, target_user_id, actor_email, metadata
+          from audit_events where action = 'member.joined'`,
+    );
+    expect(audit.rows).toHaveLength(1);
+    // The INVITING org, never the invitee's own.
+    expect(audit.rows[0]!.org_id).toBe(orgA);
+    expect(audit.rows[0]!.actor_email).toBe("invitee@example.com");
+    // Actor === target: an invite is redeemed by its recipient.
+    expect(audit.rows[0]!.actor_user_id).toBe(audit.rows[0]!.target_user_id);
+    expect(audit.rows[0]!.metadata).toEqual({ role: "member", via: "sso" });
   });
 
   it("refuses an invitation whose email ALREADY has a users row", async () => {

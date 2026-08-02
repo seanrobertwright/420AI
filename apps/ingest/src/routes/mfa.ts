@@ -161,10 +161,20 @@ function newRecoveryCodes(): { codes: string[]; hashes: string[] } {
  * TWO THINGS DELIBERATELY ABSENT, stated so the next reader does not read them as gaps:
  *   - No QR rendering (D-15.8-14). The enrolment response carries the base32 secret and an
  *     `otpauth://` URI; every mainstream authenticator accepts manual entry. A QR needs either a new
- *     dependency or ~300 hand-rolled lines, and it belongs with the account surfaces in 15.10.
+ *     dependency or ~300 hand-rolled lines. 15.10 shipped the account surfaces and deliberately
+ *     kept its no-new-dependency rule, so this stays deferred.
  *   - No admin "reset MFA for user X" endpoint. It is a privilege-escalation surface (an `admin`
  *     stripping an `owner`'s second factor), and 15.5's ladder lesson says such a route needs a
  *     ceiling AND a floor. Operator break-glass is direct database access, consistent with D-M15-7.
+ *
+ * M15 15.10 — THE SECOND OF THOSE SHIPPED, and NOT IN THIS FILE. `DELETE /v1/members/:userId/mfa`
+ * lives in `routes/members.ts`, because it is an act on a COLLEAGUE rather than on your own
+ * credentials: it needs the org context, the member lookup and `outranks`' ceiling-and-floor, all of
+ * which are that file's furniture. It calls `clearMfa` + `revokeAllSessions` and is audited. Nothing
+ * in this file's own handlers is audited — self-service credential changes are outside
+ * `AUDIT_ACTIONS` by decision (see `packages/shared/src/audit.ts`), because they are already visible
+ * to the account holder and none of them changes another principal's standing. The QR item above
+ * remains deferred (D-15.10 non-goal: no new dependency in this slice).
  */
 export default async function mfaRoutes(app: FastifyInstance): Promise<void> {
   /**

@@ -389,7 +389,12 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.5 identity core (two-role, multi-
       payload: { email: ADMIN_EMAIL, role: "member" },
     });
     expect(elsewhere.statusCode).toBe(409);
-    expect((elsewhere.json() as { error: string }).error).toMatch(/15\.10/);
+    // M15 15.10 (D-15.10-1) — the body no longer names a milestone at all. It used to read
+    // "multi-org membership lands in 15.10", which was both wrong (multi-org went to M16) and
+    // aimed at the wrong reader: the next person to see a 409 body is an API consumer, not a
+    // maintainer, and a slice number tells them nothing they can act on.
+    expect((elsewhere.json() as { error: string }).error).toMatch(/only one organization/i);
+    expect((elsewhere.json() as { error: string }).error).not.toMatch(/15\.10/);
 
     expect(await owner.db.select().from(invites)).toHaveLength(0);
     expect(sent).toHaveLength(0);

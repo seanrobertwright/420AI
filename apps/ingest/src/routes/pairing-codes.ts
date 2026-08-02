@@ -56,7 +56,8 @@ export default async function pairingCodeRoutes(app: FastifyInstance): Promise<v
         // guaranteed to yield the caller's org — the lookup above proved the target is a member of
         // it — and keeping a row's org derived from whoever it BELONGS to is the rule
         // `organizations.ts`'s header states. Stamping the caller's org here instead would be
-        // correct today and wrong the moment 15.10 gives one user two memberships.
+        // correct today and wrong the moment M16 gives one user two memberships (15.10 deferred that,
+        // D-15.10-1).
         return createPairingCode(tx, member.userId);
       });
       if (!issued) {

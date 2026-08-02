@@ -1,5 +1,11 @@
 import type { FastifyInstance } from "fastify";
-import { listApiKeys, mintApiKey, revokeAllApiKeys, revokeApiKey } from "@420ai/db";
+import {
+  listApiKeys,
+  mintApiKey,
+  recordAuditEvent,
+  revokeAllApiKeys,
+  revokeApiKey,
+} from "@420ai/db";
 import { hasRole } from "@420ai/shared";
 import { createApiKeyBodySchema } from "../schemas.js";
 import { authorized, isUuid, resolvePrincipal } from "../auth.js";
@@ -24,9 +30,17 @@ import { requireRecentAuth } from "../reauth.js";
  * OWN credentials is not a privileged act on the org, and a read-only account must still be able to
  * revoke a key it issued. The org-level rung only ever bounds what a key may be minted AT.
  *
- * 15.10 note: the mint and revoke handlers are the two audit-worthy events in this file. They are
- * written so an audit call is a one-line addition at the point of success — the audit TABLE lands
- * with the team surfaces, not here.
+ * M15 15.10 — THE MINT AND REVOKE HANDLERS ARE NOW AUDITED, and the append lands inside each
+ * handler's transaction (D-15.10-3), so a failed audit insert fails the action rather than
+ * committing a credential change nobody can attribute.
+ *
+ * That works from THIS file — which has no org context at all — only because `audit_events` carries
+ * an unconditional `FOR INSERT WITH CHECK (true)` policy rather than the repo's strict org pattern
+ * (D-15.10-2). It was measured: SPIKE check 8 confirmed a strict policy REJECTS an insert from an
+ * unwrapped route, which would have made every mint a 500. The audit row still carries
+ * `principal.orgId` — an audit event is an act WITHIN an org even when the object it acts on
+ * (an `api_keys` row) is org-less. Do not "fix" this file by introducing `withOrg`; the transactions
+ * below are for ATOMICITY, and the append-only policy needs no context.
  */
 
 interface CreateApiKeyBody {
@@ -52,8 +66,14 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
  *
  * It is a CEILING ON ACCUMULATION, not a security control: minting already requires a live session
  * AND the current password AND passes the login rate limit, so this is not what stands between an
- * attacker and a key. Revisit with real data at 15.10, when the management UI makes key counts
- * visible for the first time.
+ * attacker and a key.
+ *
+ * D-15.10-5 — THE PROMISED REVISIT DID NOT HAPPEN, and the honest thing is to say so rather than
+ * carry a forward-reference that quietly expired. The earlier version of this comment promised a
+ * revisit "with real data at 15.10, when the management UI makes key counts visible". The UI landed
+ * in 15.10; the real data did not, because there is still one install and one human. Changing the
+ * number on no evidence would be the dishonest move, so it stays 25 — a judgement, still not a
+ * measurement, and now without a due date it was never going to meet.
  */
 const MAX_API_KEYS_PER_USER = 25;
 
@@ -125,14 +145,36 @@ export default async function apiKeyRoutes(app: FastifyInstance): Promise<void> 
       // a `FOR UPDATE` on the owner's `users` row for the cap, the partial unique index for the
       // name. No `withOrg`: `api_keys` is an identity table with no policy (D-15.9-1), so there is
       // nothing for an org context to activate.
-      const minted = await app.db.transaction((tx) =>
-        mintApiKey(
+      const minted = await app.db.transaction(async (tx) => {
+        const result = await mintApiKey(
           tx,
           principal.userId,
           { name: request.body.name, role: requestedRole ?? null, expiresAt },
           MAX_API_KEYS_PER_USER,
-        ),
-      );
+        );
+        // M15 15.10 — audited on SUCCESS only, in this transaction. A capacity/name refusal is not
+        // an event. `metadata` carries the key's SHAPE and NEVER `result.token` or any hash: the
+        // plaintext exists exactly once, in the response below, and echoing it here would put a
+        // second, PERMANENT copy in the one table the application cannot delete from.
+        if (result.ok) {
+          await recordAuditEvent(tx, {
+            orgId: principal.orgId,
+            actorUserId: principal.userId,
+            actorEmail: principal.email,
+            action: "api_key.minted",
+            // Actor and target are the same person: key management is self-service, and setting
+            // both makes "everything this user did" and "everything done to this user" agree.
+            targetUserId: principal.userId,
+            targetEmail: principal.email,
+            metadata: {
+              keyName: request.body.name,
+              role: requestedRole ?? null,
+              expiresAt: expiresAt?.toISOString() ?? null,
+            },
+          });
+        }
+        return result;
+      });
       if (!minted.ok) {
         // 409, not 400: the request is well-formed and would have succeeded against a different
         // state. The `reason` discriminant is what lets a client tell "revoke something first" from
@@ -205,7 +247,26 @@ export default async function apiKeyRoutes(app: FastifyInstance): Promise<void> 
     if (!authorized(principal, "viewer")) {
       return reply.code(403).send({ error: "insufficient role" });
     }
-    const revoked = await revokeAllApiKeys(app.db, principal.userId);
+    // TRANSACTIONAL only so the revoke and its audit row commit together (D-15.10-3) — the revoke
+    // itself is a single statement and needed none before.
+    //
+    // AUDITED EVEN WHEN `revoked === 0`. "I pressed the panic button and there was nothing to kill"
+    // is a real, meaningful entry on an incident timeline — it is the difference between a user who
+    // reacted and a user who did not. This is deliberately NOT the "audit success only" rule's
+    // exception: the call SUCCEEDED, it simply had no work to do.
+    const revoked = await app.db.transaction(async (tx) => {
+      const n = await revokeAllApiKeys(tx, principal.userId);
+      await recordAuditEvent(tx, {
+        orgId: principal.orgId,
+        actorUserId: principal.userId,
+        actorEmail: principal.email,
+        action: "api_key.revoked_all",
+        targetUserId: principal.userId,
+        targetEmail: principal.email,
+        metadata: { revoked: n },
+      });
+      return n;
+    });
     return reply.code(200).send({ revoked });
   });
 
@@ -235,7 +296,24 @@ export default async function apiKeyRoutes(app: FastifyInstance): Promise<void> 
     if (!isUuid(request.params.id)) {
       return reply.code(400).send({ error: "invalid api key id" });
     }
-    const revoked = await revokeApiKey(app.db, principal.userId, request.params.id);
+    // TRANSACTIONAL for the audit row's sake (D-15.10-3); the revoke alone needed no transaction.
+    // Audited on success only — a 404 here covers "unknown", "already revoked" and "not yours"
+    // deliberately (see above), and none of the three is an event that happened.
+    const revoked = await app.db.transaction(async (tx) => {
+      const ok = await revokeApiKey(tx, principal.userId, request.params.id);
+      if (ok) {
+        await recordAuditEvent(tx, {
+          orgId: principal.orgId,
+          actorUserId: principal.userId,
+          actorEmail: principal.email,
+          action: "api_key.revoked",
+          targetUserId: principal.userId,
+          targetEmail: principal.email,
+          metadata: { keyId: request.params.id },
+        });
+      }
+      return ok;
+    });
     if (!revoked) {
       return reply.code(404).send({ error: "no such api key" });
     }

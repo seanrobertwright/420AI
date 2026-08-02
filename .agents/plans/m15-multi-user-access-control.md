@@ -206,7 +206,16 @@ invalidate-on-credential-change. 12.3's decision ("for a single admin, revoke-al
 Billing / subscriptions / quotas / per-tenant rate limits · multi-tenant hosting, managed archive,
 multi-region (all **M16**) · cross-platform collectors, portable signed installers (**M17**) ·
 enterprise SAML/OIDC, SCIM / directory sync · user-defined or custom roles · an audit-log **UI**
-(the audit table ships in 15.10; the viewer is deferred) · semantic/vector search (**M18**) ·
+(the `audit_events` table shipped in 15.10; the viewer stays deferred by decision, D-15.10-4 — the
+read path is break-glass `psql` as the owner, and a structural test asserts the repository exports no
+reader) · **MULTI-ORG MEMBERSHIP + THE ORG SWITCHER (→ M16, D-15.10-1)** — eleven source comments
+promised them "at 15.10" and 15.10 CORRECTED those comments rather than honouring them: multi-org
+reopens `findPrincipalByEmail`, the load-bearing 15.2 primitive whose byte-identical `ORDER BY` is
+the only thing keeping session-auth and key-auth resolving to the same org, and additionally needs an
+active-org claim in the session token, per-org session/key revocation and a rewrite of the invite
+refusal. It belongs with M16's tenant slugs and hosting; nothing in 15.10's UI needed it · four
+surfaces left HEADLESS but curl-reachable (gated self-signup page, password-reset pages, an
+active-sessions list, MFA QR rendering) · semantic/vector search (**M18**) ·
 mobile (**M19**) · MSI/code signing (still parked).
 
 ---
@@ -227,7 +236,7 @@ Sizes are relative to prior milestones. **15.0 gates 15.3**; 15.5 gates 15.7 (D-
 | **15.7** | SSO — Google + GitHub | **L** | OAuth identity only; account linking with **explicit anti-takeover rules** (never auto-adopt an unverified pre-existing email row). Depends on 15.5 + 15.6. |
 | **15.8** | MFA | M | TOTP enrolment + recovery codes; invalidate sessions on enrol/disable. |
 | **15.9** | API keys + retire `ADMIN_TOKEN` | M–L | Hashed, revocable, attributable per-user keys; migrate the **desktop app** (`keychain.rs`/`proxy.rs`/`server.rs`) and `scripts/generate-reports.mjs`; demote `ADMIN_TOKEN` to a bootstrap-only seed (D-M15-7). Rust-side work. |
-| **15.10** | Team surfaces + audit table | M | Dashboard user/member management, invites, role assignment, API-key management, org settings (hidden for a solo org per D-M15-10); write-only audit table (no viewer). |
+| **15.10** ✅ | Team surfaces + audit table | M | **DONE `2026-08-02`.** `/invite/[token]` (public — the emailed link had 404'd since 15.5), `/team` (roster + pending invites + all four mutations, viewer-safe), `<ApiKeysCard/>` + `<OrgCard/>` (hidden for a solo org per D-M15-10, gated on member COUNT not `is_personal`), eleven proxy routes, `GET`/`PATCH /v1/org` (rename is **owner**-only), and `DELETE /v1/members/:userId/mfa` — the admin MFA reset 15.8 refused to ship without 15.5's rank floor plus an audit record. `audit_events` is a **fourth RLS classification: APPEND-ONLY** (D-15.10-2) — one `PERMISSIVE FOR INSERT WITH CHECK (true)` policy, no read/update/delete policy, `REVOKE UPDATE, DELETE`, `FORCE` deliberately omitted so break-glass survives. Writes are in-transaction with the action (D-15.10-3). No viewer (D-15.10-4). Multi-org deferred to M16 (D-15.10-1). |
 
 ---
 

@@ -20,6 +20,9 @@ const LINKS: { href: string; label: string }[] = [
   { href: "/reports", label: "Reports" },
   { href: "/search", label: "Search" },
   { href: "/machines", label: "Machines" },
+  // M15 15.10: the team surface. Gated at `viewer` upstream, so every account can reach it —
+  // a read-only account sees the roster and no controls.
+  { href: "/team", label: "Team" },
   { href: "/catalog", label: "Catalog" },
   { href: "/pairing", label: "Pairing" },
   { href: "/export", label: "Export" },
@@ -38,9 +41,26 @@ const LINKS: { href: string; label: string }[] = [
  */
 const UNAUTHENTICATED_PATHS = ["/login", "/login/mfa"];
 
+/**
+ * M15 15.10 — and the SAME TRAP A THIRD TIME, which is why this is a prefix list rather than
+ * another entry above. `/invite/<token>` is dynamic, so `UNAUTHENTICATED_PATHS.includes(pathname)`
+ * can never match it: an invited colleague with no session would be shown the full authenticated
+ * chrome — Monitor, Settings, **Logout** — with every link bouncing to `/login`, exactly the
+ * regression the comment above records from 15.8.
+ *
+ * It also matters for a second reason specific to this component: the effect below probes
+ * `/api/auth/me`, and `unauthenticated` is what stops an invite visitor firing a guaranteed 401 on
+ * page load. Mirrors `lib/public-paths.ts`'s `PUBLIC_PREFIXES` — kept as its own list rather than
+ * imported, because the two answer different questions (may you enter? vs. should chrome render?)
+ * and coupling them would make a future divergence look like a bug.
+ */
+const UNAUTHENTICATED_PREFIXES = ["/invite/"];
+
 export function AppNav() {
   const pathname = usePathname();
-  const unauthenticated = UNAUTHENTICATED_PATHS.includes(pathname);
+  const unauthenticated =
+    UNAUTHENTICATED_PATHS.includes(pathname) ||
+    UNAUTHENTICATED_PREFIXES.some((p) => pathname.startsWith(p));
   // M14 14.3: probe the admin identity through the same-origin proxy (the browser never holds the
   // token — /api/auth/me adds the bearer server-side). Hooks stay ABOVE the /login early-return
   // below (Rules of Hooks); the fetch guards on `pathname` instead.

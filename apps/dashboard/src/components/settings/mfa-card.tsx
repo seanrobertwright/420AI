@@ -14,8 +14,9 @@ import { formatDate } from "@/lib/format";
  *
  * NO QR CODE (D-15.8-14). The card shows the base32 secret grouped in fours for manual entry plus the
  * `otpauth://` URI; every mainstream authenticator accepts manual entry. A QR needs either a new
- * dashboard dependency or ~300 lines of hand-rolled encoder, and it belongs with the account surfaces
- * in 15.10 — deferred scope, not done.
+ * dashboard dependency or ~300 lines of hand-rolled encoder, and it belongs with the account
+ * surfaces. 15.10 shipped those and held its no-new-dependency line, so this remains deferred —
+ * stated scope, not an oversight.
  */
 
 interface MfaStatus {

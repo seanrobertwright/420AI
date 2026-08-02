@@ -144,6 +144,25 @@ describe.skipIf(!TEST_URL)("migration rollback (rollbackLast, integration)", () 
     return r.rowCount === 1;
   }
 
+  /** Does the M15 15.10 `audit_events` table exist? 0023 creates it; its down DROPS it. */
+  async function auditEventsTableExists(): Promise<boolean> {
+    const r = await pool.query(
+      "select 1 from information_schema.tables where table_name = 'audit_events'",
+    );
+    return r.rowCount === 1;
+  }
+
+  /**
+   * The `audit_events` APPEND-ONLY policy (M15 15.10, D-15.10-2). Counted on its own rather than
+   * folded into `policyCount()` because its SHAPE is the decision: exactly one, PERMISSIVE, INSERT.
+   */
+  async function auditPolicyCmds(): Promise<string[]> {
+    const r = await pool.query<{ cmd: string }>(
+      "select cmd from pg_policies where tablename = 'audit_events' order by cmd",
+    );
+    return r.rows.map((x) => x.cmd);
+  }
+
   /** Does the M15 15.9 `api_keys` table exist? 0021 creates it; its down drops it. */
   async function apiKeysTableExists(): Promise<boolean> {
     const r = await pool.query(
@@ -161,26 +180,35 @@ describe.skipIf(!TEST_URL)("migration rollback (rollbackLast, integration)", () 
     return Number(r.rows[0]!.n);
   }
 
-  it("rolls back the latest migration (0022 api-key name index) and a re-migrate restores it", async () => {
+  it("rolls back the latest migration (0023 audit_events) and a re-migrate restores it", async () => {
     // M15 D-M15-13 drill, run in CI rather than by hand. `rollbackLast` reverses THE LATEST
     // migration, so this test retargets with every slice that adds one — 15.5's version named 0017,
     // 15.6's named 0018, 15.7's named 0019 and 15.8's named 0020. The assertions those made survive
     // here as UNTOUCHED-BY-0021 invariants below, which is the whole value of retargeting rather
     // than rewriting: the drill gets stricter with every slice instead of just moving.
     //
-    // The load-bearing assertion for 15.9 is once again the POLICY COUNT NOT MOVING. 0021/0022 are
-    // the fourth and fifth migrations in a row that touch `api_keys` and add NO policy (D-15.9-1:
-    // it is an identity table, read inside `resolvePrincipal` before any org context exists), so
-    // "59 before, 59 after the rollback, 59 after the re-migrate" is what pins that absence as a
-    // decision. If a future reader adds a policy to it, this drill fails before `rls.int.test.ts`
-    // even runs — and the production symptom that policy would cause is every API key silently
-    // 401ing.
+    // The load-bearing assertion for 15.9 was the POLICY COUNT NOT MOVING: 0021/0022 were the
+    // fourth and fifth migrations in a row that touch `api_keys` and add NO policy (D-15.9-1 — it
+    // is an identity table read inside `resolvePrincipal` before any org context exists), so "59
+    // before, 59 after" pinned that absence as a decision. That invariant survives here: `api_keys`
+    // still has no policy, and the ONLY new one below belongs to `audit_events`. If a future reader
+    // adds a policy to `api_keys`, this drill still fails before `rls.int.test.ts` even runs — and
+    // the production symptom would be every API key silently 401ing.
     //
     // 0022 is INDEX-ONLY, so unlike 0021 its rollback is lossless: `api_keys` and every row in it
-    // survive. That asymmetry is asserted below rather than assumed.
-    expect(await trackedCount()).toBe(23);
-    expect(await policyCount()).toBe(59); // 15 org + project_grants org + invites org + 42 restrictive
-    expect(await restrictivePolicyCount()).toBe(42); // 39 from 0016 + 3 for `invites`
+    // survive. That asymmetry survives here as an untouched-by-0023 invariant.
+    //
+    // M15 15.10 RETARGETS THE DRILL TO 0023, and this is the first retarget where the policy count
+    // DOES move — by exactly one, and the +1 is the whole point. Every migration since 0017 added
+    // none, so "59 before, 59 after" was the assertion. 0023 adds the single append-only
+    // `PERMISSIVE / INSERT / WITH CHECK (true)` policy (D-15.10-2), so the numbers are 60 → 59 → 60
+    // and the RESTRICTIVE count stays 42 throughout: `audit_events` deliberately carries no role
+    // policy, because a `viewer` revoking their own API key must still be able to append.
+    expect(await trackedCount()).toBe(24);
+    expect(await policyCount()).toBe(60); // 59 through 0022 + 1 append-only policy from 0023
+    expect(await restrictivePolicyCount()).toBe(42); // 39 from 0016 + 3 for `invites`; 0023 adds none
+    expect(await auditEventsTableExists()).toBe(true);
+    expect(await auditPolicyCmds()).toEqual(["INSERT"]);
     expect(await apiKeysTableExists()).toBe(true);
     expect(await apiKeyNameIndexExists()).toBe(true);
     expect(await mfaTablesExist()).toBe(2);
@@ -193,15 +221,21 @@ describe.skipIf(!TEST_URL)("migration rollback (rollbackLast, integration)", () 
     expect(await mixedCaseEmailCount()).toBe(0);
 
     const result = await rollbackLast(TEST_URL!, { downDir, journalPath });
-    expect(result).toEqual({ rolledBack: "0022_curved_mandroid" });
-    expect(await trackedCount()).toBe(22);
-    // ONLY the index is gone. 0022's down names exactly one object, and unlike 0021's it is
-    // LOSSLESS: the table and every key in it survive, no credential stops working, and the only
-    // consequence is that a user may again hold two live keys with the same name.
-    expect(await apiKeyNameIndexExists()).toBe(false);
-    expect(await apiKeysTableExists()).toBe(true);
+    expect(result).toEqual({ rolledBack: "0023_silky_longshot" });
+    expect(await trackedCount()).toBe(23);
+    // THE TABLE IS GONE, AND WITH IT THE ENTIRE AUDIT HISTORY — irrecoverably. Every other
+    // destructive down in this repo drops a PROJECTION (`events` re-derive from
+    // `raw_source_records`); `audit_events` is derived from NOTHING, so rolling forward again
+    // produces an EMPTY table rather than the old one. The policy drops with the table, which is
+    // why the count returns to 59 and there is no policy-ordering hazard in the down file.
+    expect(await auditEventsTableExists()).toBe(false);
+    expect(await auditPolicyCmds()).toEqual([]);
     expect(await policyCount()).toBe(59);
     expect(await restrictivePolicyCount()).toBe(42);
+    // 0022's index and 0021's table are UNTOUCHED — 0023 names neither, so no credential stops
+    // working when only the audit table is rolled back.
+    expect(await apiKeyNameIndexExists()).toBe(true);
+    expect(await apiKeysTableExists()).toBe(true);
     // 15.8's MFA tables, 15.7's identities, 15.6's sessions, 15.5's identity core, 15.4's table and
     // 15.3's flags are all untouched.
     expect(await mfaTablesExist()).toBe(2);
@@ -217,15 +251,21 @@ describe.skipIf(!TEST_URL)("migration rollback (rollbackLast, integration)", () 
     // Emails stay lowercased across the rollback (0017's down deliberately does not undo it).
     expect(await mixedCaseEmailCount()).toBe(0);
 
-    // Re-apply: an idempotent re-migrate brings 0022 back + restores the tracking row.
+    // Re-apply: an idempotent re-migrate brings 0023 back + restores the tracking row. The table
+    // returns EMPTY — asserted, because "the rollback round-trips" must not be read as "the history
+    // came back". Note also that the hand-appended policy block survives the round trip, which is
+    // what proves the migration file (not `db:generate`) is the source of truth for it.
     await runMigrations(TEST_URL!);
-    expect(await trackedCount()).toBe(23);
+    expect(await trackedCount()).toBe(24);
+    expect(await auditEventsTableExists()).toBe(true);
+    expect(await auditPolicyCmds()).toEqual(["INSERT"]);
+    expect((await pool.query("select count(*)::int as n from audit_events")).rows[0].n).toBe(0);
     expect(await apiKeyNameIndexExists()).toBe(true);
     expect(await apiKeysTableExists()).toBe(true);
     expect(await mfaTablesExist()).toBe(2);
     expect(await ssoIdentitiesTableExists()).toBe(true);
     expect(await sessionsTableExists()).toBe(true);
-    expect(await policyCount()).toBe(59);
+    expect(await policyCount()).toBe(60);
     expect(await restrictivePolicyCount()).toBe(42);
     expect(await identityTablesExist()).toBe(2);
     expect(await projectGrantsExists()).toBe(true);

@@ -356,7 +356,7 @@ export async function revokeApiKey(db: DbClient, userId: string, id: string): Pr
  * not derived from the password, and revoking on a routine rotation would silently break the
  * desktop app and every scheduled script, which is a worse outcome than the threat it addresses.
  *
- * Both halves carry the 15.10 revisit note `revokeAllSessions` already carries: multi-org
+ * Both halves carry the M16 revisit note `revokeAllSessions` already carries: multi-org
  * membership inverts the reasoning, because removing someone from ONE org would then revoke a key
  * they legitimately use against another.
  *

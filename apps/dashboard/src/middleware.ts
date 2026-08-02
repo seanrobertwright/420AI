@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { verifySessionEdge, SESSION_COOKIE, sessionConfigError } from "@/lib/session";
+import { isPublicPath } from "@/lib/public-paths";
 
 /**
  * M12 12.3 login gate. Runs on the Edge runtime: verifies the `ai_session` cookie's HMAC
@@ -12,19 +13,22 @@ import { verifySessionEdge, SESSION_COOKIE, sessionConfigError } from "@/lib/ses
  * next/headers used in Server Components / Route Handlers — don't mix them up).
  */
 /**
- * Page paths that never require a session.
+ * WHICH PAGE PATHS NEVER REQUIRE A SESSION lives in `lib/public-paths.ts`, not here.
  *
- * THE MATCH IS EXACT EQUALITY (`pathname === p`, below), so `/login/mfa` is NOT covered by the
- * `/login` entry and must be listed separately. It is the second half of a login, so by construction
- * the visitor has no session yet — omitting it makes the second step redirect to
- * `/login?next=/login/mfa` forever, which reads as "the password form is broken".
+ * M15 15.10 moved it, for one reason: `/invite/<token>` is a DYNAMIC path, and the old inline check
+ * matched by exact equality — so an invited colleague would have been bounced to
+ * `/login?next=/invite/<token>` with a one-time token in the query string of a URL they cannot use.
+ * That is the same trap `/login/mfa` fell into in 15.8, and it is the highest-risk line in the
+ * slice, so the decision had to become a pure function a unit test could drive without faking a
+ * `NextRequest`. See that file for the exact-vs-prefix argument and for why `/login` deliberately
+ * gets no prefix entry.
  */
-const PUBLIC = ["/login", "/login/mfa"];
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
-  // The login page + the auth route handlers (login/logout) must stay reachable while logged out.
-  if (PUBLIC.some((p) => pathname === p) || pathname.startsWith("/api/auth/")) {
+  // The login page, the invite-acceptance page + the auth route handlers (login/logout/invite)
+  // must stay reachable while logged out.
+  if (isPublicPath(pathname) || pathname.startsWith("/api/auth/")) {
     return NextResponse.next();
   }
   const token = request.cookies.get(SESSION_COOKIE)?.value;

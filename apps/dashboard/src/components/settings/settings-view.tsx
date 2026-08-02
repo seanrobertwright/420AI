@@ -5,6 +5,8 @@ import { cn } from "@/lib/utils";
 import { formatDate } from "@/lib/format";
 import { SsoLinks } from "@/components/settings/sso-links";
 import { MfaCard } from "@/components/settings/mfa-card";
+import { ApiKeysCard } from "@/components/settings/api-keys-card";
+import { OrgCard } from "@/components/settings/org-card";
 
 interface Health {
   status: string;
@@ -87,6 +89,16 @@ export function SettingsView({
             own credentials. It renders nothing until it knows the caller's status, so an enrolled
             user never sees "not enabled" flash first. */}
         <MfaCard />
+
+        {/* M15 15.10 — API key self-service. The third credential island, beside SSO and MFA
+            because that is where a user looks for their OWN credentials. Until it shipped, 15.9's
+            entire key tier was curl-only and the desktop app told users to wait for this. */}
+        <ApiKeysCard />
+
+        {/* M15 15.10 — the organization card. Renders NOTHING for a solo org (D-M15-10): a single
+            user must never see an "organization" at all, so the whole multi-user apparatus stays
+            invisible until a second member exists. Gated on memberCount, never on isPersonal. */}
+        <OrgCard />
 
         <Card>
           <CardHeader>

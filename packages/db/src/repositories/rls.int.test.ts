@@ -132,6 +132,30 @@ const BOOTSTRAP_TABLES = ["machines", "ingest_tokens", "pairing_codes"] as const
  */
 const ROLE_GATED_BOOTSTRAP_TABLES = ["invites"] as const;
 
+/**
+ * M15 15.10 (D-15.10-2) — a FIFTH classification: APPEND-ONLY. `audit_events` is none of the other
+ * four, and forcing it into any of them would assert the wrong thing about it:
+ *
+ *   - not STRICT, because its writers straddle the org-context boundary. `routes/members.ts` and
+ *     `routes/org.ts` append from inside `withOrg`, but `routes/api-keys.ts`, `auth.ts` and `sso.ts`
+ *     are IDENTITY routes that run with no context at all — SPIKE check 8 drove the negative control
+ *     and a strict policy REJECTS their insert outright, which would have made every
+ *     `api_key.minted` audit a 500.
+ *   - not ROLE-GATED, because a `viewer` is explicitly permitted to revoke their own API key and
+ *     that must produce an audit row rather than a 500.
+ *   - not BOOTSTRAP, because there is nothing to bootstrap: no path reads this table to discover an
+ *     org. Nothing reads it at all.
+ *   - not NO_RLS, and this is the whole point. No policy would also have made every insert work; it
+ *     would NOT have made the table IMMUTABLE TO THE APPLICATION, which is the only property that
+ *     makes an audit log worth having. A log the app can rewrite records what the app chose to admit.
+ *
+ * It is deliberately NOT a "tenant table" in this file's sense — nothing reads it per-tenant — so
+ * the "all 17 tenant tables" count below must STAY 17, exactly as 15.6/15.7/15.8/15.9 each recorded
+ * for their `NO_RLS_TABLES` additions. Every count in this file is DERIVED from list lengths, so
+ * adding this constant moves no literal integer. If you find yourself editing one, stop.
+ */
+const APPEND_ONLY_TABLES = ["audit_events"] as const;
+
 /** No policy at all: identity tables (D-15.3-4) + deployment-global tables (D-M15-9). */
 const NO_RLS_TABLES = [
   "users",
@@ -497,7 +521,10 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.3 RLS enforcement (two-role integ
 
     // ── the 15.3 tenancy layer, unchanged by 15.4/15.5 except for the new tenant tables ──
     expect(org).toHaveLength(
-      STRICT_TABLES.length + BOOTSTRAP_TABLES.length + ROLE_GATED_BOOTSTRAP_TABLES.length,
+      STRICT_TABLES.length +
+        BOOTSTRAP_TABLES.length +
+        ROLE_GATED_BOOTSTRAP_TABLES.length +
+        APPEND_ONLY_TABLES.length,
     );
     const orgByTable = new Map(org.map((r) => [r.tablename, r.qual!]));
     expect(orgByTable.size).toBe(org.length); // exactly one org policy per table
@@ -519,6 +546,28 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.3 RLS enforcement (two-role integ
     }
     for (const t of NO_RLS_TABLES) {
       expect(orgByTable.has(t), `${t} must have NO policy (D-15.3-4 / D-M15-9)`).toBe(false);
+    }
+    // M15 15.10 — the APPEND-ONLY shape (D-15.10-2), asserted precisely because it is novel:
+    // EXACTLY ONE policy, PERMISSIVE, on INSERT alone, unconditional. The absent SELECT/UPDATE/
+    // DELETE policies are what make the table write-only to the app role — default-deny does the
+    // work — so "one policy, and its cmd is INSERT" IS the guarantee, not a detail of it.
+    for (const t of APPEND_ONLY_TABLES) {
+      const forTable = all.filter((r) => r.tablename === t);
+      expect(forTable, `${t} must carry exactly one policy`).toHaveLength(1);
+      const p = forTable[0]!;
+      expect(p.permissive, `${t} policy must be PERMISSIVE`).toBe("PERMISSIVE");
+      expect(p.cmd, `${t} policy must be INSERT-only`).toBe("INSERT");
+      expect(p.with_check, `${t} policy must be unconditional`).toBe("true");
+      // `qual` is NULL for an INSERT policy — there is no row to test before it exists. Asserted
+      // rather than assumed, because a non-null `qual` would mean somebody attached a USING clause
+      // and quietly changed which commands the policy covers.
+      expect(p.qual, `${t} INSERT policy has no USING clause`).toBeNull();
+      // It appears in NO other classification. Without this, moving the table into a tenant list
+      // later would leave both sets of expectations passing while describing different designs.
+      expect(
+        [...STRICT_TABLES, ...BOOTSTRAP_TABLES, ...ROLE_GATED_BOOTSTRAP_TABLES, ...NO_RLS_TABLES],
+        `${t} belongs to exactly one classification`,
+      ).not.toContain(t);
     }
 
     // ── the 15.4 role-write backstop: 3 per STRICT table, plus (15.5) 3 on `invites` ──
@@ -549,7 +598,7 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.3 RLS enforcement (two-role integ
     // have no principal and therefore no membership role. `invites` is the deliberate exception
     // (D-15.5-2) and is asserted above — which is exactly why it is a separate constant rather than
     // an extra entry in this list, where it would have been silently exempted from both checks.
-    for (const t of BOOTSTRAP_TABLES) {
+    for (const t of [...BOOTSTRAP_TABLES, ...APPEND_ONLY_TABLES]) {
       expect(
         restrictive.some((r) => r.tablename === t),
         `${t} must have NO role policy`,
@@ -565,6 +614,10 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.3 RLS enforcement (two-role integ
   it("all 17 tenant tables have relrowsecurity AND relforcerowsecurity", async () => {
     // The count in the title is 17 as of 15.5 (`invites`). A number in a title that disagrees with
     // the arrays is precisely the drift this file exists to prevent — keep them in step.
+    //
+    // M15 15.10 does NOT move it. `audit_events` has a policy but is not a TENANT table in this
+    // file's sense — nothing reads it per-tenant — and it deliberately does not FORCE, so it is
+    // asserted separately in test 10 rather than added here.
     const all = [...STRICT_TABLES, ...BOOTSTRAP_TABLES, ...ROLE_GATED_BOOTSTRAP_TABLES];
     const rows = await owner.db.execute<{
       relname: string;
@@ -578,6 +631,28 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.3 RLS enforcement (two-role integ
     for (const r of rows.rows) {
       expect(r.relrowsecurity, `${r.relname} ENABLE`).toBe(true);
       expect(r.relforcerowsecurity, `${r.relname} FORCE`).toBe(true);
+    }
+  });
+
+  // 10 ── M15 15.10 — `audit_events` ENABLEs RLS and deliberately does NOT FORCE it, against all
+  //       17 tables above. Asserted ON PURPOSE so nobody "completes the pattern" later: FORCE
+  //       removes the table-OWNER exemption, and the owner is exactly who performs the documented
+  //       D-M15-7 break-glass read — the ONLY read path this table has (D-15.10-4). It is a no-op
+  //       today (the owner is also a superuser, a separate exemption) and actively harmful the day
+  //       the owner stops being one, which is a plausible hardening step.
+  it("audit_events ENABLEs row security but deliberately does NOT force it", async () => {
+    const rows = await owner.db.execute<{
+      relname: string;
+      relrowsecurity: boolean;
+      relforcerowsecurity: boolean;
+    }>(
+      sql`select relname, relrowsecurity, relforcerowsecurity from pg_class
+          where relname in ${sql.raw(`(${APPEND_ONLY_TABLES.map((t) => `'${t}'`).join(",")})`)}`,
+    );
+    expect(rows.rows).toHaveLength(APPEND_ONLY_TABLES.length);
+    for (const r of rows.rows) {
+      expect(r.relrowsecurity, `${r.relname} ENABLE`).toBe(true);
+      expect(r.relforcerowsecurity, `${r.relname} must NOT force (break-glass read)`).toBe(false);
     }
   });
 });

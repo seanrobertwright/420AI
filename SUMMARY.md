@@ -85,7 +85,11 @@ origins deferred; per-origin gate in
 negative), restore-from-backup drill, Cursor `watch → archive → Monitor` round-trip, live SMTP send
 (local Mailpit), scheduled-reports cold run, and 12.3 auth QA (`.agents/qa/m12-slice3/`).
 
-**What's next — M15 (Multi-user & access control) is IN PROGRESS.** On 2026-07-21 the post-V1 bucket
+**M15 (Multi-user & access control)** is **DONE** — 15.10 closed it on `2026-08-02` (PR #70).
+Eleven slices (15.0's truth + RLS spike, then 15.1-15.10):
+org-level tenancy + RLS backstop, four fixed roles, all four identity paths, sessions, SSO, MFA, API
+keys (and the retirement of `ADMIN_TOKEN`), and finally the team surfaces + the append-only
+`audit_events` table. **What's next — M16–M19 remain committed and unsequenced.** Originally: On 2026-07-21 the post-V1 bucket
 was promoted from a PRD "tentative sketch" to **committed scope** — all five milestones are wanted
 (multi-user, SaaS, cross-platform collectors, advanced intelligence, connector ecosystem/local
 models); the scope conversation asked for one strategic direction and the answer was all three. On
@@ -235,7 +239,7 @@ through the deferral-audit + scope conversation that produced M12/M13/M14. Full 
 > across ~15 tables (incl. `events`, `raw_source_records`) plus a backfill. **M15 is a data
 > migration** — sizing it from the old sentence under-scopes it.
 
-- **M15 — Multi-user & access control — IN PROGRESS** (promoted 2026-07-25;
+- **M15 — Multi-user & access control** is **DONE** `2026-08-02` (promoted 2026-07-25;
   [`.agents/plans/m15-multi-user-access-control.md`](./.agents/plans/m15-multi-user-access-control.md)).
   Org-level tenancy (D-M15-1), RLS as a backstop behind primary application scoping (D-M15-3), four
   fixed roles + per-project grants (D-M15-4), all four identity paths + reset + MFA (D-M15-5),
@@ -244,7 +248,7 @@ through the deferral-audit + scope conversation that produced M12/M13/M14. Full 
   **15.1** ✅ Tenancy schema · **15.2** ✅ Request principal · **15.3** ✅ RLS enforcement · **15.4** ✅ RBAC ·
   **15.5** ✅ Identity core · **15.6** ✅ Sessions + revocation · **15.7** ✅ SSO (Google + GitHub) ·
   **15.8** ✅ MFA (TOTP + recovery codes) · **15.9** ✅ API keys + retire `ADMIN_TOKEN` ·
-  **15.10** Team surfaces + audit table.
+  **15.10** ✅ Team surfaces + audit table (PR #70).
   **15.0 gates 15.3**; 15.5 gates 15.7; 15.6 gates 15.8.
 - **M16 — Cloud-hosted SaaS.** Multi-tenancy, managed archive, quotas/rate limits beyond 12.4,
   billing, hosted onboarding. _Genuinely depends on M15. Biggest architectural shift — local-first
@@ -391,7 +395,11 @@ original M10 "hardening bundle" (exports, catalog signing, replay metadata, pers
 
 ## 6. Immediate next steps
 
-- [ ] **NEXT — M15 Multi-user & access control (IN PROGRESS).** Promoted 2026-07-25 by the
+- [x] **M15 Multi-user & access control — DONE `2026-08-02`** (all eleven slices, 15.0-15.10;
+      15.10 was the last).
+      **NEXT: M16–M19 remain committed and unsequenced** — each still needs its own deferral-audit +
+      scope conversation before it is executable, and M16 additionally inherits D-15.10-1's deferred
+      multi-org membership + org switcher. Promoted 2026-07-25 by the
       deferral-audit + scope conversation that produced M12/M13/M14; decisions D-M15-1…13 are settled
       in [`.agents/plans/m15-multi-user-access-control.md`](./.agents/plans/m15-multi-user-access-control.md).
       Slices run in dependency order; **15.0 gates 15.3** and 15.5 gates 15.7.
@@ -709,7 +717,58 @@ enforced`, the sibling of `skipped ≠ passed`. Closes the Spike-6 hole: a cross
         401 on an unwatched cron job, so the script names the migration instead; and OneDrive again
         deleted three tracked files mid-run and left a `-Living-Room` conflict copy,
         caught by `git status` rather than by any gate.
-  - [ ] **15.10** Team surfaces + audit table.
+  - [x] **15.10** Team surfaces + audit table — DONE `2026-08-02` (PR #70). **THE LAST SLICE, and
+        the one that made nine headless slices usable.** Nine slices shipped a complete multi-user
+        backend and **zero** user-facing surface for it; most sharply, `members.ts` had been mailing
+        every invited colleague a link to `/invite/<token>` since 15.5 and **that page did not
+        exist**, so the milestone's flagship onboarding path dead-ended on a 404 and the only way to
+        add a colleague was to read the token out of a JSON response and pass it over chat. Shipped:
+        `/invite/[token]` (public, redeems and lands the new user logged in), `/team` (roster,
+        pending invites, all four mutations, a `viewer` seeing the roster and no controls),
+        `<ApiKeysCard/>` and `<OrgCard/>` on `/settings`, eleven proxy route handlers,
+        `GET`/`PATCH /v1/org`, and `DELETE /v1/members/:userId/mfa` — the admin MFA reset 15.8
+        designed and **refused to ship** without 15.5's rank ceiling-and-floor plus an audit record.
+        Both now exist, so the remedy for a colleague who changed phones is no longer `psql`.
+        **`audit_events` is a FOURTH RLS classification: APPEND-ONLY** (D-15.10-2), and the design was
+        settled by a 15/15 live spike **including a negative control**. Ten actions, one policy —
+        `PERMISSIVE ... FOR INSERT WITH CHECK (true)` — with no `SELECT`/`UPDATE`/`DELETE` policy at
+        all and `REVOKE UPDATE, DELETE` from `420ai_app`. The strict 13-table pattern was **measured
+        to be unusable**: audit writers straddle the org-context boundary (`members.ts`/`org.ts` are
+        wrapped; `api-keys.ts`/`auth.ts`/`sso.ts` are the allow-listed identity routes with NO
+        context), and a strict policy REJECTS the unwrapped half — it would have made every
+        `api_key.minted` a 500 surfacing later as "minting is broken". Net: the app **appends always,
+        reads ZERO rows even WITH a matching org context** (the ABSENT SELECT policy, not a failing
+        predicate — so write-only is a database guarantee), and **cannot** rewrite history; the owner
+        reads everything (D-M15-7 break-glass, which is why `FORCE` is deliberately OMITTED against
+        all 17 tenant tables, asserted `= false` on purpose). `REVOKE` is what turns a blocked
+        `UPDATE`/`DELETE` from a **silent 0-row no-op** into a loud `permission denied`. Audit writes
+        are **in-transaction with the action** (D-15.10-3), never best-effort: a failed audit fails
+        the action, because "the change committed but nobody knows who made it" is the worse
+        outcome. The negative control was **re-run and observed**: with the policy replaced by
+        `FOR ALL USING (true)`, tests 3 and 4 of `audit.int.test.ts` fail, then pass again restored.
+        **D-15.10-1 CORRECTS ELEVEN SOURCE COMMENTS**: multi-org membership + the org switcher were
+        promised "at 15.10" in eleven places (including two 409 **response bodies**) and are
+        **deferred to M16** — they reopen `findPrincipalByEmail`, the load-bearing 15.2 primitive
+        whose byte-identical `ORDER BY` is the only thing keeping session-auth and key-auth resolving
+        to the same org, and additionally need an active-org session claim, per-org revocation and a
+        rewrite of the invite refusal. Nothing in 15.10's UI needed it. The 409 bodies now read
+        "a user may belong to only one organization" and name no milestone at all. Also corrected:
+        D-15.10-5 keeps `MAX_API_KEYS_PER_USER` at 25 and **deletes the promised revisit** rather
+        than changing a number on no evidence (the UI landed; the "real data" still does not exist —
+        one install, one human), and both stale desktop strings that told users to wait for this UI.
+        Three traps worth keeping: **the middleware and the nav both match public paths by EXACT
+        EQUALITY**, so a dynamic `/invite/<token>` can never match — the same trap `/login/mfa` fell
+        into twice, and it fails looking exactly like a backend bug (every invitee bounced to
+        `/login?next=/invite/<token>`, a page they have no account for, with their one-time token in
+        the query string). Pinned this time by a unit test, which required extracting the predicate
+        to `lib/public-paths.ts`. **Fastify's default ajv runs `removeAdditional`**, so
+        `additionalProperties: false` STRIPS an unknown key rather than 400ing — the first version of
+        the cross-org rename test asserted the wrong contract. And the audit assertions **must read
+        back on the OWNER handle**: through the app handle every one passes vacuously against zero
+        rows. **Deferred and stated, not dropped**: multi-org/org switcher (M16), an audit-log viewer
+        or export (D-15.10-4 — a structural test asserts the repository exports no reader), and four
+        surfaces that stay headless but curl-reachable (gated self-signup, password-reset pages, an
+        active-sessions list, MFA QR — the last held by the slice's no-new-dependency rule).
 
 - [ ] **M16–M19 remain committed scope, unsequenced** (§3, PRD §25). Each still needs its own
       deferral-audit + scope conversation before it is executable.

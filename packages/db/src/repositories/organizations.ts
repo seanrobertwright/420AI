@@ -1,5 +1,5 @@
 import { asc, eq } from "drizzle-orm";
-import type { DbClient } from "../client.js";
+import type { DbClient, Tx } from "../client.js";
 import { memberships, organizations } from "../schema.js";
 
 /**
@@ -38,8 +38,8 @@ import { memberships, organizations } from "../schema.js";
  * Resolve a user's organization, or `undefined` when they have no membership yet.
  *
  * DETERMINISTIC BY DESIGN: `ORDER BY created_at, id LIMIT 1`. Nothing constrains
- * "≤1 membership per user" (15.10 needs multi-org users, so such a constraint would
- * only have to be dropped again), and two concurrent first-ever `ensurePersonalOrg`
+ * "≤1 membership per user" (multi-org users are committed for M16, so such a constraint
+ * would only have to be dropped again — 15.10 deferred them, D-15.10-1), and two concurrent first-ever `ensurePersonalOrg`
  * calls for the same user could therefore create two personal orgs. The ordering
  * means that even in that accepted race the answer is stable rather than flapping
  * between the duplicates. Both call sites are admin-gated and low-frequency.
@@ -103,6 +103,98 @@ export async function getOrgName(db: DbClient, orgId: string): Promise<string | 
     .where(eq(organizations.id, orgId))
     .limit(1);
   return row?.name;
+}
+
+/**
+ * M15 15.10 — the org row behind `GET /v1/org` and the Settings `<OrgCard/>`.
+ *
+ * EXPLICIT COLUMN LIST rather than `select()`, per the 15.1 rule: no ingest route declares a
+ * Fastify `response` schema, so nothing strips extra properties from a row and a bare `select()`
+ * would put every future `organizations` column on the wire the day one is added.
+ *
+ * No `orgId` predicate is "missing" here — `orgId` IS the key, and it comes from `principal.orgId`,
+ * never from a request body or path parameter.
+ */
+export interface OrgRow {
+  id: string;
+  name: string;
+  isPersonal: boolean;
+}
+
+/** Keep this list == `OrgRow`. */
+const orgRowColumns = {
+  id: organizations.id,
+  name: organizations.name,
+  isPersonal: organizations.isPersonal,
+};
+
+export async function getOrg(db: DbClient, orgId: string): Promise<OrgRow | undefined> {
+  const [row] = await db
+    .select(orgRowColumns)
+    .from(organizations)
+    .where(eq(organizations.id, orgId))
+    .limit(1);
+  return row;
+}
+
+/**
+ * The same read, taking a ROW LOCK. For a read-then-write decision only.
+ *
+ * THE MECHANISM IS THE `FOR UPDATE` LOCK ON THE `organizations` ROW, and naming it here rather than
+ * saying "it's in a transaction" is the whole point — CLAUDE.md's 15.5 lesson is that a shared
+ * transaction buys ATOMICITY, not ISOLATION, and that the comment claiming otherwise WAS the defect.
+ * A plain `SELECT` takes no locks, so under READ COMMITTED two concurrent renames both read the same
+ * `before.name`, the second `UPDATE` blocks on the row lock and then commits over the first, and the
+ * audit row records a `{from}` that was never the value this update actually replaced — a false
+ * entry in the one table the application can never correct.
+ *
+ * With the lock, the loser blocks until the winner commits and then re-reads the current row
+ * (Postgres re-evaluates after the lock releases), so its `{from}` describes the state it really
+ * replaced.
+ *
+ * `Tx`, not `DbClient`: a `FOR UPDATE` outside a transaction releases immediately and buys nothing,
+ * so the type makes the requirement true by construction rather than by convention — the same reason
+ * `repositories/members.ts` takes a `Tx` for the last-owner guard. `getOrg` above stays unlocked and
+ * is what every plain read (`GET /v1/org`) should use; taking a lock there would serialise readers
+ * for no benefit.
+ */
+export async function getOrgForUpdate(tx: Tx, orgId: string): Promise<OrgRow | undefined> {
+  const [row] = await tx
+    .select(orgRowColumns)
+    .from(organizations)
+    .where(eq(organizations.id, orgId))
+    .limit(1)
+    .for("update");
+  return row;
+}
+
+/**
+ * Rename an organization. `owner`-gated at the route (M15 15.10) — renaming is the most org-level
+ * act available and there is no undo surface; `admin` is the rung that manages PEOPLE.
+ *
+ * IT EXISTS BECAUSE `ensurePersonalOrg` SEEDS THE NAME FROM AN EMAIL ADDRESS (see below — `name` is
+ * the caller-supplied email). An "Organization" card that shows a colleague `sean@example.com` with
+ * no way to change it is a visibly unfinished surface at exactly the moment a second person arrives.
+ *
+ * `is_personal` IS DELIBERATELY UNTOUCHED. An org auto-created for one user that has since grown a
+ * second member is still flagged personal, and that is fine: the flag records PROVENANCE (which row
+ * the 15.1 backfill seeded), not current shape. The dashboard branches on `memberCount`, never on
+ * this flag — do not "correct" it here.
+ *
+ * There is deliberately NO parameter for a target org: a rename endpoint that accepts one is a
+ * cross-tenant write waiting to happen. The caller's `principal.orgId` is the only source.
+ */
+export async function renameOrg(
+  db: DbClient,
+  orgId: string,
+  name: string,
+): Promise<OrgRow | undefined> {
+  const [row] = await db
+    .update(organizations)
+    .set({ name })
+    .where(eq(organizations.id, orgId))
+    .returning(orgRowColumns);
+  return row;
 }
 
 /**

@@ -25,3 +25,30 @@ export async function adminHeaders(): Promise<Record<string, string>> {
   const token = (await cookies()).get(SESSION_COOKIE)?.value;
   return token ? { authorization: "Bearer " + token } : {};
 }
+
+/**
+ * GET ingest JSON on the server→ingest hop (D8), returning `null` on any non-200 or throw.
+ *
+ * SERVER-ONLY, like everything else in this file — it calls `adminHeaders()`, which reads the
+ * httpOnly session cookie. Never import it from a `"use client"` component.
+ *
+ * Extracted in M15 15.10 because a third byte-identical copy was about to appear (`/team` joining
+ * `/settings`). The drift that matters is not the ten lines — it is the COMBINATION: `adminHeaders()`
+ * for the bearer, `cache: "no-store"` so Next's data cache never serves a stale roster, and the
+ * swallow-to-null that every caller's `?? fallback` depends on. A copy that silently omitted
+ * `no-store` would serve stale tenant data with no error anywhere.
+ *
+ * `app/projects/[id]/page.tsx` keeps its own variant deliberately: it returns a typed FALLBACK
+ * rather than null, so it is a different contract, not a fourth copy of this one.
+ */
+export async function getIngestJson<T>(path: string): Promise<T | null> {
+  try {
+    const res = await fetch(`${ingestUrl()}${path}`, {
+      headers: await adminHeaders(),
+      cache: "no-store",
+    });
+    return res.ok ? ((await res.json()) as T) : null;
+  } catch {
+    return null;
+  }
+}

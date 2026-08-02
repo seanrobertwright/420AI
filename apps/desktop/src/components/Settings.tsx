@@ -301,7 +301,7 @@ export function Settings() {
                 onChange={(e) => setApiKey(e.target.value)}
                 placeholder={secretPlaceholder(
                   config?.hasApiKey,
-                  "k420_… — mint with POST /v1/auth/api-keys (no UI until 15.10)",
+                  "k420_… — mint at Settings → API keys on the dashboard",
                 )}
                 className={cn(inputClass, "font-mono")}
               />

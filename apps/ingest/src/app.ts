@@ -19,6 +19,7 @@ import healthRoutes from "./routes/health.js";
 import metricsRoutes from "./routes/metrics.js";
 import pairingCodeRoutes from "./routes/pairing-codes.js";
 import memberRoutes from "./routes/members.js";
+import orgRoutes from "./routes/org.js";
 import apiKeyRoutes from "./routes/api-keys.js";
 import pairRoutes from "./routes/pair.js";
 import ingestRoutes from "./routes/ingest.js";
@@ -231,6 +232,7 @@ export function buildApp(opts: BuildAppOptions): FastifyInstance {
   app.register(healthRoutes);
   app.register(pairingCodeRoutes);
   app.register(memberRoutes);
+  app.register(orgRoutes);
   app.register(apiKeyRoutes);
   app.register(pairRoutes);
   app.register(ingestRoutes);

@@ -1,0 +1,14 @@
+    at    |        actor_email         |       action        |        target_email        |                         metadata                          
+----------+----------------------------+---------------------+----------------------------+-----------------------------------------------------------
+ 11:49:57 | seanrobertwright@gmail.com | member.invited      | colleague@example.com      | {"role": "member"}
+ 11:50:04 | seanrobertwright@gmail.com | member.invited      | colleague2@example.com     | {"role": "member"}
+ 11:50:22 | colleague2@example.com     | member.joined       | colleague2@example.com     | {"role": "member"}
+ 11:50:35 | seanrobertwright@gmail.com | member.role_changed | colleague2@example.com     | {"to": "admin", "from": "member"}
+ 11:50:47 | seanrobertwright@gmail.com | org.renamed         |                            | {"to": "Acme Corp", "from": "seanrobertwright@gmail.com"}
+ 11:51:03 | seanrobertwright@gmail.com | api_key.minted      | seanrobertwright@gmail.com | {"role": null, "keyName": "laptop", "expiresAt": null}
+ 11:51:04 | seanrobertwright@gmail.com | api_key.revoked     | seanrobertwright@gmail.com | {"keyId": "e2110839-1fdc-4750-b554-b77c16da3c74"}
+ 11:51:12 | seanrobertwright@gmail.com | member.mfa_reset    | colleague2@example.com     | {"role": "admin"}
+ 11:51:46 | seanrobertwright@gmail.com | member.invited      | shot@example.com           | {"role": "viewer"}
+ 11:53:37 | seanrobertwright@gmail.com | member.removed      | colleague2@example.com     | {"role": "admin", "keysRevoked": 0, "sessionsRevoked": 0}
+(10 rows)
+
