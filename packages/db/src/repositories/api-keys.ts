@@ -166,11 +166,13 @@ function isUniqueViolation(err: unknown, constraint: string): boolean {
  * everywhere else in this file (not revoked, not expired), so an expired key does not consume a
  * slot the owner cannot see in `listApiKeys`.
  *
- * `count(*)::int`, not `numeric`: node-postgres returns `numeric` as a STRING (CLAUDE.md), which
- * would make `live >= maxPerUser` a string/number comparison that is wrong above single digits —
- * `"10" >= 10` is true but `"9" >= 10` is also... coerced correctly, whereas a bare `count(*)`
- * returning `int8` arrives as a string and `"9" >= 10` is false while `"10" >= 10` is true only by
- * coercion. Casting removes the whole class.
+ * `count(*)::int`, and the cast is load-bearing for the TYPE, not for the comparison. Postgres
+ * `count(*)` is `int8`, which node-postgres hands back as a JavaScript **string** (CLAUDE.md's
+ * "numeric is a string" class). `live >= maxPerUser` would still give the right answer — a
+ * relational operator coerces the string numerically — but the declared `sql<number>` would be a
+ * lie, and every downstream use (arithmetic, `===`, JSON) would inherit a string that claims to be
+ * a number. `::int` returns `int4`, which the driver parses as a real number, so the type and the
+ * value agree.
  */
 export async function countLiveApiKeys(db: DbClient, userId: string): Promise<number> {
   const [row] = await db
