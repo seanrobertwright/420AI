@@ -18,8 +18,9 @@ your machine and posts them to an archive (Postgres) that you run. Nothing is se
 service, because there isn't one. Transcript bodies are encrypted at rest with a key held in your
 environment and never in the database; timestamps, token counts, model names and file paths are
 stored as queryable plaintext by design. Search runs over a **redacted copy**, never the encrypted
-original. Exports are redacted before bytes leave the archive. **Nothing is ever deleted
-automatically** — see §6, which is the section most likely to surprise you.
+original. Exports are redacted before bytes leave the archive. **Your captured work is never deleted
+automatically** — see §6, which lists the four bounded exceptions (none of them your sessions) and is
+the section most likely to surprise you.
 
 ---
 
@@ -30,17 +31,38 @@ Those declarations are the "Capture Permission" you review, and widening one is 
 Change** that requires fresh approval before it captures again
 (`apps/collector/src/connectors/connector.ts:38-46`).
 
-Connectors enabled for the current research period (`.agents/plans/m16-dogfood-instrumentation.md`,
-D-M16-1) and what each declares:
+> **EVERY REGISTERED CONNECTOR IS ENABLED BY DEFAULT.** This is the most important sentence on the
+> page, so it comes before the table rather than after it.
+> `apps/collector/src/connectors/connector-config.ts:33-34` defines the config map as _"a missing id
+> ⇒ enabled (default-on)"_, `:37` calls the empty override set _"the safe default — so every
+> connector is enabled"_, and `filterConnectors` (`:67-71`) removes only connectors **explicitly**
+> disabled. There is no allow-list. A connector whose source paths exist on your machine **will**
+> capture unless you turn it off.
+
+The connectors this deployment **intends** to observe are fixed by **D-M16-1**
+(`.agents/plans/m16-dogfood-instrumentation.md`) — but that is a written commitment, not an enforced
+configuration, and the two must not be confused:
 
 | Connector       | Declared capture scope (`requiredPermissions`)                                                            | Liveness  | Tokens | Cost     |
 | --------------- | --------------------------------------------------------------------------------------------------------- | --------- | ------ | -------- |
 | **Claude Code** | Read Claude Code session transcripts under `~/.claude/projects/*/*.jsonl` (`claude-code.ts:94-96`)        | streaming | exact  | computed |
 | **Codex CLI**   | Read OpenAI Codex CLI rollout logs under `~/.codex/sessions/*/*/*/rollout-*.jsonl` (`codex-cli.ts:92-94`) | streaming | exact  | computed |
 
-Other connectors exist in the registry (`connectors/connector.ts:1-9` imports Gemini CLI, Cursor,
-and the Claude/ChatGPT/Gemini export + `claude-live` connectors) and are **not enabled** for this
-period. A connector that is not enabled reads nothing.
+**Six further connectors ship in the registry** (`connectors/connector.ts:1-9`: Gemini CLI, Cursor,
+the Claude/ChatGPT/Gemini export connectors, and `claude-live`). Until each is explicitly disabled,
+they are **live**, and disabling is a deliberate per-connector action rather than the default.
+
+This is not a theoretical caveat. The 2026-08-02 clean-room deploy
+([`.agents/research/cleanroom-2026-08-02.md`](../../.agents/research/cleanroom-2026-08-02.md))
+measured a collector that logged `watching 8 connector(s)`, and the **Cursor** connector captured
+`260/350 session(s) changed → 16,916 records / 39,888 events` from the operator's real Cursor store —
+in a run that had been set up to be isolated. See **INC-2026-01**
+([`incidents.md`](../../.agents/research/incidents.md)): the Cursor connector is poll-mode and its
+`sources()` discards the `--home` argument its own contract passes it
+(`connectors/cursor.ts:331`), reading `%APPDATA%` instead. So for that connector, **`--home` does not
+confine capture at all.**
+
+**If you are evaluating whether to pair a machine, act on the paragraph above, not on the table.**
 
 Per captured session the archive derives: connector and parser version, machine, workspace,
 repository, project path, git branch, timestamp, tool-native session id, a durable event
@@ -165,7 +187,7 @@ render is the transcript path's job. The repository layer is explicit that it re
 including home paths, and that the **route** is contractually required to redact before responding
 (`repositories/exports.ts:16-19`).
 
-Event exports are bounded at **100,000 rows** (`repositories/exports.ts:23`), and truncation is
+Event exports are bounded at **100,000 rows** (`repositories/exports.ts:22`), and truncation is
 surfaced in the manifest and header rather than being silent.
 
 ## 6. What is deleted, and how
