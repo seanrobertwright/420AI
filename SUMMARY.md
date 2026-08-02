@@ -85,7 +85,7 @@ origins deferred; per-origin gate in
 negative), restore-from-backup drill, Cursor `watch → archive → Monitor` round-trip, live SMTP send
 (local Mailpit), scheduled-reports cold run, and 12.3 auth QA (`.agents/qa/m12-slice3/`).
 
-**M15 (Multi-user & access control) is **DONE** — 15.10 closed it on `2026-08-02`.** Ten slices:
+**M15 (Multi-user & access control) is **DONE** — 15.10 closed it on `2026-08-02` (PR #70).** Ten slices:
 org-level tenancy + RLS backstop, four fixed roles, all four identity paths, sessions, SSO, MFA, API
 keys (and the retirement of `ADMIN_TOKEN`), and finally the team surfaces + the append-only
 `audit_events` table. **What's next — M16–M19 remain committed and unsequenced.** Originally: On 2026-07-21 the post-V1 bucket
@@ -247,7 +247,7 @@ through the deferral-audit + scope conversation that produced M12/M13/M14. Full 
   **15.1** ✅ Tenancy schema · **15.2** ✅ Request principal · **15.3** ✅ RLS enforcement · **15.4** ✅ RBAC ·
   **15.5** ✅ Identity core · **15.6** ✅ Sessions + revocation · **15.7** ✅ SSO (Google + GitHub) ·
   **15.8** ✅ MFA (TOTP + recovery codes) · **15.9** ✅ API keys + retire `ADMIN_TOKEN` ·
-  **15.10** ✅ Team surfaces + audit table.
+  **15.10** ✅ Team surfaces + audit table (PR #70).
   **15.0 gates 15.3**; 15.5 gates 15.7; 15.6 gates 15.8.
 - **M16 — Cloud-hosted SaaS.** Multi-tenancy, managed archive, quotas/rate limits beyond 12.4,
   billing, hosted onboarding. _Genuinely depends on M15. Biggest architectural shift — local-first
@@ -715,7 +715,7 @@ enforced`, the sibling of `skipped ≠ passed`. Closes the Spike-6 hole: a cross
         401 on an unwatched cron job, so the script names the migration instead; and OneDrive again
         deleted three tracked files mid-run and left a `-Living-Room` conflict copy,
         caught by `git status` rather than by any gate.
-  - [x] **15.10** Team surfaces + audit table — DONE `2026-08-02` (PR #NN). **THE LAST SLICE, and
+  - [x] **15.10** Team surfaces + audit table — DONE `2026-08-02` (PR #70). **THE LAST SLICE, and
         the one that made nine headless slices usable.** Nine slices shipped a complete multi-user
         backend and **zero** user-facing surface for it; most sharply, `members.ts` had been mailing
         every invited colleague a link to `/invite/<token>` since 15.5 and **that page did not
