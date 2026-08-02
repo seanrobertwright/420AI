@@ -1250,7 +1250,7 @@ schema.
 
 ### Deferred in 15.10, stated so it is not mistaken for a gap
 
-Multi-org membership and the org switcher (→ M16 with tenant slugs and hosting); an audit-log viewer
+Multi-org membership and the org switcher (→ M20 with tenant slugs and hosting); an audit-log viewer
 or export; and four surfaces that remain **headless but curl-reachable** — the gated self-signup
 page, the password-reset pages, an active-sessions list, and MFA QR rendering.
 

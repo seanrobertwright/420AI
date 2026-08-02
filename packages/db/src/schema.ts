@@ -54,7 +54,7 @@ import type {
  * backfill seeded from the existing install (D-M15-11) and that `ensurePersonalOrg`
  * keeps creating for every new user, so "every user has at least one org" holds by
  * construction. `name` is seeded from the user's email for a personal org (the 0014
- * backfill joins on it exactly once); no `slug` column — URL/tenant slugs are M16.
+ * backfill joins on it exactly once); no `slug` column — URL/tenant slugs are M20.
  */
 export const organizations = pgTable("organizations", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -65,7 +65,7 @@ export const organizations = pgTable("organizations", {
 
 /**
  * M15 15.1 — a user's place in an organization (D-M15-1/D-M15-4). Nothing constrains
- * "≤1 membership per user" ON PURPOSE: multi-org users are a COMMITTED direction (M16
+ * "≤1 membership per user" ON PURPOSE: multi-org users are a COMMITTED direction (M20
  * tenant slugs + hosting), and a constraint here would have to be dropped again. It was
  * originally slated for 15.10 and DELIBERATELY DEFERRED there (D-15.10-1): multi-org reopens
  * `findPrincipalByEmail`, the load-bearing 15.2 primitive whose byte-identical ORDER BY is the

@@ -173,7 +173,7 @@ export async function listReportArtifacts(
 ): Promise<ReportArtifactRow[]> {
   // M15 15.2: org AND user — defense in depth. The route passes both from ONE principal,
   // so they cannot disagree; the org predicate is what survives if user-scoping is ever
-  // widened (e.g. M16's shared-org views).
+  // widened (e.g. M20's shared-org views).
   const conditions = [eq(reportArtifacts.orgId, orgId), eq(reportArtifacts.userId, userId)];
   if (filter?.reportType) conditions.push(eq(reportArtifacts.reportType, filter.reportType));
   if (filter?.scopeId) conditions.push(eq(reportArtifacts.scopeId, filter.scopeId));

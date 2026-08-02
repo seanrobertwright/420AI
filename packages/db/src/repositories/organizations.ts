@@ -38,7 +38,7 @@ import { memberships, organizations } from "../schema.js";
  * Resolve a user's organization, or `undefined` when they have no membership yet.
  *
  * DETERMINISTIC BY DESIGN: `ORDER BY created_at, id LIMIT 1`. Nothing constrains
- * "≤1 membership per user" (multi-org users are committed for M16, so such a constraint
+ * "≤1 membership per user" (multi-org users are committed for M20, so such a constraint
  * would only have to be dropped again — 15.10 deferred them, D-15.10-1), and two concurrent first-ever `ensurePersonalOrg`
  * calls for the same user could therefore create two personal orgs. The ordering
  * means that even in that accepted race the answer is stable rather than flapping

@@ -909,22 +909,36 @@ Requirements:
     signing/CI release, Antigravity, semantic/vector search, mobile, in-tool enforcement, scheduled
     analysis.
 
-### V2 roadmap — M15–M19 (COMMITTED SCOPE 2026-07-21; order TBD)
+### V2 roadmap — M15–M20 (COMMITTED SCOPE 2026-07-21; order TBD)
 
 > **Status: committed scope, not yet sequenced.** On **2026-07-21** this bucket was promoted from a
 > tentative sketch into **committed scope**: all five milestones below are wanted. The scope
 > conversation asked which strategic direction to take — deepen the single-user product, go
 > multi-user/SaaS, or extend cross-platform reach — and the answer was **all three**, so none of
-> M15–M19 is a "maybe" any more.
+> them is a "maybe" any more. (The bucket read "M15–M19" until the 2026-08-02 renumber moved
+> Cloud-hosted SaaS from M16 to M20; the count of committed milestones is unchanged.)
 >
-> **What is still open is the ORDER** for M16–M19; **M15 has since been promoted** (2026-07-25, see
-> item 15 below). The numbering below is inherited from the old sketch and is **not** a commitment to
+> **What is still open is the ORDER** for M17–M20; **M15 has since been promoted** (2026-07-25, see
+> item 15 below) and **M16 has since been redefined** (2026-08-02, see item 16 below). The numbering
+> below is inherited from the old sketch and is **not** a commitment to
 > sequence. Sequencing is driven by **who the next milestone is for**, not by technical dependency,
 > and M17 is largely parallelizable with the rest. Where a genuine technical dependency exists it is
-> called out in the entry itself (e.g. M16 needs M15).
+> called out in the entry itself (e.g. M20 needs M15).
+>
+> **Renumbered 2026-08-02 (M16 slice 16.0).** The **Cloud-hosted SaaS** milestone was **M16** and is
+> now **M20**, returning to this unsequenced bucket with its scope unchanged. `M16` was redefined as
+> **Dogfood Instrumentation & Data Trust** —
+> [`.agents/plans/m16-dogfood-instrumentation.md`](../.agents/plans/m16-dogfood-instrumentation.md).
+> _Why:_ multi-tenant hosting, billing and quotas are named **explicitly out of scope** by the
+> 24-week research period this repo is entering
+> ([`.agents/supplemental docs/research-analysis-plan.md`](../.agents/supplemental%20docs/research-analysis-plan.md)
+> §2), so the number was needed for work that is not. Every **live** reference below carries the new
+> number; the dated records under `.agents/` deliberately do not (D-16.0-1).
 >
 > **Corrected 2026-07-25 (M15 slice 15.0).** This paragraph previously read "the archive schema is
-> already multi-user-capable, so M15/M16 are a product-surface build rather than a data migration."
+> already multi-user-capable, so M15/M20 are a product-surface build rather than a data migration."
+> _(The quotation's milestone number is shown post-renumber; it read "M16" when written on
+> 2026-07-25, and M16 meant SaaS then — see the renumber note above.)_
 > That was true for **per-user** isolation — the schema does carry `user_id`. It is **false** under
 > the org-level tenancy settled in **D-M15-1** (2026-07-25 scope conversation): the tenancy boundary
 > is the **organization**, which adds `org_id` across ~15 tables including `events` and
@@ -940,7 +954,9 @@ Requirements:
 > M14 — that step is what turns a committed direction into a real, sliced, executable plan, and several
 > of these will sub-slice as heavily as M12/M13 did.
 
-Listed in their inherited sketch numbering — **this is not the execution order**:
+Listed in their inherited sketch numbering — **this is not the execution order**. (Item **20** is the
+one exception: it is not sketch numbering but the number Cloud-hosted SaaS was moved to on
+2026-08-02.)
 
 14. ~~**General AI Chat capture (V2 flagship).**~~ **PROMOTED → the real M14 above (2026-07-14) and
     now DONE (2026-07-22).** Kept here only to explain the numbering.
@@ -956,14 +972,23 @@ Listed in their inherited sketch numbering — **this is not the execution order
     as an auth credential, surviving only as an inert first-run bootstrap seed (D-M15-7). Sliced
     15.0–15.10 in the plan; **15.0 gates 15.3**. Kept here to explain the numbering.
 
-16. **Cloud-hosted SaaS.** Multi-tenant hosted deployment: tenancy isolation, a managed/hosted archive,
-    scale hardening (quotas + rate limits beyond M12 §12.4), billing/subscriptions, and hosted onboarding.
-    _Depends on M15 (multi-user) and the M12 ops baseline. The biggest architectural shift — local-first
-    stays a first-class deployment mode alongside hosted._
+16. ~~**Cloud-hosted SaaS.**~~ **RENUMBERED → item 20 below (2026-08-02).** `M16` was redefined and
+    **PROMOTED** as **Dogfood Instrumentation & Data Trust** —
+    [`.agents/plans/m16-dogfood-instrumentation.md`](../.agents/plans/m16-dogfood-instrumentation.md).
+    Settled in the 2026-08-02 deferral audit + scope conversation on the same criterion as M15 (_who
+    the next milestone is for_), and this time the answer is **Sean alone, for a 24-week research
+    period** — so the milestone builds only what makes that period's evidence trustworthy: the
+    **P0** backlog of
+    [`.agents/supplemental docs/research-analysis-plan.md`](../.agents/supplemental%20docs/research-analysis-plan.md)
+    §7 (capture health scorecard, an auditable outcome-label model that never mutates raw records,
+    a data-quality audit report, and privacy/data-boundary artifacts), plus §7 P1.5 decision links
+    and P1.7 git outcome confidence. Sliced **16.0–16.4**; the hero-workflow evidence panel (§7 P1.6)
+    is deliberately **not** a slice — the hero workflow is selected from evidence in research Phase 2.
+    Kept here to explain the numbering.
 
 17. **Cross-platform collectors.** macOS + Linux collectors (V1/M11 are Windows-first), and portable,
     signed installers + auto-update across OSes (extends M12 §12.8 distribution). _The architecture was
-    kept portable for exactly this; largely parallelizable with the M15–M16 track — the strongest
+    kept portable for exactly this; largely parallelizable with the multi-user/SaaS track — the strongest
     candidate to run alongside another milestone rather than in sequence._
 
 18. **Advanced intelligence & automation.** Semantic / vector search (V1 ships keyword FTS in §12.1),
@@ -977,8 +1002,16 @@ Listed in their inherited sketch numbering — **this is not the execution order
     graduating the experimental connector catalog (opencode, Aider, Copilot, Windsurf, Continue, Cline,
     etc.), and a **mobile** consumption app. _Extensibility + breadth; naturally last._
 
+20. **Cloud-hosted SaaS.** Multi-tenant hosted deployment: tenancy isolation, a managed/hosted archive,
+    scale hardening (quotas + rate limits beyond M12 §12.4), billing/subscriptions, and hosted onboarding.
+    _Depends on M15 (multi-user) and the M12 ops baseline. The biggest architectural shift — local-first
+    stays a first-class deployment mode alongside hosted._ **Was M16 until 2026-08-02** (slice 16.0);
+    the number is new, the scope is unchanged, and it remains committed and unsequenced. It also
+    inherits D-15.10-1's deferred **multi-org membership + org switcher**, the tenant slugs that
+    `organizations` has no `slug` column for, and user-defined roles.
+
 **Fold-in candidates (committed, but not tied to a specific milestone):** the mobile app — sketched
-inside M19, though it pairs at least as naturally with M16 SaaS as a consumption surface. Resolve its
+inside M19, though it pairs at least as naturally with M20 SaaS as a consumption surface. Resolve its
 home in the scope conversation that promotes whichever of the two runs first.
 
 **Resolved since the sketch:** browser-extension capture was listed here as a loose candidate; it
