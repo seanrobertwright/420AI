@@ -211,10 +211,20 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.10 org settings (two-role, HTTP)"
   });
 
   it("a cross-org rename is INEXPRESSIBLE — the org comes only from the principal", async () => {
-    // `userViewer`'s own personal org, which the owner of orgA has no standing in.
+    // A GENUINELY FOREIGN ORG — the bootstrap admin's personal org, which the owner of orgA has no
+    // standing in whatsoever.
+    //
+    // The first version of this test read `userViewer`'s org, which is WRONG and could never have
+    // failed: `beforeEach` MOVES the viewer into `orgA`, so the "other" org id WAS `orgA`. Every
+    // assertion below held whether or not the route honoured a body-supplied `orgId`, which made
+    // the one test claiming cross-tenant rename safety prove exactly nothing.
     const otherOrg = await owner.db.execute<{ id: string }>(
-      sql`select org_id as id from memberships where user_id = ${userViewer}`,
+      sql`select m.org_id as id from memberships m
+          join users u on u.id = m.user_id
+          where u.email = ${ADMIN_EMAIL}`,
     );
+    // The fixture can never silently degrade back to the broken shape.
+    expect(otherOrg.rows[0]!.id).not.toBe(orgA);
     // There is no path parameter and no body field for a target org. Smuggling one in is the only
     // thing available to an attacker, and it is INERT — measured, not assumed: Fastify's default
     // ajv runs with `removeAdditional`, so `additionalProperties: false` STRIPS the extra key
@@ -228,7 +238,14 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.10 org settings (two-role, HTTP)"
       payload: { name: "Acme", orgId: otherOrg.rows[0]!.id },
     });
     expect(res.statusCode).toBe(200);
+    // The CALLER's org was renamed…
     expect((res.json() as { org: { id: string } }).org.id).toBe(orgA);
+    // …and the foreign org named in the body was NOT touched. This is the assertion that
+    // discriminates: it fails the moment anything threads a body/param org id into `renameOrg`.
+    const foreign = await owner.db.execute<{ name: string }>(
+      sql`select name from organizations where id = ${otherOrg.rows[0]!.id}`,
+    );
+    expect(foreign.rows[0]!.name).toBe(ADMIN_EMAIL);
 
     // orgA is the viewer's org too (they were MOVED into it), so the meaningful check is that the
     // bootstrap admin's separate org is untouched by anything above.

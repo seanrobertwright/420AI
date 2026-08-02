@@ -200,6 +200,42 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.10 audit_events is append-only (t
     expect(survivors.rows.map((r) => r.action)).toEqual(["member.removed"]);
   });
 
+  // 4b ── D-15.10-3: an audit row is ATOMIC with the action it records.
+  //
+  //       BE PRECISE ABOUT WHAT THIS DOES AND DOES NOT DISCRIMINATE, because the obvious reading is
+  //       wrong and was measured to be wrong. It does NOT catch `recordAuditEvent` wrapping itself
+  //       in a transaction: drizzle turns a nested `transaction()` on a `Tx` into a SAVEPOINT, and
+  //       a savepoint rolls back with its parent — the negative control was run, and this test kept
+  //       passing with the function wrapped. What it DOES pin is that the write travels on the
+  //       caller's connection at all: an implementation that acquired its own pool connection would
+  //       commit independently and this would fail.
+  //
+  //       THE FAILURE MODE THAT ACTUALLY MATTERS is a CALL SITE passing `app.db` instead of its
+  //       `tx` — invisible to `tsc`, since `DbClient` accepts either by design. That is guarded
+  //       structurally in `apps/ingest/src/routes/audit-call-sites.test.ts`, because no
+  //       repository-level test can see a route's argument.
+  it("an audit row rolls back with its caller's transaction", async () => {
+    await expect(
+      appRole.db.transaction(async (tx) => {
+        await recordAuditEvent(tx, {
+          orgId: orgA,
+          actorUserId: userA,
+          actorEmail: "audit-a@example.com",
+          action: "member.removed",
+          targetEmail: "rolled-back@example.com",
+        });
+        throw new Error("the action failed after its audit write");
+      }),
+    ).rejects.toThrow(/the action failed/);
+
+    // Read on the OWNER handle — the app role reads zero rows by design, so asserting through it
+    // would pass vacuously whether or not the row survived.
+    const rows = await owner.db.execute<{ n: number }>(
+      sql`select count(*)::int as n from audit_events`,
+    );
+    expect(rows.rows[0]!.n).toBe(0);
+  });
+
   // 5 ── THE BREAK-GLASS CHANNEL IS INTACT (D-M15-7 / D-15.10-4). There is no audit VIEWER by
   //      decision, so this read path is the only one — and `FORCE ROW LEVEL SECURITY` is omitted
   //      from the migration precisely to keep the owner's exemption that makes it work.

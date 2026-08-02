@@ -258,7 +258,28 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.10 audit trail (two-role, HTTP)",
     );
   });
 
-  it("DELETE /v1/members/:userId/mfa writes member.mfa_reset", async () => {
+  it("DELETE /v1/members/:userId/mfa clears MFA, revokes sessions, and writes member.mfa_reset", async () => {
+    // SEEDED so the route has something to actually do. Without this the test asserts only a 204
+    // and an audit row — which a route that deleted both `clearMfa` and `revokeAllSessions` would
+    // still pass. That is precisely the failure 15.8 refused to ship: a "reset" that leaves the
+    // TOTP row intact (support says it is reset; the user still cannot log in), or that clears the
+    // factor while leaving the target's existing sessions alive, which is strictly worse than
+    // doing nothing.
+    //
+    // ORDER MATTERS: log in FIRST, then seed the credential. `mintSessionOrChallenge` DECRYPTS the
+    // stored secret on every login, and these are opaque placeholders — seeding first makes the
+    // login 500 on a decrypt failure rather than testing anything. Nothing on the path below reads
+    // the secret: `clearMfa` only DELETEs.
+    const victimTok = await login("v@example.com");
+    expect(
+      (await app.inject({ method: "GET", url: "/v1/auth/me", headers: asUser(victimTok) }))
+        .statusCode,
+    ).toBe(200);
+    await owner.db.execute(
+      sql`insert into totp_credentials (user_id, secret_ciphertext, secret_iv, secret_tag, confirmed_at)
+          values (${userViewer}, ${"ct"}, ${"iv"}, ${"tag"}, now())`,
+    );
+
     const ownerTok = asUser(await login("o@example.com"));
     const res = await app.inject({
       method: "DELETE",
@@ -266,6 +287,18 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.10 audit trail (two-role, HTTP)",
       headers: ownerTok,
     });
     expect(res.statusCode).toBe(204);
+
+    // THE SECOND FACTOR IS GONE (read on the owner handle).
+    const totp = await owner.db.execute<{ n: number }>(
+      sql`select count(*)::int as n from totp_credentials where user_id = ${userViewer}`,
+    );
+    expect(totp.rows[0]!.n).toBe(0);
+    // AND THE TARGET IS SIGNED OUT. Not optional: clearing MFA while leaving a pre-existing
+    // session alive hands an attacker who already had one a strictly better position.
+    expect(
+      (await app.inject({ method: "GET", url: "/v1/auth/me", headers: asUser(victimTok) }))
+        .statusCode,
+    ).toBe(401);
 
     const rows = await auditRows();
     expect(rows).toHaveLength(1);
@@ -299,6 +332,10 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.10 audit trail (two-role, HTTP)",
     expect(rows.map((r) => r.action).sort()).toEqual(["api_key.minted", "api_key.revoked"]);
     const minted = rows.find((r) => r.action === "api_key.minted")!;
     expect(minted.metadata).toMatchObject({ keyName: "laptop", role: null });
+    // `expiresAt` is the ONLY field this call site computes (`expiresAt?.toISOString() ?? null`),
+    // so it is the only one that can silently collapse to null — recording an expiring credential
+    // as non-expiring, on the exact field a break-glass reader uses to reconstruct a key lifetime.
+    expect(typeof (minted.metadata as { expiresAt: unknown }).expiresAt).toBe("string");
     // NEVER THE PLAINTEXT OR A HASH. The token exists exactly once, in the mint response; a copy
     // here would be permanent in the one table the application cannot delete from.
     const mintedToken = (mint.json() as { token: string }).token;
