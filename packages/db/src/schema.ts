@@ -65,8 +65,11 @@ export const organizations = pgTable("organizations", {
 
 /**
  * M15 15.1 — a user's place in an organization (D-M15-1/D-M15-4). Nothing constrains
- * "≤1 membership per user" ON PURPOSE: 15.10 needs multi-org users, and a constraint
- * here would have to be dropped again.
+ * "≤1 membership per user" ON PURPOSE: multi-org users are a COMMITTED direction (M16
+ * tenant slugs + hosting), and a constraint here would have to be dropped again. It was
+ * originally slated for 15.10 and DELIBERATELY DEFERRED there (D-15.10-1): multi-org reopens
+ * `findPrincipalByEmail`, the load-bearing 15.2 primitive whose byte-identical ORDER BY is the
+ * only thing keeping session-auth and key-auth resolving to the same org.
  *
  * `role` is TEXT, not a pg enum — the repo models every closed set that way
  * (`report_artifacts.report_type`, `alert_firings.status`) so adding a value is a code
@@ -1071,4 +1074,78 @@ export const mfaRecoveryCodes = pgTable(
     uniqueIndex("mfa_recovery_codes_user_hash").on(t.userId, t.codeHash),
     index("mfa_recovery_codes_by_user").on(t.userId),
   ],
+);
+
+/**
+ * M15 15.10 — the APPEND-ONLY audit trail (D-15.10-2). Who did what, to whom, when.
+ *
+ * THE RLS SHAPE IS A FOURTH CLASSIFICATION, and it exists because every audit-worthy action in
+ * this repo originates from one of exactly TWO kinds of call site:
+ *
+ *   | call site                                          | org context set? | role in context |
+ *   | -------------------------------------------------- | ---------------- | --------------- |
+ *   | `routes/members.ts`, `routes/org.ts` — `withOrg`    | yes              | the caller's    |
+ *   | `routes/api-keys.ts`, `mfa.ts`, `auth.ts`, `sso.ts` | NO               | none            |
+ *   |   — identity tables, on `ALLOWED_WITHOUT_WITHORG`   |                  |                 |
+ *
+ * So the repo's 13-table STRICT org policy is unusable here: it REJECTS the insert from the
+ * unwrapped half outright (measured, not assumed — SPIKE check 8 raised `new row violates
+ * row-level security policy`, which would have made every `api_key.minted` audit a 500). And the
+ * 15.4 RESTRICTIVE role policies are unusable too: a `viewer` is explicitly permitted to revoke
+ * their own API key (`routes/api-keys.ts`), and that must produce an audit row, not a 500.
+ *
+ * The migration therefore ships ONE policy — `PERMISSIVE ... FOR INSERT WITH CHECK (true)` — with
+ * no SELECT/UPDATE/DELETE policy at all, plus `REVOKE UPDATE, DELETE` from the app role. RLS is
+ * ENABLED, so default-deny covers every command with no policy. Net effect, all confirmed live:
+ * the app role appends always, reads ZERO rows (even with a matching org context — it is the
+ * ABSENT SELECT policy doing the work, not a failing predicate), and cannot rewrite or erase
+ * history. `FORCE ROW LEVEL SECURITY` is deliberately OMITTED so the table owner keeps its
+ * exemption — the owner is the D-M15-7 break-glass reader.
+ *
+ * D-15.10-4 — THERE IS NO VIEWER, by decision and not by omission. The read path is break-glass
+ * `psql` as the owner. `repositories/audit.ts` exports exactly one function, a writer, and
+ * `audit.test.ts` asserts that structurally: adding a reader requires adding a strict SELECT
+ * policy in the SAME commit, or it would silently return an empty list forever.
+ *
+ * DENORMALIZED ACTOR/TARGET EMAILS, against this repo's normalized habit, for two reasons and the
+ * second is decisive:
+ *   1. an audit row must be legible to an operator running one `select *` under break-glass,
+ *      without reconstructing joins across `users` and `memberships` to learn who `a1b2…` was;
+ *   2. for `member.invited` THERE IS NO TARGET USER ID AT ALL — an invite names an email address
+ *      that has no `users` row yet (D-M15-8). A normalized-only design simply cannot record the
+ *      most common audited action. `target_user_id` is therefore nullable and `target_email` is
+ *      the load-bearing column.
+ *
+ * `metadata` carries the SHAPE of a change (`{"from":"member","to":"admin"}`, `{"revoked":3}`) and
+ * NEVER a token, a token hash, a password or a recovery code. The minted API key's plaintext exists
+ * exactly once, in the mint response; an audit row echoing it would create a second, PERMANENT copy
+ * in the one table the application cannot delete from.
+ *
+ * The FKs to `organizations`/`users` are safe because neither row is ever deleted — a personal org
+ * is never dropped and member removal deletes a MEMBERSHIP, never a user. If that ever changes,
+ * these FKs become the thing that blocks it, which is the correct direction for an audit table.
+ */
+export const auditEvents = pgTable(
+  "audit_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organizations.id),
+    // NOT NULL, all four of these: an audit row that cannot say who acted is not an audit row.
+    actorUserId: uuid("actor_user_id")
+      .notNull()
+      .references(() => users.id),
+    actorEmail: text("actor_email").notNull(),
+    targetUserId: uuid("target_user_id").references(() => users.id),
+    targetEmail: text("target_email"),
+    // TEXT with no CHECK, matching `memberships.role` — the closed set lives in `@420ai/shared`'s
+    // AUDIT_ACTIONS, and `recordAuditEvent`'s `AuditAction` parameter type is the enforcement.
+    action: text("action").notNull(),
+    metadata: jsonb("metadata"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  // The only query anyone will ever run against this table is the break-glass "what happened in
+  // this org, in order" — so one composite index in exactly that shape.
+  (t) => [index("audit_events_by_org_time").on(t.orgId, t.createdAt)],
 );

@@ -515,13 +515,13 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.6 sessions + revocation (two-role
 
     // …and the session row is genuinely stamped, not merely unresolvable because the membership
     // vanished. That accidental mechanism is exactly what 15.6 replaces with a designed one: it
-    // evaporates the moment 15.10 ships multi-org users.
+    // evaporates the moment M16 ships multi-org users.
     //
     // MEASURED, NOT ASSUMED: this test PASSED under the mutation check (revocation lookup removed
     // from `resolvePrincipal`) — the 401 above came entirely from the missing membership, and the
     // count below stayed 0 because the mutation broke ENFORCEMENT, not the revoke itself. So read
     // this test for what it actually proves: the row IS stamped (which is the part that will still
-    // matter after 15.10), NOT that enforcement works. The discriminator test above is the only
+    // matter after M16), NOT that enforcement works. The discriminator test above is the only
     // thing proving the latter — do not let this one stand in for it.
     const live = await owner.db.execute<{ n: number }>(
       sql`select count(*)::int as n from sessions where user_id = ${userMember} and revoked_at is null`,

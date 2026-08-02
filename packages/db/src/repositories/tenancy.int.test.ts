@@ -95,6 +95,17 @@ const TENANT_TABLES = [
   // like any other. Its SIBLING, `password_reset_tokens`, is deliberately NOT here: a reset token
   // belongs to an IDENTITY, not an org, and appears in GLOBAL_TABLES below (D-15.5-1).
   "invites",
+  // M15 15.10 — the audit trail. It belongs in THIS list, which asks a narrow structural question
+  // ("does every table with an `org_id` carry it NOT NULL with an FK to `organizations`?"), and
+  // `audit_events` answers yes: an audit event is an act WITHIN an org, and the column is what makes
+  // the break-glass read scopable.
+  //
+  // It is deliberately NOT in `rls.int.test.ts`'s tenant lists, and the two are not in conflict —
+  // they ask different questions. That file classifies tables by POLICY SHAPE, and `audit_events` is
+  // its own fifth classification (APPEND_ONLY_TABLES, D-15.10-2): nothing reads it per-tenant, so its
+  // "all 17 tenant tables have ENABLE + FORCE" assertion must stay at 17 and must not pick this
+  // table up — it deliberately does not FORCE, to preserve the owner's break-glass read.
+  "audit_events",
 ] as const;
 
 /** Tables that must NOT gain org_id — identities and deployment-global data (D-M15-9). */

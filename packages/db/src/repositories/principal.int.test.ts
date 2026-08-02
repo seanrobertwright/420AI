@@ -135,7 +135,8 @@ describe.skipIf(!TEST_URL)("M15 15.2 request principal + org-scoped reads (integ
     });
 
     it("resolves a two-membership user DETERMINISTICALLY (oldest membership wins)", async () => {
-      // 15.10 needs multi-org users, so nothing constrains "one membership per user".
+      // M16 needs multi-org users (15.10 deferred them, D-15.10-1), so nothing constrains
+      // "one membership per user".
       // The ORDER BY must mirror findOrgIdByUserId so the two never disagree.
       await dbh.db.execute(
         sql`INSERT INTO memberships (org_id, user_id, role) VALUES (${orgB}, ${userA}, 'member')`,

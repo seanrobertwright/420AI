@@ -1,0 +1,19 @@
+-- Down-migration for 0023 (M15 15.10). One bare DROP TABLE: the policy, the index and all three FKs
+-- drop with the table, so there is no policy-ordering hazard of the kind 0015-0017's downs had to
+-- navigate. The `REVOKE` needs no undo either — the privilege it removed belonged to a table that no
+-- longer exists.
+--
+-- D-M15-13 rollback-drill note: THIS DESTROYS THE ENTIRE AUDIT HISTORY, IRRECOVERABLY. Every other
+-- destructive down in this repo drops a PROJECTION — `events` re-derive from `raw_source_records`,
+-- rollups re-derive from `events`. `audit_events` is derived from NOTHING. No other table records
+-- who changed a colleague's role, who evicted whom, or who minted which key, so once these rows are
+-- gone there is no source to rebuild them from. Rolling forward again produces an EMPTY table, not
+-- the old one. If the history matters, `pg_dump -t audit_events` BEFORE rolling back.
+--
+-- AND THE ROLLBACK IS NOT SILENT ON THE WRITE SIDE EITHER. A post-15.10 server against a pre-15.10
+-- schema FAILS EVERY AUDITED MUTATION — invite, role change, member removal, MFA reset, org rename,
+-- API-key mint and revoke all 500 — because D-15.10-3 puts the audit insert INSIDE the action's
+-- transaction, deliberately, so a lost audit row fails the action rather than committing a change
+-- nobody can attribute. It does NOT degrade to "the action works, auditing is skipped". Roll the
+-- code back with the schema.
+DROP TABLE IF EXISTS "audit_events";

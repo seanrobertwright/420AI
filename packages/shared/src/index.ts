@@ -11,6 +11,7 @@ export * from "./projections.js";
 export * from "./report-metrics.js";
 export * from "./monitor.js";
 export * from "./roles.js";
+export * from "./audit.js";
 export * from "./alerts.js";
 export * from "./alert-firings.js";
 export * from "./control-protocol.js";

@@ -11,6 +11,7 @@ import {
   linkSsoIdentity,
   listSsoIdentities,
   normalizeEmail,
+  recordAuditEvent,
   unlinkSsoIdentity,
 } from "@420ai/db";
 import { ssoCallbackBodySchema, ssoStartBodySchema } from "../schemas.js";
@@ -130,6 +131,20 @@ async function resolveSsoLogin(
       const id = await createUserWithoutPassword(tx, email);
       await acceptInvite(tx, inviteToken, id);
       await linkSsoIdentity(tx, id, { provider, subject: profile.subject, email });
+      // M15 15.10 — the SSO half of `member.joined`, same transaction, same actor==target
+      // reasoning as `routes/auth.ts`'s password accept: an invite is redeemed by its recipient.
+      // The org comes from the INVITE, which is also why this file must not "fix" its lack of
+      // `withOrg` — the invite lookup is what DISCOVERS the org, so a wrapped call would read zero
+      // rows. The append-only policy needs no context (D-15.10-2).
+      await recordAuditEvent(tx, {
+        orgId: invite.orgId,
+        actorUserId: id,
+        actorEmail: email,
+        action: "member.joined",
+        targetUserId: id,
+        targetEmail: email,
+        metadata: { role: invite.role, via: "sso" },
+      });
       return id;
     });
     return { kind: "created", userId: newUserId, email };
@@ -182,6 +197,13 @@ async function resolveSsoLogin(
  * bootstrap-permissive on the org axis (D-15.3-3 / D-15.5-2) precisely because the invite lookup is
  * what DISCOVERS the org, so wrapping it would read zero rows. `memberships` carries no policy.
  * This file's entry in `org-scoping.test.ts`'s allow-list records the same argument.
+ *
+ * M15 15.10 — that same path now ALSO appends to `audit_events` (`member.joined`), which does carry
+ * an `org_id` and a policy, so the older "no tenant table" phrasing would have gone stale. The entry
+ * stands because the append-only policy is a single unconditional `FOR INSERT WITH CHECK (true)`
+ * (D-15.10-2): the insert succeeds with NO org context, which is exactly what lets an unwrapped
+ * identity route audit at all. The write is inside the accept transaction (D-15.10-3), so a failed
+ * audit fails the join rather than admitting an unattributable member.
  *
  * SSO adds NO new enforcement point. Once the policy admits a login it mints an ordinary 15.6
  * session through the shared `mintSession`, so revocation, expiry and `resolvePrincipal` all apply

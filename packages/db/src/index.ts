@@ -18,6 +18,8 @@ export {
   mfaRecoveryCodes,
   // M15 15.9: a named, hashed, revocable API key (D-M15-7). Identity-owned — no org_id, no RLS.
   apiKeys,
+  // M15 15.10: the append-only audit trail (D-15.10-2). Org-owned, but write-only to the app role.
+  auditEvents,
   ingestTokens,
   rawSourceRecords,
   events,
@@ -58,7 +60,11 @@ export {
   listOrganizations,
   // M15 15.5: the invite preview names the org an invitee is about to join.
   getOrgName,
+  // M15 15.10: the org settings surface. `renameOrg` is owner-gated at the route.
+  getOrg,
+  renameOrg,
 } from "./repositories/organizations.js";
+export type { OrgRow } from "./repositories/organizations.js";
 // M15 15.9: `findPrincipalByUserId` is the same resolution keyed by user id, for the API-key tier
 // which already holds one. Its ORDER BY is byte-identical to the email variant on purpose.
 export { findPrincipalByEmail, findPrincipalByUserId } from "./repositories/principal.js";
@@ -178,6 +184,12 @@ export {
   MemberError,
 } from "./repositories/members.js";
 export type { MemberRow } from "./repositories/members.js";
+// M15 15.10 the append-only audit trail. Deliberately ONE export, and deliberately WITHOUT the
+// "the orgId predicate is the only boundary" note every other org-owned repository carries here:
+// `audit_events` has no read path at all (D-15.10-4), so there is no query to scope. `org_id` is
+// written for the break-glass reader's benefit, not for a predicate.
+export { recordAuditEvent } from "./repositories/audit.js";
+export type { AuditEventInput } from "./repositories/audit.js";
 export { issueIngestToken, findMachineIdByToken } from "./repositories/tokens.js";
 export { ingestBatch } from "./repositories/ingest.js";
 export {

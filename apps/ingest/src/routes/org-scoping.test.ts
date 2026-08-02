@@ -66,25 +66,51 @@ const ALLOWED_WITHOUT_WITHORG: Record<string, string> = {
   // `auth.ts`'s password invite-accept does, and `invites`/`memberships` are the bootstrap-permissive
   // and no-policy tables that path was designed around (D-15.3-3 / D-15.5-2). Wrapping it in
   // `withOrg` would read zero rows, since the invite lookup is what discovers the org.
+  //
+  // M15 15.10 EXTENDS this reason too, and for the same "a stale justification is a hole" argument.
+  // The invite-acceptance path now also writes `audit_events` (`member.joined`), which DOES carry an
+  // `org_id` and DOES carry a policy — so the phrase "touches no tenant table" would have quietly
+  // stopped being true. It is not an exemption being stretched: the policy is a single unconditional
+  // `FOR INSERT WITH CHECK (true)` (D-15.10-2), so the append needs NO org context to succeed, which
+  // is precisely why it can be called from this file. Wrapping in `withOrg` here would still read
+  // zero rows, since the invite lookup is what discovers the org.
   "sso.ts":
     "reads `sso_identities` + `users` to ESTABLISH identity before any org context exists; " +
-    "sso_identities/users/memberships carry no RLS and `invites` is bootstrap-permissive",
+    "sso_identities/users/memberships carry no RLS, `invites` is bootstrap-permissive, and " +
+    "`audit_events` is append-only with an unconditional INSERT policy (D-15.10-2)",
   // M15 15.8 — the SAME argument as `auth.ts`/`sso.ts` above, two tables further along. A second
   // factor is presented BEFORE a session is minted, so `POST /v1/auth/mfa/verify` reads these rows at
   // the one moment before any org context exists — resolving them is part of what establishes it. The
   // five session-gated routes in the file act on `principal.userId` and touch no tenant table at all.
+  //
+  // M15 15.10 — the "touch no tenant table at all" clause above is now qualified rather than left to
+  // rot. `mfa.ts` remains un-audited itself (self-service credential changes are outside
+  // AUDIT_ACTIONS by decision — see `packages/shared/src/audit.ts`), but the ADMIN-initiated reset
+  // that 15.8 parked landed in `members.ts`, which IS `withOrg`-wrapped. Stated here because the
+  // next reader will look for the reset in this file.
   "mfa.ts":
     "reads totp_credentials/mfa_recovery_codes to complete authentication before any org context " +
-    "exists; both are identity tables with no org_id and no policy (D-15.8-13)",
+    "exists; both are identity tables with no org_id and no policy (D-15.8-13); the ADMIN MFA " +
+    "reset lives in members.ts, wrapped, and is the only audited MFA action",
   // M15 15.9 — the SAME argument again, one table further along. `api_keys` is an IDENTITY table
   // with no `org_id` and no policy (D-15.9-1), read INSIDE `resolvePrincipal` at the one moment
   // before any org context exists, because resolving the row is part of what establishes it. All
   // three routes in the file act on `principal.userId` and touch no tenant table at all — the
   // `userId` predicate inside every repository call IS the whole scoping, and there is no policy
   // for `withOrg` to activate.
+  //
+  // M15 15.10 — "touch no tenant table at all" STOPPED BEING TRUE in this slice, and this is the
+  // exemplary case of why these reasons get extended rather than left alone: the mint and both
+  // revoke handlers now write `audit_events`, which carries an `org_id` AND a policy. The entry
+  // stays, because the append-only policy is a single unconditional `FOR INSERT WITH CHECK (true)`
+  // (D-15.10-2) that needs no org context — and that is not an assumption, it is SPIKE check 8's
+  // negative control: a STRICT policy here would have REJECTED the insert and made every mint a
+  // 500. The audit row still carries `principal.orgId`; an audit event is an act within an org even
+  // when the object it acts on is org-less. The transactions in that file are for ATOMICITY.
   "api-keys.ts":
     "reads/writes api_keys, an identity table with no org_id and no policy (D-15.9-1), resolved " +
-    "inside resolvePrincipal before any org context exists",
+    "inside resolvePrincipal before any org context exists; also appends to `audit_events`, whose " +
+    "unconditional INSERT policy needs no org context (D-15.10-2)",
   // The BOOTSTRAP paths (D-15.3-3) — circular with respect to tenancy by construction.
   "pair.ts": "redeems the pairing code IN ORDER TO discover the org (bootstrap-permissive)",
   // M15 15.5 REMOVED `pairing-codes.ts`. Its exemption read "writes a row for a TARGET user whose

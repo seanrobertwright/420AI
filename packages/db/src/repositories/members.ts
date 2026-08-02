@@ -177,7 +177,8 @@ export async function setMemberRole(
  * when this would remove the org's final owner (D-15.5-12).
  *
  * Only the MEMBERSHIP is removed — the `users` row survives, because an identity may belong to
- * other orgs (15.10) and because deleting it would cascade into every row that references it.
+ * other orgs (M16, once multi-org membership lands) and because deleting it would cascade into
+ * every row that references it.
  */
 export async function removeMember(tx: DbClient, orgId: string, userId: string): Promise<boolean> {
   const existing = await findMemberByUserId(tx, orgId, userId);

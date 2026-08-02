@@ -502,7 +502,7 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.9 API keys (two-role, HTTP)", () 
     expect(await meStatus(token)).toBe(401);
     // THE DISCRIMINATOR. The 401 above would happen anyway today, carried by the missing
     // MEMBERSHIP (`findPrincipalByUserId`'s innerJoin resolves nothing) — the same accidental
-    // mechanism 15.6 replaced for sessions, and one that evaporates the moment 15.10 ships
+    // mechanism 15.6 replaced for sessions, and one that evaporates the moment M16 ships
     // multi-org users. So assert the ROW was actually stamped, which is the designed guarantee.
     const rows = await owner.db.select().from(apiKeys).where(eq(apiKeys.userId, userMember));
     expect(rows).toHaveLength(1);

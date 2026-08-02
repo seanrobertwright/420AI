@@ -771,8 +771,9 @@ looking for it in `.env.example`.
 A `sessions` row is **stamped**, never deleted — revocation sets `revoked_at`, and expiry is a
 predicate rather than a cleanup. So the table grows by one row per login, forever.
 
-That is intentional at this slice: revocation history is the audit trail 15.10's audit table will
-want, `findLiveSession` is a primary-key probe (growth costs nothing on the hot path), and
+That is intentional at this slice: revocation history is the audit trail M15 15.10's `audit_events`
+now complements (that table records privileged ACTS, not every login, so the two are separate on
+purpose — see §15.10 below), `findLiveSession` is a primary-key probe (growth costs nothing on the hot path), and
 `listSessions` filters to live rows, so nothing user-visible degrades. For a self-hosted deployment
 the volume is negligible.
 
@@ -908,8 +909,10 @@ path if a mail transport is configured.
 ## 15.8 — Two-factor authentication (TOTP)
 
 MFA is a **per-user opt-in**. There is no deployment-wide or per-org "require MFA" setting and no new
-environment variable (D-15.8-2) — an org-level policy is a _team_ control and lands with the other org
-settings in 15.10. State the consequence plainly: **an operator cannot yet force members to enrol.**
+environment variable (D-15.8-2) — an org-level policy is a _team_ control. 15.10 shipped the org settings
+surface but deliberately did NOT add a require-MFA policy — that is an enforcement mechanism, not a
+setting, and needs a login-time gate plus a grace-period design. State the consequence plainly:
+**an operator still cannot force members to enrol.**
 
 Nothing needs to be configured to turn this on. It uses `node:crypto` (no new dependency), the
 existing `ARCHIVE_ENCRYPTION_KEY`, and the existing `SESSION_SECRET`.
@@ -926,7 +929,8 @@ existing `ARCHIVE_ENCRYPTION_KEY`, and the existing `SESSION_SECRET`.
    The card shows a base32 secret grouped in
    fours plus an `otpauth://` URI. There is **no QR code** in 15.8 (D-15.8-14) — every mainstream
    authenticator accepts manual entry; a QR needs either a new dashboard dependency or a hand-rolled
-   encoder, and it lands with the account surfaces in 15.10.
+   encoder. 15.10 shipped the account surfaces and held its no-new-dependency line, so this remains
+   deferred — stated scope, not an oversight.
 2. **Enter the code the app shows and press Confirm.** Until this succeeds the credential gates
    nothing (`confirmed_at IS NULL`), so an abandoned enrolment — wrong clock, wrong app, closed tab —
    never locks anyone out of their own account.
@@ -972,10 +976,15 @@ In order of preference:
 1. **A recovery code.** Enter it in place of the six digits at `/login/mfa` (the "use a recovery code
    instead" link only relaxes the input mask — the server accepts either credential on the same
    field). Each works once; Settings shows how many remain.
-2. **Operator break-glass — direct database access.** There is **no admin "reset MFA for user X"
-   endpoint in 15.8**, and that absence is deliberate: it would be a privilege-escalation surface (an
-   `admin` stripping an `owner`'s second factor), and 15.5's ladder lesson says such a route needs a
-   full rank comparison plus an audit record. Both land in 15.10. Until then, with `DATABASE_URL`
+2. **An admin resets it for them (M15 15.10).** `/team` → the member's row → **Reset 2FA**
+   (`DELETE /v1/members/:userId/mfa`). 15.8 designed this route and REFUSED to ship it because it
+   needs two things that did not exist yet — 15.5's full rank comparison, so an `admin` cannot strip
+   an `owner`'s second factor, and an audit record. Both exist now, so it is the normal remedy. It
+   also **revokes the target's sessions**, which is not optional: clearing MFA alone would leave a
+   pre-existing session alive with the second factor removed, which is strictly worse than doing
+   nothing.
+3. **Operator break-glass — direct database access.** Still available, and still the answer when
+   nobody with `admin` can act. With `DATABASE_URL`
    (consistent with D-M15-7's "operator break-glass is direct database access, never an HTTP
    god-token"):
 
@@ -1154,3 +1163,93 @@ every scheduled script start returning 401 immediately. Rolling forward again do
 them — only SHA-256 hashes were ever stored — so each key must be re-minted and re-installed. Roll
 the _code_ back with the schema: a post-15.9 server with no `api_keys` table has no working machine
 credential at all.
+
+## 15.10 — Team surfaces and the audit log
+
+15.10 is the milestone's last slice: it ships the dashboard surfaces for everything 15.5–15.9 built
+headless (`/team`, `/invite/<token>`, the Settings API-keys and Organization cards), the
+`DELETE /v1/members/:userId/mfa` reset 15.8 parked, `GET`/`PATCH /v1/org`, and the append-only
+`audit_events` table.
+
+Two things an operator needs to know before anything else:
+
+- **The emailed invite link now works.** `POST /v1/members/invite` has been mailing
+  `${APP_BASE_URL}/invite/<token>` since 15.5, and that page did not exist until this slice — so the
+  onboarding path 404'd and the only way to add a colleague was to read the token out of a JSON
+  response and pass it over chat. If `APP_BASE_URL` is wrong in your ingest env, the link in the
+  email is wrong; nothing else uses it.
+- **With no SMTP configured, `POST /v1/members/invite` returns the token in its response** and the
+  `/team` UI shows it once, for you to pass on out of band (D-15.5-10). That is the supported
+  single-box workflow, not a degraded mode.
+
+### Reading the audit log
+
+`audit_events` records ten privileged acts — `member.invited`, `member.invite_revoked`,
+`member.joined`, `member.role_changed`, `member.removed`, `member.mfa_reset`, `org.renamed`,
+`api_key.minted`, `api_key.revoked`, `api_key.revoked_all`. Logins are deliberately **not** recorded
+(`ingest_auth_failures` already holds the failures, and recording every success turns a security
+record into a traffic log), and neither are self-service changes to your own credentials.
+
+**IT IS READABLE ONLY AS THE OWNER**, i.e. through `DATABASE_URL` — there is no viewer, no export and
+no HTTP read path, by decision (D-15.10-4). This is the same operator break-glass channel D-M15-7
+establishes for everything else in the milestone:
+
+```bash
+docker compose exec -T archive psql -U 420ai -d 420ai -c \
+  "select created_at, actor_email, action, target_email, metadata
+     from audit_events order by created_at desc limit 50"
+```
+
+The **application cannot do anything but append**, and that is enforced by the database rather than
+by convention. `audit_events` has RLS enabled and exactly one policy —
+`PERMISSIVE ... FOR INSERT WITH CHECK (true)` — with no `SELECT`, `UPDATE` or `DELETE` policy at all,
+plus `REVOKE UPDATE, DELETE` from `420ai_app`. So under the app role:
+
+```bash
+psql "$DATABASE_URL_APP" -c "select count(*) from audit_events"   # 0 rows — always
+psql "$DATABASE_URL_APP" -c "delete from audit_events"            # ERROR: permission denied
+```
+
+Both are expected. The zero-row read is the **absent SELECT policy**, not a failing predicate — it
+reads zero even with a matching org context set — so "write-only" is a database guarantee. The loud
+`permission denied` is what the explicit `REVOKE` buys: without it a blocked delete would be a silent
+`DELETE 0`, which is safe but undiagnosable.
+
+`FORCE ROW LEVEL SECURITY` is deliberately **omitted** on this one table, against all 17 tenant
+tables. FORCE removes the table-_owner_ exemption, and the owner is exactly who performs the
+break-glass read above.
+
+An audit row carries `actor_email` and `target_email` **denormalized** alongside the FK ids, on
+purpose: the only reader is an operator running one `select *`, and for `member.invited` there is no
+target user id at all — an invited address has no `users` row yet. `metadata` carries the _shape_ of
+a change (`{"from":"member","to":"admin"}`, `{"revoked":3}`) and **never** a token, hash, password or
+recovery code.
+
+### Rolling back migration 0023
+
+The down-migration drops `audit_events`, which **destroys the entire audit history, irrecoverably**.
+Every other destructive down in this repo drops a _projection_ — `events` re-derive from
+`raw_source_records`, rollups re-derive from `events`. This table is derived from nothing: no other
+table records who changed a role, who evicted whom, or who minted which key. Rolling forward again
+gives you an **empty** table. If the history matters, `pg_dump -t audit_events` first.
+
+It is also not silent on the write side. A post-15.10 server against a pre-15.10 schema **fails every
+audited mutation** — invite, role change, removal, MFA reset, rename, key mint and revoke all 500 —
+because the audit insert is inside the action's transaction by design (D-15.10-3): a lost audit row
+fails the action rather than committing a change nobody can attribute. Roll the code back with the
+schema.
+
+### Deferred in 15.10, stated so it is not mistaken for a gap
+
+Multi-org membership and the org switcher (→ M16 with tenant slugs and hosting); an audit-log viewer
+or export; and four surfaces that remain **headless but curl-reachable** — the gated self-signup
+page, the password-reset pages, an active-sessions list, and MFA QR rendering.
+
+| Symptom                                                     | Cause and fix                                                                                                                                                                               |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| An invited colleague lands on `/login?next=/invite/<token>` | The dashboard is older than 15.10, or `middleware.ts`'s `/invite/` public **prefix** is missing. The token is single-use but unspent — a new invite is the fastest fix.                     |
+| The Organization card is missing from `/settings`           | Expected below two members (D-M15-10): a solo deployment never sees an org. It appears the moment a second membership exists. Gated on member COUNT, never on `is_personal`.                |
+| Every audited mutation 500s                                 | The schema is older than migration 0023 while the server is 15.10+. Run `npm run db:migrate`. Auditing is not best-effort and does not degrade silently — that is deliberate.               |
+| `select ... from audit_events` returns 0 rows               | You are connected as `420ai_app`. Use `DATABASE_URL` (the owner). There is no application read path at all.                                                                                 |
+| Renaming the org returns 403 for an admin                   | Expected: rename is **owner**-only. `admin` is the rung that manages people; renaming has no undo surface.                                                                                  |
+| `Reset 2FA` returns 403                                     | The target outranks you. An `admin` cannot strip an `owner`'s second factor — that is the escalation the route was held back for. Equal rank IS allowed, so a co-owner can help a co-owner. |

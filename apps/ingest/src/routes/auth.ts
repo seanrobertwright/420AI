@@ -14,6 +14,7 @@ import {
   getOrgName,
   listSessions,
   normalizeEmail,
+  recordAuditEvent,
   revokeAllApiKeys,
   revokeAllSessions,
   revokeSession,
@@ -303,7 +304,7 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
       if (await findUserIdByEmail(app.db, invite.email)) {
         return reply
           .code(409)
-          .send({ error: "user already exists — multi-org membership lands in 15.10" });
+          .send({ error: "user already exists — a user may belong to only one organization" });
       }
 
       const passwordHash = hashPassword(request.body.password);
@@ -320,6 +321,21 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
       const newUserId = await app.db.transaction(async (tx) => {
         const id = await createUserWithPassword(tx, invite.email, passwordHash);
         await acceptInvite(tx, request.body.token, id);
+        // M15 15.10 — `member.joined`, in the SAME transaction (D-15.10-3). THE ACTOR AND THE
+        // TARGET ARE THE SAME PERSON here, and that is correct rather than redundant: an invite is
+        // REDEEMED by its recipient, so a query for "everything this user did" and one for
+        // "everything that happened to this user" both need to return the join. The audit call
+        // goes inside the callback because that is where `id` is in scope — no change to the
+        // return-the-id-out shape the comment above defends.
+        await recordAuditEvent(tx, {
+          orgId: invite.orgId,
+          actorUserId: id,
+          actorEmail: invite.email,
+          action: "member.joined",
+          targetUserId: id,
+          targetEmail: invite.email,
+          metadata: { role: invite.role },
+        });
         return id;
       });
 

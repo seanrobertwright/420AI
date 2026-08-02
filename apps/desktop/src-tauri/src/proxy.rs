@@ -47,12 +47,14 @@ fn monitor_credentials() -> Result<(String, String), String> {
         .filter(|t| !t.is_empty())
         .or_else(|| std::env::var("API_KEY").ok().filter(|t| !t.trim().is_empty()))
         .ok_or_else(|| {
-            // NAME A REMEDY THAT EXISTS. An earlier draft said "mint one in Settings → API keys"
-            // in the dashboard — there is no such page until 15.10, so the one message an operator
-            // sees when this degrades pointed at a screen that is not there.
-            "API key not configured. There is no management UI yet (15.10) — mint one with \
-             POST /v1/auth/api-keys over a logged-in session, then paste it into Settings here. \
-             See docs/guide/operations.md §15.9. ADMIN_TOKEN was retired in M15 15.9."
+            // NAME A REMEDY THAT EXISTS. An earlier draft pointed at a dashboard "Settings →
+            // API keys" page that did not exist, so the one message an operator sees when this
+            // degrades named a screen that was not there. M15 15.10 SHIPPED that page, so the
+            // remedy is now the real one — keep it pointing at the page rather than at the raw
+            // endpoint, which is what a user has to be told to curl when there is no UI.
+            "API key not configured. Mint one at Settings → API keys on the dashboard, then \
+             paste it into Settings here. See docs/guide/operations.md §15.9. ADMIN_TOKEN was \
+             retired in M15 15.9."
                 .to_string()
         })?;
     let base = cfg

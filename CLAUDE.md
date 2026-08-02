@@ -337,6 +337,31 @@ than from memory.
   `org_id` silently put it on the wire in six endpoints. Use a `const <name>RowColumns = {...}`
   constant that mirrors the exported `*Row` interface (see `projects.ts`, `workspaces.ts`,
   `reports.ts`) — it also stops the interface from lying about the runtime shape.
+- **A table whose WRITERS STRADDLE the org-context boundary cannot use the strict policy** (M15 15.10).
+  `audit_events` is appended to from two kinds of call site: `withOrg`-wrapped routes (`members.ts`,
+  `org.ts`) and the ALLOW-LISTED identity routes that run with **no** org context at all
+  (`api-keys.ts`, `auth.ts`, `sso.ts` — they read the row that ESTABLISHES the context). A strict
+  `org_id = current_setting(...)` policy REJECTS the insert from the unwrapped half outright —
+  measured as a negative control, not assumed: it raised `new row violates row-level security policy`,
+  which would have made every `api_key.minted` audit a 500 surfacing much later as "minting is
+  broken". The 15.4 RESTRICTIVE role policies are equally unusable, because a `viewer` is explicitly
+  permitted to revoke their own key and that must produce a row rather than a 500. The answer is a
+  **fourth classification**: RLS enabled, exactly one `PERMISSIVE ... FOR INSERT WITH CHECK (true)`
+  policy, and no `SELECT`/`UPDATE`/`DELETE` policy — default-deny does the rest, so the app **appends
+  always and reads zero rows even WITH a matching org context** (it is the ABSENT SELECT policy, not
+  a failing predicate, which is what makes "write-only" a database guarantee). Three corollaries:
+  - **`REVOKE UPDATE, DELETE` is what makes tampering LOUD.** With the grant intact, a blocked
+    `UPDATE`/`DELETE` is a silent 0-row no-op — safe, undiagnosable. Both were measured; only one is
+    debuggable. Same shape as 15.4's "a backstop that cannot be loud is not a complete gate".
+  - **Omit `FORCE ROW LEVEL SECURITY` when the table's only reader is break-glass**, against the
+    13-table habit. FORCE removes the table-OWNER exemption, and the owner IS the D-M15-7 reader.
+    Assert `relforcerowsecurity = false` explicitly so nobody "completes the pattern" later.
+  - **Denormalize the actor/target email onto an audit row**, against the repo's normalized habit,
+    and the second reason is decisive: the only reader runs one `select *` under `psql`, and for
+    `member.invited` there is **no target user id at all** — an invited address has no `users` row
+    yet, so a normalized-only design cannot record the most common audited action. `metadata` carries
+    the shape of a change and never a token, hash or password: the one table the app cannot DELETE
+    from is the worst place to put a second copy of a secret.
 - **A guard sufficient for a READ is insufficient for a WRITE that adds an FK.** The M6 projection reads
   return 200-zeros for an unknown project uuid (`isUuid → 404` only screens _malformed_ ids, never
   inserts). An M7-style _write_ whose row carries a FK (`report_artifacts.project_id → projects.id`)
