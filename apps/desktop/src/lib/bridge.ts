@@ -29,8 +29,8 @@ export function onControlEvent(cb: (ev: ControlEvent) => void): Promise<Unlisten
 
 /**
  * Fetch the server `LiveMonitorSnapshot` via the Rust `get_monitor_snapshot` proxy
- * (Slice 2). Rust holds the admin token + makes the request, returning opaque JSON;
- * we cast it to the shared type. Rejects ("admin token not configured" / "ingest
+ * (Slice 2). Rust holds the API key + makes the request, returning opaque JSON;
+ * we cast it to the shared type. Rejects ("API key not configured" / "ingest
  * unreachable: …") so the panel can degrade gracefully (mirrors the dashboard proxy).
  */
 export function getMonitorSnapshot(): Promise<LiveMonitorSnapshot> {
@@ -98,7 +98,8 @@ export function setAutostart(enabled: boolean): Promise<void> {
 export interface ServerConfigView {
   serverDir: string;
   ingestUrl: string;
-  hasAdminToken: boolean;
+  /** M15 15.9 (D-M15-7) — replaces `hasAdminToken`. Presence only; the key never crosses. */
+  hasApiKey: boolean;
   hasDatabaseUrl: boolean;
   /** M15 15.3 — the non-owner app-role DSN. The ingest server refuses to start without it. */
   hasDatabaseUrlApp: boolean;
@@ -118,7 +119,8 @@ export interface ServerConfigView {
 export interface ServerConfigInput {
   serverDir: string;
   ingestUrl: string;
-  adminToken?: string;
+  /** M15 15.9 — replaces `adminToken`. A `k420_…` key minted from the dashboard. */
+  apiKey?: string;
   databaseUrl?: string;
   databaseUrlApp?: string;
   archiveEncryptionKey?: string;

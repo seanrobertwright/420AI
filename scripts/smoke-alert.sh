@@ -1,6 +1,6 @@
 #!/bin/sh
 # M14 pre-sign-off (checklist item 5) — force ONE real alert firing to test SMTP/webhook delivery.
-# Usage:  INGEST_URL=http://localhost:8420 ADMIN_TOKEN=<token> sh scripts/smoke-alert.sh
+# Usage:  INGEST_URL=http://localhost:8420 API_KEY=<k420_...> sh scripts/smoke-alert.sh
 #
 # HOW IT WORKS: lands >=3 invalid-bearer requests against a bodyless machine-authed route
 # (GET /v1/connector-catalog/active) within the 15-min window, each recording an
@@ -15,7 +15,7 @@
 set -eu
 
 INGEST_URL="${INGEST_URL:-http://localhost:8420}"
-: "${ADMIN_TOKEN:?set ADMIN_TOKEN (needed for the GET /v1/monitor reconcile poll)}"
+: "${API_KEY:?set API_KEY (needed for the GET /v1/monitor reconcile poll; ADMIN_TOKEN was retired in M15 15.9 — mint a key under Settings → API keys)}"
 ATTEMPTS="${ATTEMPTS:-4}"   # >=3 to cross the threshold; one extra for margin
 
 echo "== forcing ingest.auth_failure firing =="
@@ -35,7 +35,7 @@ sleep 2
 
 echo "== triggering evaluate-on-read reconcile (GET /v1/monitor) =="
 mcode="$(curl -s -o /dev/null -w '%{http_code}' \
-  -H "authorization: Bearer $ADMIN_TOKEN" "$INGEST_URL/v1/monitor" || echo 000)"
+  -H "authorization: Bearer $API_KEY" "$INGEST_URL/v1/monitor" || echo 000)"
 echo "  GET /v1/monitor → HTTP $mcode (expect 200)"
 
 cat <<'EOF'

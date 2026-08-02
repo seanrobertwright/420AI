@@ -65,3 +65,44 @@ export async function findPrincipalByEmail(
     .limit(1);
   return row;
 }
+
+/**
+ * M15 15.9 — the same resolution keyed by `users.id` instead of an email, for the credential tier
+ * that already knows the user id: an API key's `api_keys.user_id` (D-M15-7).
+ *
+ * A SEPARATE FUNCTION rather than a `users` join bolted onto `findLiveApiKey`, deliberately.
+ * `findLiveApiKey` is the hot pre-context auth read; widening it to carry an email would make every
+ * key lookup pay for a join whose only purpose is to feed the query below, which then joins `users`
+ * again anyway.
+ *
+ * THE `ORDER BY` MUST STAY BYTE-IDENTICAL TO `findPrincipalByEmail` ABOVE, and to
+ * `findOrgIdByUserId`. A user may hold two memberships by design (15.10 needs it); if these
+ * resolvers tie-broke differently, the SAME user would land in a different org depending on whether
+ * they arrived by session or by API key. That is a tenancy bug with no type-level signal — the only
+ * thing keeping the two in agreement is this ordering, so change neither without the other.
+ *
+ * No `normalizeEmail` here, and its absence is not an omission: the sibling normalizes because a
+ * session token's `sub` is whatever string the login body carried. A uuid foreign key has no such
+ * ambiguity.
+ *
+ * Same silent-library contract: `undefined` when the user has no membership (an ownerless identity
+ * fails CLOSED via the `innerJoin`), never a throw.
+ */
+export async function findPrincipalByUserId(
+  db: DbClient,
+  userId: string,
+): Promise<Principal | undefined> {
+  const [row] = await db
+    .select({
+      userId: users.id,
+      email: users.email,
+      orgId: memberships.orgId,
+      role: memberships.role,
+    })
+    .from(users)
+    .innerJoin(memberships, eq(memberships.userId, users.id))
+    .where(eq(users.id, userId))
+    .orderBy(asc(memberships.createdAt), asc(memberships.id))
+    .limit(1);
+  return row;
+}

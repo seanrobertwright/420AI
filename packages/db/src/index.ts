@@ -16,6 +16,8 @@ export {
   // M15 15.8: TOTP credentials + recovery codes (D-M15-5). Identity-owned — no org_id, no RLS.
   totpCredentials,
   mfaRecoveryCodes,
+  // M15 15.9: a named, hashed, revocable API key (D-M15-7). Identity-owned — no org_id, no RLS.
+  apiKeys,
   ingestTokens,
   rawSourceRecords,
   events,
@@ -39,7 +41,7 @@ export { withOrg, APP_ROLE_NAME, ORG_SETTING, ROLE_SETTING } from "./org-context
 export { provisionAppRole } from "./provision-app-role.js";
 export { encryptField, decryptField, activeKeyId } from "./crypto.js";
 export type { EncryptedField } from "./crypto.js";
-export { generateToken, hashToken } from "./tokens.js";
+export { API_KEY_PREFIX, generateToken, hashToken } from "./tokens.js";
 export { runMigrations } from "./migrate.js";
 export { createPairingCode, redeemPairingCode, PairingError } from "./repositories/pairing.js";
 export {
@@ -57,7 +59,9 @@ export {
   // M15 15.5: the invite preview names the org an invitee is about to join.
   getOrgName,
 } from "./repositories/organizations.js";
-export { findPrincipalByEmail } from "./repositories/principal.js";
+// M15 15.9: `findPrincipalByUserId` is the same resolution keyed by user id, for the API-key tier
+// which already holds one. Its ORDER BY is byte-identical to the email variant on purpose.
+export { findPrincipalByEmail, findPrincipalByUserId } from "./repositories/principal.js";
 export type { Principal } from "./repositories/principal.js";
 export { machineStatuses, activeSessions, recentBacklogSamples } from "./repositories/monitor.js";
 export {
@@ -119,6 +123,25 @@ export {
   revokeSession,
 } from "./repositories/sessions.js";
 export type { SessionRow } from "./repositories/sessions.js";
+// M15 15.9 API keys (D-M15-7) — the third credential tier, and the one that retires ADMIN_TOKEN.
+// An IDENTITY table on the same terms as `sessions`: no org_id, no RLS, so nothing here takes an
+// `orgId` and `userId` is the second parameter wherever scoping is needed.
+export {
+  createApiKey,
+  // The GUARDED mint the route uses: per-user cap (serialised on the owner's `users` row) plus the
+  // partial-unique-index name check. `createApiKey` stays the unguarded primitive for seeding.
+  mintApiKey,
+  countLiveApiKeys,
+  findLiveApiKey,
+  // Liveness WITHOUT touching last_used_at — for the SSE per-tick re-check, which must not become
+  // a per-tick write per connected client (audit B.4).
+  isApiKeyLive,
+  listApiKeys,
+  revokeAllApiKeys,
+  revokeApiKey,
+  touchApiKeyLastUsed,
+} from "./repositories/api-keys.js";
+export type { ApiKeyRow, MintRefusal } from "./repositories/api-keys.js";
 // M15 15.7 SSO identities. Identity-owned — no org_id, no RLS (D-15.7-3), scoped by userId only.
 export {
   findUserIdBySsoIdentity,

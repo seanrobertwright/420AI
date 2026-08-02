@@ -1,15 +1,22 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import type { FastifyInstance } from "fastify";
-import { createDb, ensureUserByEmail } from "@420ai/db";
+import { createDb } from "@420ai/db";
 import { buildApp } from "./app.js";
 import {
   AnalysisProviderError,
   type AnalysisProvider,
   type AnalysisRequest,
 } from "./analysis/provider.js";
+import { seedBootstrapKey } from "./test-support/bootstrap-key.js";
 
 const TEST_URL = process.env.DATABASE_URL_TEST;
-const ADMIN = "test-admin";
+/**
+ * M15 15.9 (D-M15-7) — the admin bearer is now a real API KEY, minted per test in `beforeEach`.
+ * `let`, not `const`: `api_keys` carries an FK to `users`, so this suite's TRUNCATE deletes the key
+ * with its owner and it must be re-minted after every reset. It replaces the shared `ADMIN_TOKEN`
+ * string that used to be passed to `buildApp`, which authenticates nothing as of 15.9.
+ */
+let ADMIN: string;
 
 // Minimal stub provider — these tests never trigger an interpretation, but buildApp requires one.
 const stubProvider: AnalysisProvider = {
@@ -27,14 +34,13 @@ describe.skipIf(!TEST_URL)("observability + rate limiting (HTTP e2e via inject)"
 
   beforeAll(async () => {
     dbh = createDb(TEST_URL!);
-    // M15 15.2: the ADMIN_TOKEN service token now resolves to the BOOTSTRAP ADMIN
-    // PRINCIPAL, so `adminEmail`'s user + org must exist or every admin route 401s.
-    // server.ts seeds this on boot; this suite builds the app directly. Idempotent —
-    // and this suite has no TRUNCATE, so a one-time seed in beforeAll is enough.
-    await ensureUserByEmail(dbh.db, "seanrobertwright@gmail.com");
+    // M15 15.9 (D-M15-7): the admin bearer is a real API KEY. `seedBootstrapKey` also runs
+    // `ensureUserByEmail` (hence `ensurePersonalOrg`), so `adminEmail`'s user + org exist and the
+    // key resolves to an `owner` principal. This suite has no TRUNCATE, so unlike its siblings a
+    // one-time mint in `beforeAll` survives the whole file.
+    ADMIN = await seedBootstrapKey(dbh.db, "seanrobertwright@gmail.com");
     app = buildApp({
       db: dbh.db,
-      adminToken: ADMIN,
       // M15 15.4: reconcile on EVERY tick, i.e. exactly pre-15.4 behaviour — tests that assert
       // a firing appears on the first GET must not race the 30 s production throttle.
       reconcileThrottleMs: 0,
@@ -109,5 +115,36 @@ describe.skipIf(!TEST_URL)("observability + rate limiting (HTTP e2e via inject)"
     expect(r1.statusCode).toBe(401);
     expect(r2.statusCode).toBe(401);
     expect(r3.statusCode).toBe(429);
+  });
+
+  /**
+   * M15 15.9 (PR-review finding T2) — POST /v1/auth/api-keys carries the SAME limit, and until this
+   * test nothing covered it.
+   *
+   * This is the only suite that passes `rateLimit` to `buildApp`; every other one leaves
+   * `rateLimitLogin === false`, so `config: { rateLimit: app.rateLimitLogin }` could be deleted from
+   * the mint route and the entire suite would stay green while the vector its comment describes
+   * reopened — an attacker holding a stolen session grinding the password at one scrypt per request.
+   *
+   * Driven UNAUTHENTICATED on purpose: the limiter runs ahead of the handler, so it fires without
+   * needing a session, which keeps the test independent of the login limit it shares a window with.
+   * A valid body is sent because Fastify validates the body BEFORE the handler — an empty payload
+   * would 400 and prove nothing.
+   */
+  it("rate-limits POST /v1/auth/api-keys past its limit (429 on the 3rd call)", async () => {
+    const mint = () =>
+      app.inject({
+        method: "POST",
+        url: "/v1/auth/api-keys",
+        headers: { "content-type": "application/json" },
+        payload: { name: "grind", currentPassword: "wrong" },
+      });
+    const r1 = await mint();
+    const r2 = await mint();
+    const r3 = await mint();
+    // No bearer ⇒ 401 from the gate on the first two; the third never reaches the handler.
+    expect(r1.statusCode).toBe(401);
+    expect(r2.statusCode).toBe(401);
+    expect(r3.statusCode, "the mint route MUST carry the login rate limit").toBe(429);
   });
 });

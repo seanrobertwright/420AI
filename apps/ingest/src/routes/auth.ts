@@ -14,6 +14,7 @@ import {
   getOrgName,
   listSessions,
   normalizeEmail,
+  revokeAllApiKeys,
   revokeAllSessions,
   revokeSession,
   updatePasswordHash,
@@ -473,6 +474,22 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
         // live is exactly the half-state the atomicity note above warns about, and it is the more
         // dangerous half — the victim believes they have locked the attacker out.
         await revokeAllSessions(tx, userId);
+        // M15 15.9 (D-15.9-9, AMENDED by the 15.9 PR review) — AND EVERY API KEY.
+        //
+        // D-15.9-9 says a PASSWORD CHANGE must not revoke keys, and that stays true: a routine
+        // rotation breaking the desktop app and every cron is worse than the threat. A RESET is a
+        // different event with the opposite default. The recovery story this route's comment above
+        // names — "somebody took over my account" — is precisely the case where the attacker had
+        // the password long enough to mint a `k420_` key, and a key is not derived from the
+        // password, never expires by default, and survives every session revoke. Leaving it live
+        // hands the attacker a persistence primitive that OUTLIVES the remediation, which is the
+        // exact threat `reauth.ts` gates minting against in the first place.
+        //
+        // So the asymmetry is now change-vs-RESET, not sessions-vs-keys, and it is deliberate on
+        // both sides. Same transaction, for the reason stated above: a password written while a
+        // minted key stays live is the more dangerous half-state, because the victim believes they
+        // have locked the attacker out.
+        await revokeAllApiKeys(tx, userId);
       });
       return reply.code(204).send();
     },
@@ -539,9 +556,11 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
    * GET /v1/auth/sessions — the caller's LIVE sessions, newest first, with their own flagged
    * `current: true` so a UI can say "this device".
    *
-   * An `ADMIN_TOKEN` caller has no session, so `currentSid` is null and nothing is flagged. The
-   * list itself is still whatever `sessions` holds for the bootstrap admin USER — which is empty
-   * unless that human has also logged in through `/v1/auth/login`.
+   * An API-KEY caller has no session (D-15.9-5), so `currentSid` is null and nothing is flagged.
+   * The list itself is still whatever `sessions` holds for the key OWNER — which is empty unless
+   * that human has also logged in through `/v1/auth/login`. Keys are listed by
+   * `GET /v1/auth/api-keys`, deliberately a separate surface: a session and a key are revoked for
+   * different reasons and on different timescales.
    */
   app.get("/v1/auth/sessions", async (request, reply) => {
     const principal = await resolvePrincipal(app, request);
@@ -599,9 +618,10 @@ export default async function authRoutes(app: FastifyInstance): Promise<void> {
    * identifier must be invalidated ON THE SERVER, not merely dropped by the client). Until 15.6 the
    * dashboard deleted its cookie and the token stayed valid for the rest of its seven days.
    *
-   * 204 even for an `ADMIN_TOKEN` caller, which has no session to revoke: logout is idempotent, and
-   * the desktop app still presents `ADMIN_TOKEN` until D-M15-7 retires it in 15.9. Erroring there
-   * would break a client for successfully being in the state it asked for.
+   * 204 even for an API-KEY caller, which has no session to revoke: logout is idempotent, and
+   * erroring there would break a client for successfully being in the state it asked for. Note it
+   * does NOT revoke the key — logging out of a browser must not disable a machine credential; that
+   * is `DELETE /v1/auth/api-keys/:id`.
    */
   app.post("/v1/auth/logout", async (request, reply) => {
     const principal = await resolvePrincipal(app, request);

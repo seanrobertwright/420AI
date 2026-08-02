@@ -13,10 +13,20 @@ import {
   type AnalysisRequest,
 } from "./analysis/provider.js";
 import { SsoProviderError, type SsoProfile, type SsoProvider } from "./sso/provider.js";
+import { seedBootstrapKey } from "./test-support/bootstrap-key.js";
 
 const TEST_URL = process.env.DATABASE_URL_TEST;
 const APP_URL = process.env.DATABASE_URL_TEST_APP;
-const SERVICE_TOKEN = "svc-token";
+/**
+ * M15 15.9 (D-M15-7) — the MACHINE-tier bearer is now a real API KEY, minted per test in the
+ * fixture below. `let`, not `const`: `api_keys` carries an FK to `users`, so this suite's TRUNCATE
+ * deletes the key with its owner and it must be re-minted after every reset.
+ *
+ * The NAME is kept so the tests that assert "the machine tier still works here" keep reading as
+ * tests of that tier. What changed is the credential behind it: `ADMIN_TOKEN` was one shared,
+ * un-attributable, un-revocable string; this is a per-user key, capped at its owner's rung.
+ */
+let SERVICE_TOKEN: string;
 const ADMIN_EMAIL = "bootstrap@test.local";
 const SESSION_SECRET = "test-secret";
 const PASSWORD = "correct-horse-battery";
@@ -95,7 +105,6 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.8 MFA (two-role, HTTP)", () => {
     google = stubSso();
     app = buildApp({
       db: appRole.db,
-      adminToken: SERVICE_TOKEN,
       adminEmail: ADMIN_EMAIL,
       sessionSecret: SESSION_SECRET,
       analysisProvider: stubAnalysis,
@@ -127,6 +136,9 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.8 MFA (two-role, HTTP)", () => {
       sql`TRUNCATE invites, password_reset_tokens, project_grants, search_documents, session_git_links, git_commit_files, git_commits, alert_firings, machine_heartbeats, report_artifacts, workspace_keys, workspaces, projects, raw_source_records, events, ingest_tokens, pairing_codes, machines, memberships, organizations, users RESTART IDENTITY CASCADE`,
     );
     await setUserPassword(owner.db, ADMIN_EMAIL, hashPassword(PASSWORD));
+    // M15 15.9 — mint the machine-tier bearer AFTER the truncate + identity seed, because
+    // `api_keys` cascades away with `users`.
+    SERVICE_TOKEN = await seedBootstrapKey(owner.db, ADMIN_EMAIL);
     userA = await setUserPassword(owner.db, "a@example.com", hashPassword(PASSWORD));
     userB = await setUserPassword(owner.db, "b@example.com", hashPassword(PASSWORD));
     await ensurePersonalOrg(owner.db, userA, "a@example.com");
@@ -804,7 +816,7 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.8 MFA (two-role, HTTP)", () => {
     expect(short.statusCode).toBe(400);
   });
 
-  it("an ADMIN_TOKEN caller reads the bootstrap admin's status and is never MFA-gated (D-15.8-15)", async () => {
+  it("an API-KEY caller reads its owner's status and is never MFA-gated (D-15.9-5)", async () => {
     const res = await status(SERVICE_TOKEN);
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ enabled: false });

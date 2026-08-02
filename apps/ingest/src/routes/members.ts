@@ -9,6 +9,7 @@ import {
   listMembers,
   normalizeEmail,
   removeMember,
+  revokeAllApiKeys,
   revokeAllSessions,
   revokeInvite,
   setMemberRole,
@@ -330,9 +331,27 @@ export default async function memberRoutes(app: FastifyInstance): Promise<void> 
       //   standing in B. At that point this needs either a per-org session model or a revoke scoped
       //   to sessions whose resolved org is this one.
       //
-      // `sessions` carries no policy, so running inside `withOrg` neither helps nor hinders it —
-      // the transaction is here for the ATOMICITY.
-      if (removed) await revokeAllSessions(tx, request.params.userId);
+      // M15 15.9 (D-15.9-9) — AND THEIR API KEYS, in the same transaction, for the same reason and
+      // more so. The argument above ("remove an employee, sign them out") is STRICTLY STRONGER for
+      // a key: a session expires on its own within seven days, whereas a key defaults to never
+      // expiring, so leaving one live is a permanent credential held by a former colleague.
+      //
+      // Both revokes carry the SAME 15.10 revisit note, and it applies to keys verbatim: today
+      // "removed from the org" and "no longer has a login" coincide, so a global revoke is the only
+      // thing that can be meant; under multi-org users it inverts, and an admin of org A would be
+      // killing a key its owner legitimately uses against org B.
+      //
+      // Note what this is NOT paired with: a PASSWORD CHANGE deliberately does not revoke keys. A
+      // key is not derived from the password, and revoking on a routine rotation would silently
+      // break the desktop app and every scheduled script — a worse outcome than the threat it
+      // addresses. The two halves of D-15.9-9 are a deliberate asymmetry, not an oversight.
+      //
+      // `sessions` and `api_keys` carry no policy, so running inside `withOrg` neither helps nor
+      // hinders either — the transaction is here for the ATOMICITY.
+      if (removed) {
+        await revokeAllSessions(tx, request.params.userId);
+        await revokeAllApiKeys(tx, request.params.userId);
+      }
       return removed;
     });
     if (outcome === "outranked") {

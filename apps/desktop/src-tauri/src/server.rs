@@ -46,7 +46,9 @@ pub struct ServerState {
 pub struct ServerConfigView {
     pub server_dir: String,
     pub ingest_url: String,
-    pub has_admin_token: bool,
+    /// M15 15.9 — replaces `has_admin_token`. The webview only ever learns PRESENCE, never the
+    /// value (the token-isolation invariant); a `k420_…` key is as secret as the token it replaced.
+    pub has_api_key: bool,
     pub has_database_url: bool,
     pub has_database_url_app: bool,
     pub has_archive_encryption_key: bool,
@@ -65,8 +67,9 @@ pub struct ServerConfigView {
 pub struct ServerConfigInput {
     pub server_dir: String,
     pub ingest_url: String,
+    /// M15 15.9 — replaces `admin_token`. Blank/absent still means "leave unchanged".
     #[serde(default)]
-    pub admin_token: Option<String>,
+    pub api_key: Option<String>,
     #[serde(default)]
     pub database_url: Option<String>,
     #[serde(default)]
@@ -135,13 +138,20 @@ fn parse_archive_health(ps_json_lines: &str) -> String {
     "stopped".into()
 }
 
-/// Build the env the supervised ingest needs. The required QUARTET MUST be present
+/// Build the env the supervised ingest needs. The required TRIO MUST be present
 /// (`set_server_config` + the keychain guarantee it once configured). Optionals are
 /// added only when set. NEVER log the result — it carries the live secrets.
 ///
 /// M15 15.3 made this a quartet: the ingest server hard-fails without `DATABASE_URL_APP`
 /// (D-15.3-2), so catching it here turns "the child process exits immediately with a throw"
 /// into a clear message in Settings before anything is spawned.
+///
+/// M15 15.9 (D-M15-7) made it a TRIO again: `ADMIN_TOKEN` is neither required nor injected, because
+/// the server no longer reads it — `server.ts`'s throw is gone along with the auth branch. Note the
+/// direction of the change: the API key that replaced it is a credential this app PRESENTS to the
+/// server, not one the server consumes, so it belongs in the proxy's bearer and NOT in this env.
+/// Injecting it here would have handed the spawned process a copy of a credential it has no use
+/// for.
 fn ingest_env(cfg: &ServerConfig) -> Result<Vec<(String, String)>, String> {
     if cfg.database_url.trim().is_empty() {
         return Err("DATABASE_URL not configured".into());
@@ -152,9 +162,6 @@ fn ingest_env(cfg: &ServerConfig) -> Result<Vec<(String, String)>, String> {
                 .into(),
         );
     }
-    if cfg.admin_token.trim().is_empty() {
-        return Err("ADMIN_TOKEN not configured".into());
-    }
     if cfg.archive_encryption_key.trim().is_empty() {
         return Err("ARCHIVE_ENCRYPTION_KEY not configured".into());
     }
@@ -164,7 +171,6 @@ fn ingest_env(cfg: &ServerConfig) -> Result<Vec<(String, String)>, String> {
             "DATABASE_URL_APP".to_string(),
             cfg.database_url_app.clone(),
         ),
-        ("ADMIN_TOKEN".to_string(), cfg.admin_token.clone()),
         (
             "ARCHIVE_ENCRYPTION_KEY".to_string(),
             cfg.archive_encryption_key.clone(),
@@ -189,7 +195,7 @@ fn ingest_env(cfg: &ServerConfig) -> Result<Vec<(String, String)>, String> {
 fn to_view(c: ServerConfig) -> ServerConfigView {
     let present = |s: &str| !s.trim().is_empty();
     ServerConfigView {
-        has_admin_token: present(&c.admin_token),
+        has_api_key: present(&c.api_key),
         has_database_url: present(&c.database_url),
         has_database_url_app: present(&c.database_url_app),
         has_archive_encryption_key: present(&c.archive_encryption_key),
@@ -315,7 +321,7 @@ pub fn set_server_config(cfg: ServerConfigInput) -> Result<(), String> {
     let merged = ServerConfig {
         server_dir,
         ingest_url,
-        admin_token: merge_secret(cfg.admin_token, existing.admin_token),
+        api_key: merge_secret(cfg.api_key, existing.api_key),
         database_url: merge_secret(cfg.database_url, existing.database_url),
         database_url_app: merge_secret(cfg.database_url_app, existing.database_url_app),
         archive_encryption_key: merge_secret(
@@ -603,7 +609,7 @@ mod tests {
         ServerConfig {
             server_dir: "C:/repo".to_string(),
             ingest_url: "http://localhost:8420".to_string(),
-            admin_token: "ADMIN_SECRET_VALUE".to_string(),
+            api_key: "API_KEY_SECRET_VALUE".to_string(),
             database_url: "postgres://420ai:420ai@localhost:5433/420ai".to_string(),
             database_url_app: "postgres://420ai_app:APP_SECRET_VALUE@localhost:5433/420ai"
                 .to_string(),
@@ -617,8 +623,8 @@ mod tests {
     }
 
     #[test]
-    fn ingest_env_includes_required_quartet_and_set_optionals() {
-        let env = ingest_env(&sample_config()).expect("required quartet present");
+    fn ingest_env_includes_required_trio_and_set_optionals() {
+        let env = ingest_env(&sample_config()).expect("required trio present");
         let get = |k: &str| env.iter().find(|(key, _)| key == k).map(|(_, v)| v.as_str());
         assert_eq!(get("DATABASE_URL"), Some("postgres://420ai:420ai@localhost:5433/420ai"));
         // M15 15.3: the ingest server hard-fails without this, so it MUST be injected.
@@ -626,7 +632,11 @@ mod tests {
             get("DATABASE_URL_APP"),
             Some("postgres://420ai_app:APP_SECRET_VALUE@localhost:5433/420ai")
         );
-        assert_eq!(get("ADMIN_TOKEN"), Some("ADMIN_SECRET_VALUE"));
+        // M15 15.9 (D-M15-7): ADMIN_TOKEN is NOT injected — the server no longer reads it. Nor is
+        // the API key: that is a credential this app PRESENTS to the server, not one the server
+        // consumes, so handing the child process a copy would be a secret with no reader.
+        assert_eq!(get("ADMIN_TOKEN"), None);
+        assert_eq!(get("API_KEY"), None);
         assert_eq!(get("ARCHIVE_ENCRYPTION_KEY"), Some("ENC_SECRET_VALUE"));
         assert_eq!(get("INGEST_PORT"), Some("8420"));
         assert_eq!(get("ANALYSIS_PROVIDER"), Some("anthropic"));
@@ -646,27 +656,36 @@ mod tests {
             analysis_base_url: None,
             ..sample_config()
         };
-        let env = ingest_env(&cfg).expect("required quartet present");
+        let env = ingest_env(&cfg).expect("required trio present");
         let keys: Vec<&str> = env.iter().map(|(k, _)| k.as_str()).collect();
         // Order matters: this asserts the exact vec the function pushes, in push order.
+        // M15 15.9 dropped ADMIN_TOKEN from this list — the quartet is a trio again.
         assert_eq!(
             keys,
-            vec![
-                "DATABASE_URL",
-                "DATABASE_URL_APP",
-                "ADMIN_TOKEN",
-                "ARCHIVE_ENCRYPTION_KEY"
-            ]
+            vec!["DATABASE_URL", "DATABASE_URL_APP", "ARCHIVE_ENCRYPTION_KEY"]
         );
     }
 
     #[test]
     fn ingest_env_errors_when_a_required_secret_is_missing() {
         let cfg = ServerConfig {
-            admin_token: "".to_string(),
+            archive_encryption_key: "".to_string(),
             ..sample_config()
         };
         assert!(ingest_env(&cfg).is_err());
+    }
+
+    #[test]
+    fn ingest_env_succeeds_without_an_api_key() {
+        // M15 15.9 — the API key is NOT a server env var, so its absence must not block a spawn.
+        // Before this slice the equivalent field was required here, and keeping that requirement
+        // would have made the server unstartable for anyone who had not yet minted a key — a
+        // startup failure caused entirely by a credential the server never reads.
+        let cfg = ServerConfig {
+            api_key: "".to_string(),
+            ..sample_config()
+        };
+        assert!(ingest_env(&cfg).is_ok());
     }
 
     #[test]
@@ -686,14 +705,14 @@ mod tests {
         let cfg = sample_config();
         let view = to_view(cfg);
         // Presence booleans are correct…
-        assert!(view.has_admin_token);
+        assert!(view.has_api_key);
         assert!(view.has_database_url);
         assert!(view.has_database_url_app);
         assert!(view.has_archive_encryption_key);
         assert!(view.has_analysis_api_key);
         // …and NO secret string is reachable, even via a Debug/log path.
         let debug = format!("{view:?}");
-        assert!(!debug.contains("ADMIN_SECRET_VALUE"));
+        assert!(!debug.contains("API_KEY_SECRET_VALUE"));
         assert!(!debug.contains("ENC_SECRET_VALUE"));
         // M15 15.3: the app-role DSN embeds a password — it must never reach the view.
         assert!(!debug.contains("APP_SECRET_VALUE"));
@@ -706,7 +725,7 @@ mod tests {
     #[test]
     fn masked_view_reports_absent_secrets_as_false() {
         let view = to_view(ServerConfig::default());
-        assert!(!view.has_admin_token);
+        assert!(!view.has_api_key);
         assert!(!view.has_database_url);
         assert!(!view.has_database_url_app);
         assert!(!view.has_archive_encryption_key);

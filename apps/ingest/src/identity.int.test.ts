@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { eq, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import {
+  apiKeys,
   createDb,
   ensurePersonalOrg,
   invites,
@@ -22,7 +23,6 @@ import {
 
 const TEST_URL = process.env.DATABASE_URL_TEST;
 const APP_URL = process.env.DATABASE_URL_TEST_APP;
-const SERVICE_TOKEN = "svc-token";
 const ADMIN_EMAIL = "bootstrap@test.local";
 const SESSION_SECRET = "test-secret";
 const PASSWORD = "correct-horse-battery";
@@ -106,7 +106,6 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.5 identity core (two-role, multi-
     appRole = createDb(APP_URL!); // what the SERVER connects as — the point of this suite
     app = buildApp({
       db: appRole.db,
-      adminToken: SERVICE_TOKEN,
       adminEmail: ADMIN_EMAIL,
       sessionSecret: SESSION_SECRET,
       analysisProvider: stubProvider,
@@ -154,15 +153,11 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.5 identity core (two-role, multi-
   }
 
   /** Invite `email` as `role` through the real route, returning the mailed token. */
-  async function inviteAndCollect(
-    adminToken: string,
-    email: string,
-    role: string,
-  ): Promise<string> {
+  async function inviteAndCollect(bearer: string, email: string, role: string): Promise<string> {
     const res = await app.inject({
       method: "POST",
       url: "/v1/members/invite",
-      headers: json(adminToken),
+      headers: json(bearer),
       payload: { email, role },
     });
     expect(res.statusCode, `invite ${email} as ${role}: ${res.body}`).toBe(200);
@@ -662,7 +657,6 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.5 identity core (two-role, multi-
   it("with signup ENABLED the new user owns a BRAND-NEW org, never an existing one", async () => {
     const open = buildApp({
       db: appRole.db,
-      adminToken: SERVICE_TOKEN,
       adminEmail: ADMIN_EMAIL,
       sessionSecret: SESSION_SECRET,
       analysisProvider: stubProvider,
@@ -704,6 +698,65 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.5 identity core (two-role, multi-
     } finally {
       await open.close();
     }
+  });
+
+  /**
+   * M15 15.9 (PR-review finding) — A PASSWORD RESET MUST REVOKE API KEYS.
+   *
+   * D-15.9-9 says a password CHANGE must not (a routine rotation breaking the desktop app and every
+   * cron is worse than the threat). A RESET is the opposite case: this route's own comment names the
+   * threat as "somebody took over my account, let me reset my password", and that is precisely when
+   * the attacker has had the password long enough to mint a `k420_` key. A key is not derived from
+   * the password, never expires by default, and survives every session revoke — so leaving it live
+   * hands the attacker a persistence primitive that OUTLIVES the remediation.
+   *
+   * Asserted on the ROW, not just the 401: without the row check this would pass anyway today,
+   * because a reset also revokes sessions and the key's owner still resolves. The row is the
+   * designed guarantee.
+   */
+  it("a password RESET revokes the user's API keys, not just their sessions", async () => {
+    const session = await login("viewer@example.com");
+    const minted = await app.inject({
+      method: "POST",
+      url: "/v1/auth/api-keys",
+      headers: json(session),
+      payload: { name: "attacker-persistence", currentPassword: PASSWORD },
+    });
+    expect(minted.statusCode, minted.body).toBe(201);
+    const apiKey = (minted.json() as { token: string }).token;
+
+    // POSITIVE FIRST: the key really works before the reset.
+    const before = await app.inject({
+      method: "GET",
+      url: "/v1/auth/me",
+      headers: { authorization: `Bearer ${apiKey}` },
+    });
+    expect(before.statusCode, "the key must work before the reset").toBe(200);
+
+    await app.inject({
+      method: "POST",
+      url: "/v1/auth/password-reset",
+      headers: { "content-type": "application/json" },
+      payload: { email: "viewer@example.com" },
+    });
+    const confirm = await app.inject({
+      method: "POST",
+      url: "/v1/auth/password-reset/confirm",
+      headers: { "content-type": "application/json" },
+      payload: { token: resetToken(sent[sent.length - 1]!), password: NEW_PASSWORD },
+    });
+    expect(confirm.statusCode, confirm.body).toBe(204);
+
+    const after = await app.inject({
+      method: "GET",
+      url: "/v1/auth/me",
+      headers: { authorization: `Bearer ${apiKey}` },
+    });
+    expect(after.statusCode, "a reset must kill the key").toBe(401);
+
+    const rows = await owner.db.select().from(apiKeys).where(eq(apiKeys.userId, userViewer));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.revokedAt, "the ROW must be stamped, not merely orphaned").not.toBe(null);
   });
 
   // 9 ── PASSWORD RESET ROUND TRIP.
@@ -782,7 +835,6 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.5 identity core (two-role, multi-
     // caller would be a complete account-takeover primitive.
     const noMail = buildApp({
       db: appRole.db,
-      adminToken: SERVICE_TOKEN,
       adminEmail: ADMIN_EMAIL,
       sessionSecret: SESSION_SECRET,
       analysisProvider: stubProvider,
@@ -826,7 +878,6 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.5 identity core (two-role, multi-
     // ADMIN-GATED route.
     const broken = buildApp({
       db: appRole.db,
-      adminToken: SERVICE_TOKEN,
       adminEmail: ADMIN_EMAIL,
       sessionSecret: SESSION_SECRET,
       analysisProvider: stubProvider,

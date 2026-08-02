@@ -239,10 +239,11 @@ through the deferral-audit + scope conversation that produced M12/M13/M14. Full 
   [`.agents/plans/m15-multi-user-access-control.md`](./.agents/plans/m15-multi-user-access-control.md)).
   Org-level tenancy (D-M15-1), RLS as a backstop behind primary application scoping (D-M15-3), four
   fixed roles + per-project grants (D-M15-4), all four identity paths + reset + MFA (D-M15-5),
-  `ADMIN_TOKEN` retired to a bootstrap-only seed (D-M15-7). Slices: **15.0** ✅ Truth + RLS spike ·
+  `ADMIN_TOKEN` REMOVED and replaced by per-user API keys (D-M15-7; the first-run bootstrap is
+  `ADMIN_EMAIL`/`ADMIN_PASSWORD`, which it never seeded). Slices: **15.0** ✅ Truth + RLS spike ·
   **15.1** ✅ Tenancy schema · **15.2** ✅ Request principal · **15.3** ✅ RLS enforcement · **15.4** ✅ RBAC ·
   **15.5** ✅ Identity core · **15.6** ✅ Sessions + revocation · **15.7** ✅ SSO (Google + GitHub) ·
-  **15.8** ✅ MFA (TOTP + recovery codes) · **15.9** API keys + retire `ADMIN_TOKEN` ·
+  **15.8** ✅ MFA (TOTP + recovery codes) · **15.9** ✅ API keys + retire `ADMIN_TOKEN` ·
   **15.10** Team surfaces + audit table.
   **15.0 gates 15.3**; 15.5 gates 15.7; 15.6 gates 15.8.
 - **M16 — Cloud-hosted SaaS.** Multi-tenancy, managed archive, quotas/rate limits beyond 12.4,
@@ -663,7 +664,52 @@ enforced`, the sibling of `skipped ≠ passed`. Closes the Spike-6 hole: a cross
         deferred:** QR rendering (D-15.8-14) and any org-level "require MFA" policy (D-15.8-2); there
         is deliberately **no** admin "reset MFA for user X" endpoint, since it needs 15.5's full rank
         ceiling-and-floor plus an audit record — break-glass is direct DB access (D-M15-7)
-  - [ ] **15.9** API keys + retire `ADMIN_TOKEN` · **15.10** Team surfaces + audit table.
+  - [x] **15.9** API keys + retire `ADMIN_TOKEN` — DONE `2026-08-01` (PR #69). The last CREDENTIAL
+        slice, and the one that closes M15's own oldest hole: `ADMIN_TOKEN` violated every property
+        the previous nine slices established — **un-attributable** (every holder resolved to the same
+        bootstrap admin, so 15.10's audit table would have recorded one identity for three clients),
+        **un-revocable** (revoking meant editing env + restarting, for _all_ clients at once),
+        **un-expiring**, and **always `owner`** (so `scripts/generate-reports.mjs`, which only POSTs
+        reports, held the whole deployment). It replaces that with a per-user `api_keys` **identity**
+        table — `user_id`, no `org_id`, no policy (D-15.9-1), joining `NO_RLS_TABLES`; migration
+        `0021`, the fourth in a row whose missing policy block IS the decision — holding a sha256 hash
+        (D-15.9-2, never the plaintext, which is returned exactly once) behind a `k420_` prefix.
+        **The prefix is routed with `startsWith` and never a split on `_`**, and that is a measured
+        design change rather than a style note: base64url's alphabet INCLUDES `_` and `-`, so a token
+        body routinely contains underscores and `split("_")[1]` would mis-handle a random fraction of
+        valid keys — presenting as "API keys are flaky", not as a parsing bug. THREE THINGS ARE THE
+        SLICE. (1) **The effective role is a `min`, not a mint-time cap** (D-15.9-4): the lower of the
+        key's own rung and its owner's CURRENT membership rung, re-derived every request — so
+        demoting someone demotes their keys on the NEXT call rather than whenever somebody remembers
+        the key exists. A cap passes every other test in the suite (the key works, it is capped at
+        issue, it revokes); only the demote-after-mint assertion tells the two designs apart. A
+        stored role outside `ROLES` is REJECTED, not clamped. (2) **The SSE re-check**, which was the
+        slice's sharpest risk: `monitor.ts`'s per-tick skip was justified in prose _entirely_ by
+        `ADMIN_TOKEN` being "un-revocable by construction" — true of that tier and FALSE of a key, so
+        inheriting the comment would have silently re-opened, one tier over, the exact hole 15.6
+        closed. Keys are now probed every tick with `isApiKeyLive`, which deliberately does NOT stamp
+        `last_used_at` (that would be a write per tick per connected client — audit B.4). Mutation-
+        proven: deleting the probe fails that one test and nothing else. (3) **Minting requires
+        re-authentication** (D-15.9-6) — a long-lived credential minted from a stolen cookie outlives
+        the session it came from — via the 15.8 gate **extracted** into `reauth.ts` rather than
+        copied, since two copies of an auth check drift invisibly to `tsc`. Listing and revoking are
+        deliberately ungated: revocation must never be harder than minting. Member removal revokes
+        keys in the same transaction as sessions (D-15.9-9); a password change deliberately does not,
+        a stated asymmetry rather than an oversight. Then Phase C **deleted the tier**: the auth
+        branch, the `buildApp({ adminToken })` option, the `server.ts` throw, and 33 occurrences
+        across 24 test files converted to real minted keys through ONE `seedBootstrapKey` helper —
+        the option is GONE rather than left inert, because an option that authenticates nothing is
+        precisely the false guarantee this repo has been burned by. `grep -rn "adminToken"` over
+        `apps/ingest/src packages/*/src` returns 0, and a test asserts the retired literal now 401s.
+        Two new **two-role** suites (24 HTTP + 17 repository) plus 14 unit tests over the extracted
+        `effectiveApiKeyRole`/`shouldTouchApiKey`; the `expires_at IS NULL` regression was
+        negative-control verified (a bare `gt` fails 8 of 17). Two process notes worth keeping: the
+        plan's `API_KEY || ADMIN_TOKEN` fallback was **deliberately not shipped** — correct for a
+        Phase-B-only landing, but after Phase C it would turn a fixable config error into an opaque
+        401 on an unwatched cron job, so the script names the migration instead; and OneDrive again
+        deleted three tracked files mid-run and left a `-Living-Room` conflict copy,
+        caught by `git status` rather than by any gate.
+  - [ ] **15.10** Team surfaces + audit table.
 
 - [ ] **M16–M19 remain committed scope, unsequenced** (§3, PRD §25). Each still needs its own
       deferral-audit + scope conversation before it is executable.

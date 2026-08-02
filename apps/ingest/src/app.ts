@@ -19,6 +19,7 @@ import healthRoutes from "./routes/health.js";
 import metricsRoutes from "./routes/metrics.js";
 import pairingCodeRoutes from "./routes/pairing-codes.js";
 import memberRoutes from "./routes/members.js";
+import apiKeyRoutes from "./routes/api-keys.js";
 import pairRoutes from "./routes/pair.js";
 import ingestRoutes from "./routes/ingest.js";
 import projectRoutes from "./routes/projects.js";
@@ -50,12 +51,15 @@ const DEFAULT_MONITOR_STREAM_INTERVAL_MS = 3000;
  * threshold for noticing a stale alert. Injectable; `0` reproduces pre-15.4 behaviour exactly.
  */
 const DEFAULT_RECONCILE_THROTTLE_MS = 30_000;
+/** M15 15.9 (D-15.9-7) — one `last_used_at` write per key per minute at most. The column answers
+ * "is this key still in use?" to the minute, which is the granularity a revocation decision needs;
+ * the throttle is what stops a polling client writing on every tick. */
+const DEFAULT_API_KEY_TOUCH_THROTTLE_MS = 60_000;
 
 const DEFAULT_ADMIN_EMAIL = "seanrobertwright@gmail.com";
 
 export interface BuildAppOptions {
   db: Db;
-  adminToken: string;
   /** M12 12.3 single-admin email (defaults to the legacy literal so existing test callers + the
    * legacy-default-seeded users keep resolving the same user; only server.ts passes a real value). */
   adminEmail?: string;
@@ -76,6 +80,10 @@ export interface BuildAppOptions {
    * Tests that assert a firing appears on the first GET inject `0` — every tick reconciles,
    * which is exactly today's behaviour. */
   reconcileThrottleMs?: number;
+  /** M15 15.9 minimum gap between `api_keys.last_used_at` writes per key (default 60 000).
+   * Tests that assert the touch happened at all inject `0` — there is no other way to observe a
+   * throttled fire-and-forget write. */
+  apiKeyTouchThrottleMs?: number;
   logger?: boolean;
   /** M12 12.4b pino level (default "info"); ignored when logger:false. */
   logLevel?: string;
@@ -145,7 +153,6 @@ export function buildApp(opts: BuildAppOptions): FastifyInstance {
   });
 
   app.decorate("db", opts.db);
-  app.decorate("adminToken", opts.adminToken);
   app.decorate("adminEmail", opts.adminEmail ?? DEFAULT_ADMIN_EMAIL);
   // Ephemeral fallback secret (per-process) so test callers that omit it still sign/verify
   // internally; tokens simply don't survive a restart. server.ts always passes a persistent one.
@@ -168,6 +175,15 @@ export function buildApp(opts: BuildAppOptions): FastifyInstance {
   // Per-PROCESS, in-memory, like `metrics` below. Not a cache of results — only of "when did
   // this (org,user) last reconcile", so losing it on restart is free.
   app.decorate("reconcileLastRunAt", new Map<string, number>());
+  // M15 15.9 (D-15.9-7) the API-key `last_used_at` touch throttle. Decorated HERE, before the route
+  // registrations below, for the same reason `rateLimitLogin` is: `resolvePrincipal` reads both of
+  // these on every key-authenticated request, and a decorator added after registration is not
+  // visible to the handlers. Per-PROCESS and in-memory, like `reconcileLastRunAt` above.
+  app.decorate(
+    "apiKeyTouchThrottleMs",
+    opts.apiKeyTouchThrottleMs ?? DEFAULT_API_KEY_TOUCH_THROTTLE_MS,
+  );
+  app.decorate("apiKeyLastTouchedAt", new Map<string, number>());
   // M12 12.6 alert delivery: omitted → null → disabled (no webhook). The monitor route's
   // deliverFirings early-returns when null, so the default no-webhook path adds no query.
   app.decorate("alertDeliverer", opts.alertDeliverer ?? null);
@@ -215,6 +231,7 @@ export function buildApp(opts: BuildAppOptions): FastifyInstance {
   app.register(healthRoutes);
   app.register(pairingCodeRoutes);
   app.register(memberRoutes);
+  app.register(apiKeyRoutes);
   app.register(pairRoutes);
   app.register(ingestRoutes);
   app.register(projectRoutes);

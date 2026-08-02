@@ -25,11 +25,11 @@ import { cn } from "@/lib/utils";
  *  (a) the LOCAL sidecar capture state (pending/inflight), folded from the same
  *      `status` event the StatusBar consumes; and
  *  (b) the SERVER `LiveMonitorSnapshot`, fetched through the Rust `get_monitor_snapshot`
- *      proxy (which holds the admin token — the webview never sees it).
+ *      proxy (which holds the API key — the webview never sees it).
  *
  * The panel renders the snapshot's SERVER-DERIVED `alerts` directly — it does NOT
  * re-run `deriveAlerts` (the ingest route already folded them in; this mirrors the
- * dashboard's AlertsPanel). When the proxy rejects (admin token unset / ingest down),
+ * dashboard's AlertsPanel). When the proxy rejects (API key unset / ingest down),
  * the server section degrades to an error line + a hint and the local section stays live.
  */
 
@@ -140,13 +140,14 @@ export function SyncHealth() {
           <Stat label="inflight" value={local.inflight} />
         </dl>
 
-        {/* Server view — degrades gracefully when the admin token is unset / ingest is down. */}
+        {/* Server view — degrades gracefully when the API key is unset / ingest is down. */}
         {serverError ? (
           <div className="text-sm">
             <p className="text-destructive">{serverError}</p>
             <p className="text-muted-foreground mt-1 text-xs">
-              The server fleet view needs <code>ADMIN_TOKEN</code> — full Settings land in a later
-              slice.
+              The server fleet view needs an API key. There is no management UI yet — mint one with{" "}
+              <code>POST /v1/auth/api-keys</code> over a logged-in session, then paste it into
+              Settings here.
             </p>
           </div>
         ) : snapshot ? (

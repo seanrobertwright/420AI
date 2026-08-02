@@ -12,6 +12,11 @@ packages/db/drizzle
 
 # Rust / Tauri target
 apps/desktop/src-tauri/target
+# Tauri-GENERATED ACL/capability schemas. Written by `cargo build`/`cargo test`, gitignored
+# (apps/desktop/.gitignore), and owned by tauri-build — so they exist only on a machine that has
+# built the desktop crate. CI never sees them, but without this entry a LOCAL `format:check` fails
+# on files nobody authored and nobody may hand-edit.
+apps/desktop/src-tauri/gen
 
 # Lockfiles + data
 package-lock.json

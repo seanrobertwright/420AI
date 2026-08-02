@@ -5,7 +5,7 @@ import { openaiInterpret } from "./openai.js";
  * The Analysis Provider abstraction (PRD §16.2, CONTEXT "Analysis Provider" /
  * "OpenAI-Compatible Analysis Provider"). An INJECTED, configurable provider that
  * takes a redacted prompt and returns Markdown findings. Injected via
- * `BuildAppOptions` (the proven `buildApp` db/adminToken pattern, D6) so ALL
+ * `BuildAppOptions` (the proven `buildApp` dependency-injection pattern, D6) so ALL
  * automated tests use a deterministic stub — the live `fetch` runs only in
  * `server.ts` and manual validation.
  *

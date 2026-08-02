@@ -136,6 +136,22 @@ describe.skipIf(!TEST_URL)("migration rollback (rollbackLast, integration)", () 
     return r.rowCount === 1;
   }
 
+  /** Does 0022's per-user live-name unique index exist? Its down drops it; 0021 is untouched. */
+  async function apiKeyNameIndexExists(): Promise<boolean> {
+    const r = await pool.query(
+      "select 1 from pg_indexes where schemaname = 'public' and indexname = 'api_keys_user_live_name'",
+    );
+    return r.rowCount === 1;
+  }
+
+  /** Does the M15 15.9 `api_keys` table exist? 0021 creates it; its down drops it. */
+  async function apiKeysTableExists(): Promise<boolean> {
+    const r = await pool.query(
+      "select 1 from information_schema.tables where table_name = 'api_keys'",
+    );
+    return r.rowCount === 1;
+  }
+
   /** How many of the M15 15.8 MFA tables exist? 0020 creates both; its down drops both. */
   async function mfaTablesExist(): Promise<number> {
     const r = await pool.query<{ n: number }>(
@@ -145,21 +161,28 @@ describe.skipIf(!TEST_URL)("migration rollback (rollbackLast, integration)", () 
     return Number(r.rows[0]!.n);
   }
 
-  it("rolls back the latest migration (0020 MFA tables) and a re-migrate restores it", async () => {
-    // M15 15.8 D-M15-13 drill, run in CI rather than by hand. `rollbackLast` reverses THE LATEST
+  it("rolls back the latest migration (0022 api-key name index) and a re-migrate restores it", async () => {
+    // M15 D-M15-13 drill, run in CI rather than by hand. `rollbackLast` reverses THE LATEST
     // migration, so this test retargets with every slice that adds one — 15.5's version named 0017,
-    // 15.6's named 0018 and 15.7's named 0019. The assertions those made survive here as
-    // UNTOUCHED-BY-0020 invariants below, which is the whole value of retargeting rather than
-    // rewriting: the drill gets stricter with every slice instead of just moving.
+    // 15.6's named 0018, 15.7's named 0019 and 15.8's named 0020. The assertions those made survive
+    // here as UNTOUCHED-BY-0021 invariants below, which is the whole value of retargeting rather
+    // than rewriting: the drill gets stricter with every slice instead of just moving.
     //
-    // The load-bearing assertion for 15.8 is once again the POLICY COUNT NOT MOVING. 0020 is the
-    // THIRD migration in a row that adds tables and NO policy (D-15.8-13: `totp_credentials` and
-    // `mfa_recovery_codes` are identity tables), so "59 before, 59 after the rollback, 59 after the
-    // re-migrate" is what pins that absence as a decision. If a future reader adds a policy to
-    // either table, this drill fails before `rls.int.test.ts` even runs.
-    expect(await trackedCount()).toBe(21);
+    // The load-bearing assertion for 15.9 is once again the POLICY COUNT NOT MOVING. 0021/0022 are
+    // the fourth and fifth migrations in a row that touch `api_keys` and add NO policy (D-15.9-1:
+    // it is an identity table, read inside `resolvePrincipal` before any org context exists), so
+    // "59 before, 59 after the rollback, 59 after the re-migrate" is what pins that absence as a
+    // decision. If a future reader adds a policy to it, this drill fails before `rls.int.test.ts`
+    // even runs — and the production symptom that policy would cause is every API key silently
+    // 401ing.
+    //
+    // 0022 is INDEX-ONLY, so unlike 0021 its rollback is lossless: `api_keys` and every row in it
+    // survive. That asymmetry is asserted below rather than assumed.
+    expect(await trackedCount()).toBe(23);
     expect(await policyCount()).toBe(59); // 15 org + project_grants org + invites org + 42 restrictive
     expect(await restrictivePolicyCount()).toBe(42); // 39 from 0016 + 3 for `invites`
+    expect(await apiKeysTableExists()).toBe(true);
+    expect(await apiKeyNameIndexExists()).toBe(true);
     expect(await mfaTablesExist()).toBe(2);
     expect(await ssoIdentitiesTableExists()).toBe(true);
     expect(await sessionsTableExists()).toBe(true);
@@ -170,16 +193,18 @@ describe.skipIf(!TEST_URL)("migration rollback (rollbackLast, integration)", () 
     expect(await mixedCaseEmailCount()).toBe(0);
 
     const result = await rollbackLast(TEST_URL!, { downDir, journalPath });
-    expect(result).toEqual({ rolledBack: "0020_talented_dark_phoenix" });
-    expect(await trackedCount()).toBe(20);
-    // Both MFA tables are gone — and NOTHING ELSE moved. 0020's down names exactly two objects.
-    // Note what this rollback COSTS, which the down SQL states plainly: every enrolled account is
-    // silently downgraded to a single factor, and rolling forward does not restore the secrets.
-    expect(await mfaTablesExist()).toBe(0);
+    expect(result).toEqual({ rolledBack: "0022_curved_mandroid" });
+    expect(await trackedCount()).toBe(22);
+    // ONLY the index is gone. 0022's down names exactly one object, and unlike 0021's it is
+    // LOSSLESS: the table and every key in it survive, no credential stops working, and the only
+    // consequence is that a user may again hold two live keys with the same name.
+    expect(await apiKeyNameIndexExists()).toBe(false);
+    expect(await apiKeysTableExists()).toBe(true);
     expect(await policyCount()).toBe(59);
     expect(await restrictivePolicyCount()).toBe(42);
-    // 15.7's identities, 15.6's sessions, 15.5's identity core, 15.4's table and 15.3's flags are
-    // all untouched.
+    // 15.8's MFA tables, 15.7's identities, 15.6's sessions, 15.5's identity core, 15.4's table and
+    // 15.3's flags are all untouched.
+    expect(await mfaTablesExist()).toBe(2);
     expect(await ssoIdentitiesTableExists()).toBe(true);
     expect(await sessionsTableExists()).toBe(true);
     expect(await identityTablesExist()).toBe(2);
@@ -192,9 +217,11 @@ describe.skipIf(!TEST_URL)("migration rollback (rollbackLast, integration)", () 
     // Emails stay lowercased across the rollback (0017's down deliberately does not undo it).
     expect(await mixedCaseEmailCount()).toBe(0);
 
-    // Re-apply: an idempotent re-migrate brings 0020 back + restores the tracking row.
+    // Re-apply: an idempotent re-migrate brings 0022 back + restores the tracking row.
     await runMigrations(TEST_URL!);
-    expect(await trackedCount()).toBe(21);
+    expect(await trackedCount()).toBe(23);
+    expect(await apiKeyNameIndexExists()).toBe(true);
+    expect(await apiKeysTableExists()).toBe(true);
     expect(await mfaTablesExist()).toBe(2);
     expect(await ssoIdentitiesTableExists()).toBe(true);
     expect(await sessionsTableExists()).toBe(true);

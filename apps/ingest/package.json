@@ -18,7 +18,7 @@
     "hyparquet": "^1.26.1"
   },
   "scripts": {
-    "build": "tsc -b",
+    "build": "tsc -b && node -e \"require('node:fs').rmSync('dist/test-support',{recursive:true,force:true})\"",
     "dev": "tsx watch src/server.ts",
     "start": "node dist/server.js"
   }

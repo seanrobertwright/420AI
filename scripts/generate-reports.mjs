@@ -8,11 +8,17 @@
  * There is NO in-server scheduler (docs/guide/operations.md is explicit — the server owns no
  * background dispatch). This is the script the OS scheduler runs: it walks every project
  * (`GET /v1/projects`) and POSTs one report of each requested type (`POST /v1/projects/:id/reports`)
- * using ADMIN_TOKEN — the retained machine/service credential (12.3), which is exactly the
+ * using an API KEY — the machine/service credential as of M15 15.9 (D-M15-7), which is exactly the
  * machine-to-machine path it exists for. Generation is NON-idempotent by design: each run appends
  * a new versioned artifact, so history is preserved.
  *
- * Reads INGEST_URL + ADMIN_TOKEN from the environment. Every request is timeout-bounded
+ * M15 15.9 RETIRED `ADMIN_TOKEN` (D-M15-7). It was shared, un-attributable, un-revocable and
+ * always `owner` — so this script, which only needs to POST reports, held full ownership of the
+ * deployment. Mint a key instead (`POST /v1/auth/api-keys`, or Settings → API keys) at the LOWEST
+ * rung that works, put it in `API_KEY`, and revoke it on its own if the cron host is ever
+ * compromised. A key minted at `member` is enough for this script.
+ *
+ * Reads INGEST_URL + API_KEY from the environment. Every request is timeout-bounded
  * (AbortSignal.timeout, 30 s) so a stalled ingest can never hang the scheduled job. Prints one
  * line per artifact and exits non-zero if ANY call fails (so a cron wrapper can alert).
  *
@@ -93,13 +99,28 @@ async function fetchProjectIds(baseUrl, headers) {
 
 async function main(args, env) {
   const baseUrl = (env.INGEST_URL ?? "").replace(/\/+$/, "");
-  const adminToken = env.ADMIN_TOKEN;
+  // `||`, NEVER `??` (CLAUDE.md, a shipped 15.5 bug). `.env.example` ships keys with EMPTY values,
+  // so `env.API_KEY ?? ...` evaluates to `""` for exactly the operator who pasted the new block and
+  // has not filled it in — which would then fail as an opaque 401 at the first request instead of
+  // as the actionable message below.
+  const apiKey = env.API_KEY || "";
   if (!baseUrl) throw new Error("INGEST_URL is not set");
-  if (!adminToken) throw new Error("ADMIN_TOKEN is not set");
+  if (!apiKey) {
+    // NAME THE MIGRATION rather than falling back to `ADMIN_TOKEN`. A fallback would have been
+    // right during 15.9's Phase B, while both credentials worked; after Phase C the server accepts
+    // no `ADMIN_TOKEN` at all, so falling back to one would turn a fixable configuration problem
+    // into an unexplained 401 on a scheduled job nobody is watching.
+    throw new Error(
+      env.ADMIN_TOKEN
+        ? "API_KEY is not set. ADMIN_TOKEN was RETIRED in M15 15.9 and authenticates nothing — " +
+            "mint an API key (Settings → API keys, or POST /v1/auth/api-keys) and set API_KEY."
+        : "API_KEY is not set",
+    );
+  }
 
   const { types, project } = parseArgs(args);
   const reportTypes = resolveReportTypes(types);
-  const headers = { authorization: `Bearer ${adminToken}`, "content-type": "application/json" };
+  const headers = { authorization: `Bearer ${apiKey}`, "content-type": "application/json" };
 
   const projectIds = project === "all" ? await fetchProjectIds(baseUrl, headers) : [project];
   if (projectIds.length === 0) {

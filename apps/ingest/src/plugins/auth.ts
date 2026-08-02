@@ -9,7 +9,6 @@ import type { AnalysisProvider } from "../analysis/provider.js";
 declare module "fastify" {
   interface FastifyInstance {
     db: Db;
-    adminToken: string;
     /** M12 12.3 single-admin identity (from ADMIN_EMAIL; replaces the hardcoded default email constant). */
     adminEmail: string;
     /** M12 12.3 HMAC key for signing/verifying admin session tokens (POST /v1/auth/login). */
@@ -32,6 +31,17 @@ declare module "fastify" {
      * as the firing rows. In-memory and reset on restart on purpose: a missed window costs one
      * extra reconcile, never a wrong result. Mirrors the `metrics` store's shape. */
     reconcileLastRunAt: Map<string, number>;
+    /** M15 15.9 (D-15.9-7) minimum gap between `api_keys.last_used_at` WRITES per key. Default
+     * 60 000; tests inject 0, which makes every authenticated key request touch the column (the
+     * only way to assert the write happens at all). Without it the desktop app's monitor poll
+     * writes on EVERY tick — the audit-B.4 shape `reconcileThrottleMs` above exists to remove.
+     * `sessions` avoids the problem by having no such column; this tier needs one, so it throttles
+     * instead. */
+    apiKeyTouchThrottleMs: number;
+    /** M15 15.9 per-PROCESS "last touched" clock, keyed by `api_keys.id`. In-memory and reset on
+     * restart on purpose, exactly like `reconcileLastRunAt`: a missed window costs one extra
+     * write, never a wrong result. */
+    apiKeyLastTouchedAt: Map<string, number>;
     /** M12 12.4b in-memory request/error counter store (GET /v1/metrics). */
     metrics: import("../metrics.js").MetricsStore;
     /** M12 12.4c per-route login rate limit ({max,timeWindow}) or false when off. Decorated
@@ -65,8 +75,8 @@ declare module "fastify" {
     /** M15 15.2 — the resolved caller (user + org + role), or null before/without resolution.
      *  Set by resolvePrincipal(); read by handlers that need it after their own gate. */
     principal: import("@420ai/db").Principal | null;
-    /** M15 15.6 — the caller's `sessions` row id, or null for an ADMIN_TOKEN caller (which has
-     *  no session) and before resolution. Set by resolvePrincipal() alongside `principal`.
+    /** M15 15.6 — the caller's `sessions` row id, or null for an API-KEY caller (which has no
+     *  session, D-15.9-5) and before resolution. Set by resolvePrincipal() alongside `principal`.
      *
      *  STASHED RATHER THAN RE-DERIVED. The handlers that need it (logout, revoke-all sparing the
      *  current session, the `current: true` flag, the SSE stream's per-tick re-check) all run
@@ -75,6 +85,15 @@ declare module "fastify" {
      *  second HMAC per request — and, worse, a second place the parsing could drift from this one.
      *  A stashed value cannot drift. */
     sessionId: string | null;
+    /** M15 15.9 — the caller's `api_keys` row id, or null for a session caller (and before
+     *  resolution). Set by resolvePrincipal() alongside `principal`, on the same terms and for the
+     *  same reason as `sessionId`: the SSE stream's per-tick re-check needs it, and re-deriving it
+     *  would mean a second bearer parse and a second hash.
+     *
+     *  EXACTLY ONE of `sessionId` / `apiKeyId` is non-null for an authenticated request — a key
+     *  mints no session (D-15.9-5), and a session is not a key. The monitor stream relies on that:
+     *  it probes whichever one it was given. */
+    apiKeyId: string | null;
   }
 }
 
@@ -93,6 +112,9 @@ export default fp(async function authPlugin(app) {
   app.decorateRequest("principal", null);
   // M15 15.6 — same rule: a primitive default is safe to share, an object literal would not be.
   app.decorateRequest("sessionId", null);
+  // M15 15.9 — same rule again. `null`, never a Map or an object: Fastify shares a reference-type
+  // decorator default across every request, so one request's key id would become every request's.
+  app.decorateRequest("apiKeyId", null);
 
   app.decorate(
     "authenticate",

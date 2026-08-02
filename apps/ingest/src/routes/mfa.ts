@@ -5,7 +5,6 @@ import {
   confirmTotp,
   countUnusedRecoveryCodes,
   findCredentialById,
-  findLiveSessionCreatedAt,
   findTotpCredential,
   generateToken,
   hashToken,
@@ -19,9 +18,9 @@ import {
 import { mfaCodeBodySchema, mfaEnrollBodySchema, mfaVerifyBodySchema } from "../schemas.js";
 import { base32Encode, generateTotpSecret, otpauthUri, verifyTotp } from "../mfa/totp.js";
 import { credentialVersion, verifyChallenge } from "../mfa/challenge.js";
-import { verifyPassword } from "../password.js";
 import { mintSession } from "./auth.js";
 import { authorized, resolvePrincipal } from "../auth.js";
+import { requireRecentAuth } from "../reauth.js";
 
 interface CodeBody {
   code: string;
@@ -54,12 +53,13 @@ export const MFA_LOCK_MS = 15 * 60_000;
 /**
  * D-15.8-16 — how recent the CURRENT session must be for an SSO-only account to arm a second factor.
  *
- * Fifteen minutes: short enough that a stolen cookie is usually already outside it, long enough to
- * cover "I just signed in and went to Settings". It applies ONLY to accounts with no password, since
- * every other account re-proves with the password itself. Exported so the int suite drives the same
- * number the route does.
+ * M15 15.9 MOVED THE DEFINITION to `../reauth.js`, where the gate itself now lives, because a second
+ * route (minting an API key) needs the same check and two copies of an auth check drift. This is a
+ * RE-EXPORT under the original name, kept because `mfa.int.test.ts` imports it by that name and the
+ * suite drives the same number the route does — renaming it in the test would have been a
+ * gratuitous edit to a file this slice otherwise does not touch.
  */
-export const MFA_REAUTH_MAX_SESSION_AGE_MS = 15 * 60_000;
+export { REAUTH_MAX_SESSION_AGE_MS as MFA_REAUTH_MAX_SESSION_AGE_MS } from "../reauth.js";
 
 /** Ten codes, the OWASP MFA cheat-sheet default: enough to survive a lost phone plus mistakes. */
 const RECOVERY_CODE_COUNT = 10;
@@ -174,7 +174,7 @@ export default async function mfaRoutes(app: FastifyInstance): Promise<void> {
    * the wire: an abandoned enrolment must be indistinguishable from no enrolment, or a user who
    * closed the tab would believe they are protected when they are not.
    *
-   * An `ADMIN_TOKEN` caller resolves to the bootstrap admin USER and gets that user's status —
+   * An API-KEY caller resolves to the KEY OWNER's user and gets that user's status —
    * mirroring `GET /v1/auth/sso/identities`. The service token itself is never MFA-gated (D-15.8-15).
    */
   app.get("/v1/auth/mfa", async (request, reply) => {
@@ -238,9 +238,10 @@ export default async function mfaRoutes(app: FastifyInstance): Promise<void> {
    * `enroll/confirm` needs NO gate of its own and that is not an omission: it can only confirm a
    * pending secret, and a pending secret can only exist because this route created one.
    *
-   * An `ADMIN_TOKEN` caller has no session at all, so it falls to the password branch (or is refused
-   * for a password-less bootstrap admin). That does not contradict D-15.8-15 — the service token is
-   * never MFA-GATED at authentication; this is about arming a factor on a human's account.
+   * An API-KEY caller has no session at all, so it falls to the password branch (or is refused for a
+   * password-less account). That does not contradict D-15.9-5 — a key is never MFA-GATED at
+   * authentication; this is about arming a factor on a human's account, which a machine credential
+   * should not be able to do on its own.
    *
    * THE SECRET IS RETURNED IN THE RESPONSE BODY, and that is correct rather than a leak: the shared
    * secret is exactly what the caller must transcribe into their authenticator. It is stored
@@ -265,34 +266,18 @@ export default async function mfaRoutes(app: FastifyInstance): Promise<void> {
       if (!authorized(principal, "viewer")) {
         return reply.code(403).send({ error: "insufficient role" });
       }
-      const cred = await findCredentialById(app.db, principal.userId);
-      if (!cred) {
-        return reply.code(401).send({ error: "admin authorization required" });
-      }
-      if (cred.passwordHash) {
-        // 401, not 403: re-proving the current password is AUTHENTICATION, and a wrong one gets the
-        // same answer login gives (`routes/auth.ts:437`).
-        if (
-          !request.body?.currentPassword ||
-          !verifyPassword(request.body.currentPassword, cred.passwordHash)
-        ) {
-          return reply
-            .code(401)
-            .send({ error: "invalid email or password", reason: "password_required" });
-        }
-      } else {
-        // SSO-only. The session's own age is the only factor available to re-prove.
-        const since = request.sessionId
-          ? await findLiveSessionCreatedAt(app.db, principal.userId, request.sessionId)
-          : undefined;
-        if (!since || Date.now() - since.getTime() > MFA_REAUTH_MAX_SESSION_AGE_MS) {
-          // The message names the remedy, because there is no other way out for this user.
-          return reply.code(401).send({
-            error: "sign in again before enabling two-factor authentication",
-            reason: "reauth_required",
-          });
-        }
-      }
+      // M15 15.9 — the two-branch gate this route introduced (D-15.8-16) now lives in `../reauth.js`
+      // and is SHARED with `POST /v1/auth/api-keys`. Behaviour is unchanged, including both
+      // messages and both `reason` codes; only the location moved. The SSO branch's message is
+      // passed in because it names the remedy, and the remedy is action-specific.
+      const reauth = await requireRecentAuth(
+        app,
+        request,
+        principal.userId,
+        request.body?.currentPassword,
+        "sign in again before enabling two-factor authentication",
+      );
+      if (!reauth.ok) return reply.code(reauth.code).send(reauth.body);
 
       const secret = generateTotpSecret();
       // Throws `MfaError("already_enrolled")` → 409 via app.ts.

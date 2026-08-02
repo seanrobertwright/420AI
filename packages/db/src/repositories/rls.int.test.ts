@@ -158,6 +158,15 @@ const NO_RLS_TABLES = [
   // exactly the assertion 0020's missing policy block needs.
   "totp_credentials",
   "mfa_recovery_codes",
+  // M15 15.9 (D-15.9-1): keyed by `user_id`, no `org_id`. Read INSIDE `resolvePrincipal` — the one
+  // moment before any org context exists, because resolving this row is part of what establishes
+  // it. A strict policy here would read zero rows and EVERY API key would silently 401, which is
+  // the same class of failure as a skipped layer: green, and enforcing nothing. It belongs in THIS
+  // list and in no other — it is not a tenant table, so the "all 17 tenant tables" count below must
+  // stay 17, and because every policy count in this file is DERIVED from these list lengths, adding
+  // an entry moves no expected number. That is exactly the assertion 0021's missing policy block
+  // needs.
+  "api_keys",
   "pricing_catalogs",
   "connector_catalogs",
   "ingest_auth_failures",

@@ -19,15 +19,16 @@ npm run setup
 
 `npm run setup` ([`scripts/setup-env.mjs`](../../scripts/setup-env.mjs)) copies `.env.example` →
 `.env`, generating the three secrets a fresh clone must create itself — `ARCHIVE_ENCRYPTION_KEY`
-(the AES-256-GCM field key), `ADMIN_TOKEN` (the machine/service bearer), and `SESSION_SECRET` (the
-login-cookie HMAC). It also writes `apps/dashboard/.env.local` with the **same** `SESSION_SECRET`
+(the AES-256-GCM field key), `SESSION_SECRET` (the login-cookie HMAC), and `APP_DB_PASSWORD` (the
+M15 15.3 non-owner role's password). It also writes `apps/dashboard/.env.local` with the **same** `SESSION_SECRET`
 (the dashboard verifies the login cookie with it — a mismatch fails every login). It **refuses to
 overwrite an existing `.env`** — delete it first if you truly mean to regenerate (that rotates every
 secret and invalidates live sessions).
 
-To enable the dashboard login now, set `ADMIN_PASSWORD` in `.env` (and `ADMIN_EMAIL` if you don't
-want the default). Left blank, the API still works via `ADMIN_TOKEN` for machine clients and login
-is disabled.
+Set `ADMIN_PASSWORD` in `.env` (and `ADMIN_EMAIL` if you don't want the default). **This is not
+optional as of M15 15.9**: `ADMIN_TOKEN` was retired, so the only credentials left are a login
+session and an API key — and a key can only be minted _from_ a login. Left blank, login is disabled
+and **nothing can authenticate at all**.
 
 ## 2. Start the archive and apply migrations (create the admin user)
 

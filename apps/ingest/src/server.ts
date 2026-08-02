@@ -16,9 +16,7 @@ config({ path: fileURLToPath(new URL("../../../.env", import.meta.url)) });
 // (migrate, rollback, reprice, reparse, rotate-key) and the break-glass path use it. It is
 // NOT what the server connects as.
 const databaseUrl = process.env.DATABASE_URL;
-const adminToken = process.env.ADMIN_TOKEN;
 if (!databaseUrl) throw new Error("DATABASE_URL is not set (copy .env.example to .env)");
-if (!adminToken) throw new Error("ADMIN_TOKEN is not set (copy .env.example to .env)");
 
 // M15 15.3 (D-15.3-2) — HARD-FAIL without the app-role URL. RLS is inert against the owner
 // role (`rolbypassrls`), so booting on DATABASE_URL would leave all 15 policies decorative
@@ -235,18 +233,25 @@ const appBaseUrl = process.env.APP_BASE_URL || "http://localhost:3000";
 const { db } = createDb(appDatabaseUrl);
 
 // M15 15.2: seed the bootstrap admin IDENTITY unconditionally, BEFORE (and independently
-// of) the password seed. `resolvePrincipal` maps the ADMIN_TOKEN service token onto
-// `adminEmail`'s user + org, so that row must exist for the service token to authorize at
-// all — and D-15.2-3 promises the token behaves exactly as it did before this slice.
-// Seeding this only alongside ADMIN_PASSWORD (as the password seed below does) would break
-// every token-only deployment — desktop app, scripts/generate-reports.mjs — with a blanket
-// 401. `ensureUserByEmail` is idempotent and also runs `ensurePersonalOrg`, so an admin
-// without a membership (which would also fail closed) is impossible by construction.
+// of) the password seed.
+//
+// M15 15.9 (D-M15-7) — THIS IS NOW THE WHOLE FIRST-RUN BOOTSTRAP, and it always was the part
+// that mattered. `ADMIN_TOKEN` is retired: it seeded nothing, it only AUTHENTICATED as this
+// user. What makes a fresh deployment reachable is this row plus `ADMIN_PASSWORD` below —
+// log in as `ADMIN_EMAIL`, then mint an API key for each machine client from
+// `POST /v1/auth/api-keys`.
+//
+// It stays unconditional rather than being folded into the password seed: `ensureUserByEmail`
+// is idempotent and also runs `ensurePersonalOrg`, so an admin with no membership (which
+// would fail closed at `resolvePrincipal`) is impossible by construction — and an operator
+// who has not set `ADMIN_PASSWORD` yet must still get a coherent identity to attach one to.
 await ensureUserByEmail(db, adminEmail);
 
 // Seed the single admin's password (scrypt) from env. Idempotent: re-running on every boot
-// re-hashes ADMIN_PASSWORD, so rotating it + restart re-seeds. If unset, login is disabled
-// (admin has no hash → 401 for everyone) but the rest of the API still works via the service token.
+// re-hashes ADMIN_PASSWORD, so rotating it + restart re-seeds. If unset, login is disabled and
+// M15 15.9 makes that total: NOTHING can authenticate, because the only remaining credentials are a
+// session (which needs this password) and an API key (which can only be minted from a session).
+// There is no service token any more. This is the whole first-run bootstrap — set it.
 //
 // M15 15.6 — THIS IS A CREDENTIAL CHANGE THAT DELIBERATELY DOES NOT REVOKE, and it is the one
 // exception to the rule the other three follow (reset-confirm, password-change, member-removal all
@@ -269,7 +274,6 @@ if (adminPassword) {
 
 const app = buildApp({
   db,
-  adminToken,
   adminEmail,
   sessionSecret,
   analysisProvider: createAnalysisProvider(analysisConfig),

@@ -39,7 +39,7 @@ function archiveBadgeClass(state: string): string {
 
 /**
  * Settings + full server-stack supervision (M11 Slice 4). Three sections:
- *  (a) server CONFIG — `serverDir`/`ingestUrl` + the secrets (admin token, DB URL,
+ *  (a) server CONFIG — `serverDir`/`ingestUrl` + the secrets (API key, DB URL,
  *      encryption key, optional ANALYSIS_*). Secrets are write-only: their values are
  *      NEVER read back (the masked view carries only presence booleans), and a blank
  *      secret field on Save means "keep the stored value";
@@ -62,7 +62,7 @@ export function Settings() {
   const [serverDir, setServerDir] = useState("");
   const [ingestUrl, setIngestUrl] = useState(DEFAULT_INGEST_URL);
   const [ingestPort, setIngestPort] = useState("");
-  const [adminToken, setAdminToken] = useState("");
+  const [apiKey, setApiKey] = useState("");
   const [databaseUrl, setDatabaseUrl] = useState("");
   const [databaseUrlApp, setDatabaseUrlApp] = useState("");
   const [archiveEncryptionKey, setArchiveEncryptionKey] = useState("");
@@ -176,7 +176,7 @@ export function Settings() {
       serverDir: serverDir.trim(),
       ingestUrl: ingestUrl.trim(),
       ...(port !== undefined ? { ingestPort: port } : {}),
-      ...(adminToken.trim() !== "" ? { adminToken: adminToken.trim() } : {}),
+      ...(apiKey.trim() !== "" ? { apiKey: apiKey.trim() } : {}),
       ...(databaseUrl.trim() !== "" ? { databaseUrl: databaseUrl.trim() } : {}),
       ...(databaseUrlApp.trim() !== "" ? { databaseUrlApp: databaseUrlApp.trim() } : {}),
       ...(archiveEncryptionKey.trim() !== ""
@@ -196,7 +196,7 @@ export function Settings() {
         setConfig(cfg);
         seedForm(cfg);
       }
-      setAdminToken("");
+      setApiKey("");
       setDatabaseUrl("");
       setArchiveEncryptionKey("");
       setAnalysisApiKey("");
@@ -290,14 +290,18 @@ export function Settings() {
                 className={inputClass}
               />
             </Field>
-            <Field label="Admin token">
+            {/* M15 15.9 (D-M15-7) — was "Admin token". `ADMIN_TOKEN` was shared,
+                un-attributable and un-revocable; this is a per-user key you mint yourself and can
+                revoke on its own. The placeholder names WHERE to get one, because that is the only
+                part of the migration a user cannot guess. */}
+            <Field label="API key">
               <input
                 type="password"
-                value={adminToken}
-                onChange={(e) => setAdminToken(e.target.value)}
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
                 placeholder={secretPlaceholder(
-                  config?.hasAdminToken,
-                  "admin bearer for /v1/monitor",
+                  config?.hasApiKey,
+                  "k420_… — mint with POST /v1/auth/api-keys (no UI until 15.10)",
                 )}
                 className={cn(inputClass, "font-mono")}
               />

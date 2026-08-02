@@ -1,0 +1,23 @@
+-- M15 15.9 follow-up (code review finding 5). One LIVE key per (user, name).
+--
+-- PARTIAL on `revoked_at IS NULL`, and the partiality is the whole point: a plain unique index
+-- would make the most common operation — revoke "desktop", mint a new "desktop" — fail forever,
+-- because the revoked row would keep occupying the name. Scoped per USER, not global: two people
+-- may both call a key "desktop".
+--
+-- A UNIQUE INDEX rather than a route-level check, deliberately (CLAUDE.md 15.5: "name the mechanism
+-- — a lock, a unique index, or an isolation level"). A `SELECT … then INSERT` guard takes no locks,
+-- so two concurrent mints would both observe "no such name" and both succeed; the index refuses the
+-- second at the storage layer, with no lock and no race. The route maps the resulting 23505 to a
+-- 409 `duplicate_name`.
+--
+-- Index only — no policy block and no GRANT, for the same reasons 0021 states: `api_keys` is an
+-- IDENTITY table (D-15.9-1) with no `org_id`, read inside `resolvePrincipal` before any org context
+-- exists, and 0015's ALTER DEFAULT PRIVILEGES already covers the table this indexes.
+--
+-- BACKFILL SAFETY: this can FAIL on an existing deployment that already holds two live keys with
+-- the same name for one user. That is possible only for keys minted between 0021 and this
+-- migration. Resolve by revoking the duplicates first:
+--   SELECT user_id, name, count(*) FROM api_keys WHERE revoked_at IS NULL
+--   GROUP BY 1,2 HAVING count(*) > 1;
+CREATE UNIQUE INDEX "api_keys_user_live_name" ON "api_keys" USING btree ("user_id","name") WHERE "api_keys"."revoked_at" is null;

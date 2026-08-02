@@ -1,0 +1,20 @@
+-- Down-migration for 0021 (M15 15.9). One bare DROP TABLE: the table carries no policy and no RLS
+-- switch, so there is no policy-ordering hazard of the kind 0015-0017's downs had to navigate. The
+-- index and the FK to `users` are dropped with it.
+--
+-- D-M15-13 rollback-drill note: this DOES discard data, and the consequence is stated plainly.
+-- Rolling back REVOKES EVERY API KEY AT ONCE — the desktop app and every scheduled script
+-- authenticated by one start returning 401 immediately, because `resolvePrincipal`'s key branch has
+-- no table to read. Rolling forward again does NOT restore them: only the sha256 hashes were ever
+-- stored, so each key must be re-minted and re-installed in its client.
+--
+-- Rolling back to a build that still ACCEPTS `ADMIN_TOKEN` (i.e. before 15.9's Phase C) restores
+-- that credential's behaviour; rolling the SCHEMA back under a post-15.9 server leaves the
+-- deployment with no working machine credential at all. Roll the code back with it.
+--
+-- `db:rollback` applies only the LATEST migration, and 0022 now sits ABOVE this one — so reaching
+-- this file takes TWO invocations: the first drops the `api_keys_user_live_name` index (lossless),
+-- the second runs what is below. This file is therefore NOT the whole rollback surface any more. No
+-- `users`, `memberships`, `sessions` or `sso_identities` row is touched, and pre-0021 code ignores
+-- the table entirely.
+DROP TABLE IF EXISTS "api_keys";

@@ -22,7 +22,7 @@ DATABASE_URL_TEST_APP=postgres://420ai_app:<password>@localhost:5433/420ai_test
 ARCHIVE_ENCRYPTION_KEY=
 ARCHIVE_ENCRYPTION_KEYS=
 ARCHIVE_ENCRYPTION_ACTIVE_KEY_ID=
-ADMIN_TOKEN=
+API_KEY=
 SESSION_SECRET=
 INGEST_PORT=8420
 `;
@@ -49,8 +49,8 @@ describe("fillKey", () => {
   it("inserts a value containing a regex-replacement metachar ($) literally", () => {
     // A structurally-significant char for String.replace ($&/$1) embedded in the value: the
     // function-form replacement must emit it verbatim, not interpret it.
-    const out = fillKey(EXAMPLE, "ADMIN_TOKEN", "ab$1$&cd");
-    expect(out).toContain("ADMIN_TOKEN=ab$1$&cd");
+    const out = fillKey(EXAMPLE, "SESSION_SECRET", "ab$1$&cd");
+    expect(out).toContain("SESSION_SECRET=ab$1$&cd");
   });
 
   it("throws when the key is absent (drift guard)", () => {
@@ -79,13 +79,11 @@ describe("buildEnvFiles", () => {
   it("fills the secrets and shares SESSION_SECRET with the dashboard file", () => {
     const secrets = {
       archiveKey: "AK",
-      adminToken: "AT",
       sessionSecret: "SS",
       appDbPassword: "PW",
     };
     const { env, dashboardEnv } = buildEnvFiles(EXAMPLE, secrets);
     expect(env).toContain("ARCHIVE_ENCRYPTION_KEY=AK");
-    expect(env).toContain("ADMIN_TOKEN=AT");
     expect(env).toContain("SESSION_SECRET=SS");
     expect(dashboardEnv).toContain("SESSION_SECRET=SS");
     expect(dashboardEnv).toContain("INGEST_URL=http://localhost:8420");
@@ -94,7 +92,6 @@ describe("buildEnvFiles", () => {
   it("M15 15.3: APP_DB_PASSWORD and both app-role URLs carry the SAME password", () => {
     const secrets = {
       archiveKey: "AK",
-      adminToken: "AT",
       sessionSecret: "SS",
       appDbPassword: "PW",
     };
@@ -114,9 +111,7 @@ describe("generateSecrets", () => {
   it("produces a 32-byte base64 key and distinct url-safe tokens", () => {
     const s = generateSecrets();
     expect(Buffer.from(s.archiveKey, "base64")).toHaveLength(32);
-    expect(s.adminToken).toMatch(/^[A-Za-z0-9_-]+$/);
     expect(s.sessionSecret).toMatch(/^[A-Za-z0-9_-]+$/);
-    expect(s.adminToken).not.toBe(s.sessionSecret);
   });
 
   it("produces a url-safe app-role password (it is embedded in a postgres:// URL)", () => {
@@ -124,7 +119,7 @@ describe("generateSecrets", () => {
     // base64url only: a `+` or `/` would need percent-escaping inside the connection URL.
     expect(s.appDbPassword).toMatch(/^[A-Za-z0-9_-]+$/);
     expect(Buffer.from(s.appDbPassword, "base64url")).toHaveLength(24);
-    expect(s.appDbPassword).not.toBe(s.adminToken);
+    expect(s.appDbPassword).not.toBe(s.sessionSecret);
   });
 });
 
