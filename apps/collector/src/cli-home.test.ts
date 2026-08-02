@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { homedir } from "node:os";
-import { resolveHome } from "./cli.js";
+import { resolveHome, pairSummary } from "./cli.js";
 import { credentialsPathFor, queuePathFor, CREDENTIALS_PATH, QUEUE_PATH } from "./identity.js";
 
 /**
@@ -38,5 +38,38 @@ describe("home-relative collector paths (--home moves creds + queue together)", 
   it("default (home = OS home) is byte-identical to the legacy constants — back-compat", () => {
     expect(credentialsPathFor(homedir())).toBe(CREDENTIALS_PATH);
     expect(queuePathFor(homedir())).toBe(QUEUE_PATH);
+  });
+});
+
+/**
+ * The `pair` confirmation must name the path actually written. It previously interpolated the
+ * module-level `CREDENTIALS_PATH` constant, which bakes in `homedir()` at import time — so under
+ * `--home <dir>` the file landed in `<dir>/.420ai` while the message named `~/.420ai`. The failure
+ * mode is entirely human: an operator pairing into an isolated clean room reads that line and
+ * concludes it clobbered their real credentials.
+ *
+ * The second assertion is the discriminator. Asserting only that the resolved path appears would
+ * still pass a message that printed BOTH; asserting the OS-home constant is absent is what actually
+ * pins the substitution.
+ */
+describe("pairSummary (the `pair` confirmation names the --home-resolved path)", () => {
+  const res = { machineId: "m-123", token: "tok-abc" };
+  const home = process.platform === "win32" ? "C:\\cleanroom" : "/cleanroom";
+
+  it("names the --home-resolved credentials path, not the OS-home constant", () => {
+    const out = pairSummary(res, home);
+    expect(out).toContain(credentialsPathFor(home));
+    // The bug: this constant is derived from homedir() at import time and is NOT where we wrote.
+    expect(out).not.toContain(CREDENTIALS_PATH);
+  });
+
+  it("still names the OS-home path when no --home was given", () => {
+    expect(pairSummary(res, homedir())).toContain(CREDENTIALS_PATH);
+  });
+
+  it("reports the machine id and token it was handed", () => {
+    const out = pairSummary(res, home);
+    expect(out).toContain("m-123");
+    expect(out).toContain("tok-abc");
   });
 });

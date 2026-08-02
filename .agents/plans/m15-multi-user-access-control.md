@@ -1,5 +1,12 @@
 # M15 — Multi-user & Access Control
 
+> **Erratum 2026-08-02 (slice 16.0).** Every "M16" in this document — and in the sibling
+> `m15-slice*.md` plans, code reviews and execution reports — means the **Cloud-hosted SaaS**
+> milestone, which was **renumbered to M20** on 2026-08-02. `M16` now means _Dogfood Instrumentation
+> & Data Trust_ ([`m16-dogfood-instrumentation.md`](./m16-dogfood-instrumentation.md)). These
+> historical documents are deliberately **not** rewritten (D-16.0-1) — they record decisions as they
+> were taken, and `scripts/check-summary.mjs` derives what shipped from their filenames.
+
 > **Milestone definition** — the output of the 2026-07-25 deferral audit + scope conversation
 > (the same process that produced M12, M13 and M14). Conventions live in `CLAUDE.md`; this links,
 > not re-pastes. Each slice below still goes through the build loop (`SUMMARY.md` §2) with its own

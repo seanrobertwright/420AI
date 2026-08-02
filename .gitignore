@@ -75,3 +75,7 @@ apps/collector/service/*.exe
 /login.json
 /login-bad.json
 /UAT.md
+
+# Claude Code local agent state (scheduled-task locks, worktrees, build artifacts).
+# Local tooling, not project source — and it collects `*.tsbuildinfo` under `.claude/worktrees/`.
+.claude/

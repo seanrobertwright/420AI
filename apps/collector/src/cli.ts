@@ -395,6 +395,26 @@ export function resolveHome(args: string[]): string {
   return getFlag(args, "--home") ?? homedir();
 }
 
+/**
+ * The `pair` confirmation text. Extracted from `main()` ONLY so it can be asserted in a unit test —
+ * the printing itself stays at the entrypoint (CLAUDE.md: libraries never write to stdout).
+ *
+ * It takes the SAME `home` that was handed to `runPair`, because the bug this replaced was printing
+ * the module-level `CREDENTIALS_PATH` constant instead. That constant bakes in `homedir()` at import
+ * time (`identity.ts:20`), so under `--home <dir>` the credentials were saved correctly to
+ * `<dir>/.420ai/credentials.json` while the confirmation named `~/.420ai/credentials.json`. Harmless
+ * to the data and actively misleading to the human: the whole reason to pass `--home` is to keep an
+ * isolated pairing away from the real profile, and the success message said it had not worked.
+ * Both values are `string`, so nothing but this comment stops the substitution recurring.
+ */
+export function pairSummary(res: PairResponse, home: string): string {
+  return (
+    `Paired. machineId=${res.machineId}\n` +
+    `Ingest token (store securely): ${res.token}\n` +
+    `Saved credentials to ${credentialsPathFor(home)}\n`
+  );
+}
+
 export function parseHeartbeatIntervalMs(value: string | undefined): number | undefined {
   if (!value) return undefined;
   const parsed = Number(value);
@@ -423,7 +443,7 @@ function usage(dbPath: string): string {
     "Usage:",
     "  collector ingest <file> [--db <path>]",
     "  collector report <sessionId> [--db <path>] [--out <file>]",
-    "  collector pair <code> --url <baseUrl> [--name <n>] [--os <os>] [--hostname <h>]",
+    "  collector pair <code> --url <baseUrl> [--name <n>] [--os <os>] [--hostname <h>] [--home <dir>]",
     "  collector push <file> [--url <baseUrl>] [--token <token>]",
     "  collector watch [--url <baseUrl>] [--token <token>] [--interval <ms>] [--home <dir>] [--push-port <port>]",
     "  collector sync [--url <baseUrl>] [--token <token>] [--home <dir>]",
@@ -493,19 +513,18 @@ async function main(argv: string[]): Promise<void> {
     if (!code) throw new Error("pair requires a <code> argument");
     const url = getFlag(args, "--url");
     if (!url) throw new Error("pair requires --url <baseUrl>");
+    // Resolve the home ONCE and use it for both the write and the confirmation, so the two can
+    // never disagree — see `pairSummary`.
+    const home = resolveHome(args);
     const res = await runPair({
       url,
       code,
       name: getFlag(args, "--name") ?? osHostname(),
       os: getFlag(args, "--os") ?? process.platform,
       hostname: getFlag(args, "--hostname") ?? osHostname(),
-      home: resolveHome(args),
+      home,
     });
-    process.stdout.write(
-      `Paired. machineId=${res.machineId}\n` +
-        `Ingest token (store securely): ${res.token}\n` +
-        `Saved credentials to ${CREDENTIALS_PATH}\n`,
-    );
+    process.stdout.write(pairSummary(res, home));
     return;
   }
 

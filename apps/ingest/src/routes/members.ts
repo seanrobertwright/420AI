@@ -118,7 +118,7 @@ export default async function memberRoutes(app: FastifyInstance): Promise<void> 
       // existing user already owns a personal org that predates any invite. A second membership
       // would therefore be permanently shadowed.
       //
-      // MULTI-ORG MEMBERSHIP + AN ORG SWITCHER IS M16, NOT 15.10 (D-15.10-1). 15.10 shipped the
+      // MULTI-ORG MEMBERSHIP + AN ORG SWITCHER IS M20, NOT 15.10 (D-15.10-1). 15.10 shipped the
       // team surfaces and deliberately did NOT take this on: it reopens `findPrincipalByEmail`,
       // and additionally needs an active-org claim in the session token, per-org session/key
       // revocation, and a rewrite of this very refusal. Nothing in 15.10's UI needed it — every
@@ -374,18 +374,18 @@ export default async function memberRoutes(app: FastifyInstance): Promise<void> 
       //
       // Before 15.6 this fell closed only BY ACCIDENT: with the membership gone,
       // `findPrincipalByEmail` stopped resolving and the token 401'd — but only because the user
-      // had no OTHER membership. That mechanism evaporates the moment M16 ships multi-org users,
+      // had no OTHER membership. That mechanism evaporates the moment M20 ships multi-org users,
       // at which point a removed colleague's existing token would keep working against their
       // remaining org's data. Revoking explicitly is what makes the guarantee designed rather than
       // incidental.
       //
       // `revokeAllSessions` is keyed on `user_id` with NO org predicate. Correct today, and
-      // REVISIT AT M16 — the two halves of that are worth keeping apart:
+      // REVISIT AT M20 — the two halves of that are worth keeping apart:
       //
       //   Today a user belongs to exactly one org (15.5's accept path refuses an email that already
       //   has an account), so "removed from the org" and "no longer has a login" are the same
       //   statement, and a global revoke is the only thing that can be meant.
-      //   Under M16's multi-org users it INVERTS: an admin of org A calling this would sign the
+      //   Under M20's multi-org users it INVERTS: an admin of org A calling this would sign the
       //   user out of org B as well, which is a cross-tenant action taken by someone with no
       //   standing in B. At that point this needs either a per-org session model or a revoke scoped
       //   to sessions whose resolved org is this one.
@@ -395,7 +395,7 @@ export default async function memberRoutes(app: FastifyInstance): Promise<void> 
       // a key: a session expires on its own within seven days, whereas a key defaults to never
       // expiring, so leaving one live is a permanent credential held by a former colleague.
       //
-      // Both revokes carry the SAME M16 revisit note, and it applies to keys verbatim: today
+      // Both revokes carry the SAME M20 revisit note, and it applies to keys verbatim: today
       // "removed from the org" and "no longer has a login" coincide, so a global revoke is the only
       // thing that can be meant; under multi-org users it inverts, and an admin of org A would be
       // killing a key its owner legitimately uses against org B.

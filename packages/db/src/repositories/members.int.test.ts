@@ -252,7 +252,7 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.5 member management (two-role)", 
     expect(await findMemberByUserId(appRole.db, orgA, userOwner)).toBeDefined();
 
     // A plain member goes, and their `users` row SURVIVES — an identity may belong to other orgs
-    // (M16), and deleting it would cascade into every row that references it.
+    // (M20), and deleting it would cascade into every row that references it.
     expect(await appRole.db.transaction((tx) => removeMember(tx, orgA, userMember))).toBe(true);
     expect(await findMemberByUserId(appRole.db, orgA, userMember)).toBeUndefined();
     const users = await appRole.db.execute<{ n: number }>(

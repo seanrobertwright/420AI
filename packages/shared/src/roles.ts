@@ -1,5 +1,5 @@
 /**
- * M15 15.4 — the four FIXED roles (D-M15-4). No user-defined roles: that is an M16
+ * M15 15.4 — the four FIXED roles (D-M15-4). No user-defined roles: that is an M20
  * enterprise concern. TEXT, not a pg enum, matching `memberships.role` (schema.ts:87)
  * and every other closed set in this repo — adding a value is a code change, not a
  * migration.

@@ -36,7 +36,7 @@ export interface Principal {
  *
  * The `innerJoin` is deliberate: an ownerless identity must fail CLOSED rather than
  * default into some org. The `ORDER BY created_at, id LIMIT 1` mirrors
- * `findOrgIdByUserId` so a user with two memberships (possible by design — M16
+ * `findOrgIdByUserId` so a user with two memberships (possible by design — M20
  * needs it) resolves to the SAME org from both functions rather than flapping.
  *
  * Explicit column list, never a bare `select()` — CLAUDE.md's 15.1 lesson. The
@@ -76,7 +76,7 @@ export async function findPrincipalByEmail(
  * again anyway.
  *
  * THE `ORDER BY` MUST STAY BYTE-IDENTICAL TO `findPrincipalByEmail` ABOVE, and to
- * `findOrgIdByUserId`. A user may hold two memberships by design (M16 needs it — 15.10 deferred it, D-15.10-1); if these
+ * `findOrgIdByUserId`. A user may hold two memberships by design (M20 needs it — 15.10 deferred it, D-15.10-1); if these
  * resolvers tie-broke differently, the SAME user would land in a different org depending on whether
  * they arrived by session or by API key. That is a tenancy bug with no type-level signal — the only
  * thing keeping the two in agreement is this ordering, so change neither without the other.

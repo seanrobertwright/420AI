@@ -89,17 +89,37 @@ negative), restore-from-backup drill, Cursor `watch → archive → Monitor` rou
 Eleven slices (15.0's truth + RLS spike, then 15.1-15.10):
 org-level tenancy + RLS backstop, four fixed roles, all four identity paths, sessions, SSO, MFA, API
 keys (and the retirement of `ADMIN_TOKEN`), and finally the team surfaces + the append-only
-`audit_events` table. **What's next — M16–M19 remain committed and unsequenced.** Originally: On 2026-07-21 the post-V1 bucket
+`audit_events` table. Originally: On 2026-07-21 the post-V1 bucket
 was promoted from a PRD "tentative sketch" to **committed scope** — all five milestones are wanted
 (multi-user, SaaS, cross-platform collectors, advanced intelligence, connector ecosystem/local
 models); the scope conversation asked for one strategic direction and the answer was all three. On
 **2026-07-25** the deferral audit + scope conversation promoted **M15** first, on the stated criterion
 (_who the next milestone is for_ — the answer being that this product is going to be a SaaS, so the
-tenancy foundation is built now, with one install and zero customers). M16–M19 remain **committed and
-unsequenced**.
+tenancy foundation is built now, with one install and zero customers).
+
+**M16 (Dogfood instrumentation & data trust)** is the **ACTIVE** milestone — promoted 2026-08-02 by
+the deferral audit + scope conversation, on the same criterion and a different answer: **Sean alone,
+for a 24-week research period**. It builds only what makes that period's evidence trustworthy — the
+**P0** backlog of
+[`.agents/supplemental docs/research-analysis-plan.md`](./.agents/supplemental%20docs/research-analysis-plan.md)
+§7 — sliced **16.0–16.4**. See
+[`.agents/plans/m16-dogfood-instrumentation.md`](./.agents/plans/m16-dogfood-instrumentation.md).
+**M17–M20 remain committed and unsequenced.**
+
+> **Renumbered 2026-08-02 (slice 16.0).** **Cloud-hosted SaaS was `M16`; it is now `M20`**, back in
+> the unsequenced bucket with its scope unchanged (and still inheriting D-15.10-1's multi-org
+> membership + org switcher). The number was reassigned because multi-tenant hosting, billing and
+> quotas are named **explicitly out of scope** by the research plan's §2 guardrails for the whole
+> 24-week period, while the work that _is_ in scope had no milestone. 38 **live** references were
+> repointed; the ~32 dated records under `.agents/plans/m15-*`, `.agents/code-reviews/` and
+> `.agents/execution-reports/` were deliberately **left alone** and carry one erratum legend instead
+> (D-16.0-1) — they record decisions as they were taken, and `scripts/check-summary.mjs` derives
+> what shipped from those filenames.
 
 > **Corrected 2026-07-25 (slice 15.0).** This block previously said "the schema is already
-> multi-user-capable, so M15/M16 are a product-surface build, not a data migration." That was true for
+> multi-user-capable, so M15/M20 are a product-surface build, not a data migration"
+> _(quoted with the milestone number updated by the 2026-08-02 renumber above — it read "M16", then
+> meaning SaaS, when written)_. That was true for
 > **per-user** isolation, and is **false** under the org-level tenancy settled in **D-M15-1**: the
 > tenancy boundary is the **organization**, so `org_id` lands across ~15 tables including `events` and
 > `raw_source_records`, with a backfill and `down/` SQL. **M15 is a data migration.** (V1 being
@@ -225,7 +245,8 @@ checklist (updater key ceremony, restore drill, auth QA, SMTP, scheduled reports
 fully cleared — evidence under `.agents/qa/m14-signoff/`.** See
 [`.agents/plans/m14-general-ai-chat-capture.md`](./.agents/plans/m14-general-ai-chat-capture.md).
 
-**V2 (M15–M19) — committed scope 2026-07-21; M15 promoted 2026-07-25, M16–M19 still unsequenced.**
+**V2 (M15–M20) — committed scope 2026-07-21; M15 promoted 2026-07-25, M16 promoted + redefined
+2026-08-02, M17–M20 still unsequenced.**
 The post-V1 bucket stopped being a sketch: the scope conversation asked which single strategic
 direction to take and the answer was **all three** — deepen the single-user product, go
 multi-user/SaaS, extend cross-platform reach — so all five are committed. The remaining numbering is
@@ -234,7 +255,9 @@ next milestone is for**, not technical dependency. Nothing below M15 is executab
 through the deferral-audit + scope conversation that produced M12/M13/M14. Full entries in PRD §25.
 
 > **Corrected 2026-07-25 (slice 15.0).** This paragraph previously justified the ordering with "the
-> schema is already multi-user-capable, so M15/M16 are a product-surface build, not a data migration."
+> schema is already multi-user-capable, so M15/M20 are a product-surface build, not a data migration"
+> _(quoted with the milestone number updated by the 2026-08-02 M16→M20 renumber — it read "M16", then
+> meaning SaaS, when written)_.
 > True for **per-user** isolation; **false** under **D-M15-1**'s org-level tenancy, which adds `org_id`
 > across ~15 tables (incl. `events`, `raw_source_records`) plus a backfill. **M15 is a data
 > migration** — sizing it from the old sentence under-scopes it.
@@ -250,9 +273,19 @@ through the deferral-audit + scope conversation that produced M12/M13/M14. Full 
   **15.8** ✅ MFA (TOTP + recovery codes) · **15.9** ✅ API keys + retire `ADMIN_TOKEN` ·
   **15.10** ✅ Team surfaces + audit table (PR #70).
   **15.0 gates 15.3**; 15.5 gates 15.7; 15.6 gates 15.8.
-- **M16 — Cloud-hosted SaaS.** Multi-tenancy, managed archive, quotas/rate limits beyond 12.4,
-  billing, hosted onboarding. _Genuinely depends on M15. Biggest architectural shift — local-first
-  stays a first-class deployment mode._
+- **M16 — Dogfood instrumentation & data trust** is **IN PROGRESS** (promoted + redefined
+  2026-08-02;
+  [`.agents/plans/m16-dogfood-instrumentation.md`](./.agents/plans/m16-dogfood-instrumentation.md)).
+  The engineering half of the 24-week research period defined in
+  [`.agents/supplemental docs/research-analysis-plan.md`](./.agents/supplemental%20docs/research-analysis-plan.md):
+  build the §7 **P0** backlog that makes its measurements truthful, and nothing else. Decisions
+  D-M16-1 (the observation set is **fixed and narrow** — Claude Code + Codex only, two repos, and the
+  browser extension **off** during Phase 1 so the known `claude-live`↔`claude-export` dedup gap cannot
+  contaminate the <1% duplicate-rate metric) and D-16.0-1…3. Slices: **16.0** ✅ Truth + research
+  scaffold · **16.1** Outcome label model + API · **16.2** Label capture (tray) + review (dashboard) ·
+  **16.3** Capture health scorecard · **16.4** Data-quality audit report. The §7 P1.6 hero-workflow
+  evidence panel is deliberately **not** a slice — the hero workflow is selected from evidence in
+  research Phase 2 (weeks 5–8).
 - **M17 — Cross-platform collectors.** macOS + Linux (V1/M11 are Windows-first) + portable signed
   installers/auto-update. _Most parallelizable — best candidate to run alongside another milestone._
 - **M18 — Advanced intelligence & automation.** Semantic/vector search, scheduled _analysis_,
@@ -260,6 +293,11 @@ through the deferral-audit + scope conversation that produced M12/M13/M14. Full 
   _Deepens data already captured; benefits from M14's larger corpus._
 - **M19 — Connector ecosystem & local models.** Script/plugin connector runtime, local-model
   lifecycle, graduating the experimental catalog, mobile consumption app. _Extensibility + breadth._
+- **M20 — Cloud-hosted SaaS.** Multi-tenancy, managed archive, quotas/rate limits beyond 12.4,
+  billing, hosted onboarding. _Genuinely depends on M15. Biggest architectural shift — local-first
+  stays a first-class deployment mode._ **Was M16 until 2026-08-02** (slice 16.0) — same scope, new
+  number, still committed and unsequenced. Inherits D-15.10-1's deferred multi-org membership + org
+  switcher, tenant slugs, and user-defined roles.
 
 > **Principle:** nothing shows value until the pipe is whole — so make the _thinnest_ end-to-end
 > pipe first (milestone 1), then thicken each stage.
@@ -397,8 +435,10 @@ original M10 "hardening bundle" (exports, catalog signing, replay metadata, pers
 
 - [x] **M15 Multi-user & access control — DONE `2026-08-02`** (all eleven slices, 15.0-15.10;
       15.10 was the last).
-      **NEXT: M16–M19 remain committed and unsequenced** — each still needs its own deferral-audit +
-      scope conversation before it is executable, and M16 additionally inherits D-15.10-1's deferred
+      **NEXT: M16 (dogfood instrumentation & data trust) is ACTIVE; M17–M20 remain committed and
+      unsequenced** — each of those four still needs its own deferral-audit + scope conversation
+      before it is executable, and **M20** (Cloud-hosted SaaS, renumbered from M16 on 2026-08-02)
+      additionally inherits D-15.10-1's deferred
       multi-org membership + org switcher. Promoted 2026-07-25 by the
       deferral-audit + scope conversation that produced M12/M13/M14; decisions D-M15-1…13 are settled
       in [`.agents/plans/m15-multi-user-access-control.md`](./.agents/plans/m15-multi-user-access-control.md).
@@ -748,7 +788,7 @@ enforced`, the sibling of `skipped ≠ passed`. Closes the Spike-6 hole: a cross
         `FOR ALL USING (true)`, tests 3 and 4 of `audit.int.test.ts` fail, then pass again restored.
         **D-15.10-1 CORRECTS ELEVEN SOURCE COMMENTS**: multi-org membership + the org switcher were
         promised "at 15.10" in eleven places (including two 409 **response bodies**) and are
-        **deferred to M16** — they reopen `findPrincipalByEmail`, the load-bearing 15.2 primitive
+        **deferred to M20** — they reopen `findPrincipalByEmail`, the load-bearing 15.2 primitive
         whose byte-identical `ORDER BY` is the only thing keeping session-auth and key-auth resolving
         to the same org, and additionally need an active-org session claim, per-org revocation and a
         rewrite of the invite refusal. Nothing in 15.10's UI needed it. The 409 bodies now read
@@ -765,13 +805,57 @@ enforced`, the sibling of `skipped ≠ passed`. Closes the Spike-6 hole: a cross
         `additionalProperties: false` STRIPS an unknown key rather than 400ing — the first version of
         the cross-org rename test asserted the wrong contract. And the audit assertions **must read
         back on the OWNER handle**: through the app handle every one passes vacuously against zero
-        rows. **Deferred and stated, not dropped**: multi-org/org switcher (M16), an audit-log viewer
+        rows. **Deferred and stated, not dropped**: multi-org/org switcher (M20), an audit-log viewer
         or export (D-15.10-4 — a structural test asserts the repository exports no reader), and four
         surfaces that stay headless but curl-reachable (gated self-signup, password-reset pages, an
         active-sessions list, MFA QR — the last held by the slice's no-new-dependency rule).
 
-- [ ] **M16–M19 remain committed scope, unsequenced** (§3, PRD §25). Each still needs its own
-      deferral-audit + scope conversation before it is executable.
+- [ ] **M16 Dogfood instrumentation & data trust — IN PROGRESS** (promoted + redefined 2026-08-02 by
+      the deferral-audit + scope conversation that produced M12/M13/M14/M15, on the same criterion —
+      _who the next milestone is for_ — with a different answer: **Sean alone, for a 24-week research
+      period**). It builds the §7 **P0** backlog of
+      [`.agents/supplemental docs/research-analysis-plan.md`](./.agents/supplemental%20docs/research-analysis-plan.md)
+      and nothing else; decisions D-M16-1 + D-16.0-1…3 are settled in
+      [`.agents/plans/m16-dogfood-instrumentation.md`](./.agents/plans/m16-dogfood-instrumentation.md).
+      The §7 P1.6 hero-workflow evidence panel is deliberately **not** a slice.
+  - **16.0** ✅ **DONE `2026-08-02` (PR #72)** — Truth + research scaffold. Renumbered the
+    Cloud-hosted-SaaS milestone **M16 → M20** across **38 live** sites (17 doc + 21 source comments in
+    14 files) while deliberately leaving the **32 historical** hits under `.agents/plans/m15-*`,
+    `.agents/code-reviews/` and `.agents/execution-reports/` untouched behind a single erratum legend
+    (D-16.0-1 — those are dated records, and `check-summary.mjs` derives what shipped from their
+    filenames). Created the research artifact set required by research plan §3
+    (`.agents/research/`: weekly scorecard template, decision log, experiment register, participant
+    registry, backlog, interviews, incidents) with the §3 privacy rule restated in every
+    observation-holding file, and
+    [`docs/guide/data-boundary.md`](./docs/guide/data-boundary.md) — every claim derived from source
+    and cited by `file:line`, including the honest finding that **there is no data-retention or
+    pruning of raw records or events at all** (only backup _files_ and two bounded time-series are
+    pruned). Ran a **timed clean-room deploy** against the §5.2 < 30 min target (D-16.0-2: it
+    **measures, it does not fix** — every slow step becomes an `incidents.md` entry that earns a fix
+    later under the scope-change rule, because fixing pre-emptively converts evidence into a guess).
+    It raised **five incidents, none fixed**, and the headline is not the wall-clock: **the documented
+    path fails twice** (quickstart never says to `tsc -b`, so `ingest:dev` dies on
+    `ERR_MODULE_NOT_FOUND`; and it omits `db:provision-app-role` — which `setup-env.mjs` itself
+    prints — so ingest then dies on Postgres `28P01`), and **`--home` does not isolate the Cursor
+    connector** (`cursor.ts:331` `sources: () => [defaultCursorStorePath()]` discards the `home` its
+    `PollCapability.sources(home)` contract passes it and reads `%APPDATA%`, so the isolated clean
+    room ingested **350 real Cursor sessions** — 16,916 records / 39,888 events — from outside itself;
+    INC-2026-01, high severity, left for a later slice because it touches the connector contract
+    rather than being a one-line entrypoint fix). Write-side isolation held and was verified — real
+    `credentials.json`/`queue.sqlite` mtimes byte-identical to baseline, real archive at 0 machines
+    throughout — which is itself the lesson: **every write-side check passed while a read breach was
+    in progress.**
+    Two real CLI defects found by spiking the isolation requirement and fixed here, as the stated
+    exception to D-16.0-2 — they are defects in the isolation the measurement's safety constraint
+    _depends on_: **F1** `pair`'s usage line omitted `[--home <dir>]` though the handler has always
+    honoured it, and **F2** the pair confirmation printed the `homedir()`-derived `CREDENTIALS_PATH`
+    constant rather than the path actually written, so an operator verifying "did the clean room
+    touch my real collector?" was told it had.
+    **No schema change, no route change, no behavioural change** beyond those two lines.
+
+- [ ] **M17–M20 remain committed scope, unsequenced** (§3, PRD §25). Each still needs its own
+      deferral-audit + scope conversation before it is executable. (**M20** is Cloud-hosted SaaS,
+      renumbered from M16 on 2026-08-02 by slice 16.0 — same scope, new number.)
 
 - [ ] **V1 close-out** (scope confirmed 2026-06-19 — see §4) — completed to **full written scope**.
       Sequenced slices, each run through the build loop (§2). Recommended order is value/dependency-first: 1. **Git Outcomes & Attribution** (§11.3/§11.4, full) — capture commits (hash/author/time/branch +
