@@ -283,7 +283,7 @@ through the deferral-audit + scope conversation that produced M12/M13/M14. Full 
   browser extension **off** during Phase 1 so the known `claude-live`↔`claude-export` dedup gap cannot
   contaminate the <1% duplicate-rate metric) and D-16.0-1…3. Slices: **16.0** ✅ Truth + research
   scaffold · **16.1** ✅ Outcome label model + API · **16.2** ✅ Label capture (desktop) + review (dashboard) ·
-  **16.3** Capture health scorecard · **16.4** Data-quality audit report. The §7 P1.6 hero-workflow
+  **16.3** ✅ Capture health scorecard · **16.4** Data-quality audit report. The §7 P1.6 hero-workflow
   evidence panel is deliberately **not** a slice — the hero workflow is selected from evidence in
   research Phase 2 (weeks 5–8).
 - **M17 — Cross-platform collectors.** macOS + Linux (V1/M11 are Windows-first) + portable signed
@@ -906,6 +906,54 @@ enforced`, the sibling of `skipped ≠ passed`. Closes the Spike-6 hole: a cross
     first. It carries IDs, timestamps, counts and closed-set values only, with `intent`,
     `followUpCommitOrPr` and `projectPath` excluded **at the type level** (`never`), so pasting free
     human text into a public repository is a compile error rather than a thing to remember.
+
+  - **16.3** ✅ **DONE `2026-08-04` (PR #77)** — Capture health scorecard. §7 P0.1's acceptance
+    criterion is a DISTINCTION, not a number: _"a user can distinguish 'no work happened' from
+    'capture is broken'."_ The archive could not make it, and the reason was structural — every
+    capture-health signal it held was derived from **observed events**, so a connector that is
+    enabled but BROKEN emits nothing and produces no row at all, byte-identical to a connector that
+    is DISABLED and to a healthy one on a quiet day. Measured before writing code (spike S3), not
+    assumed. **One additive table** (`machine_connectors`, migration 0025, STRICT) and **one
+    additive endpoint** (`GET /v1/capture-health`, `viewer`-gated).
+    **The design is to report the declaration and join it against the observation.** The collector
+    already computed everything §7 P0.1 asks for — it just never left the machine (it went to the
+    desktop webview over the local control protocol). It now rides the existing heartbeat as an
+    optional field (D-16.3-2), and **every judgement lives in a pure, clock-injected
+    `deriveCaptureHealth`** in `@420ai/shared`, so the classification is unit-testable with no
+    database and 16.4 reuses the verdict rather than deriving a second, disagreeing one.
+    **Two states mean "I don't know", and they are first-class** — `unreported` (events observed, no
+    declaring machine) and `unknown` (offline machine, stale declaration). That is the direct
+    mitigation for M16 Risk 2: the same operator builds and grades this instrument, and a scorecard
+    that cannot say "unknown" reports a healthy-looking zero, which converts an outage into
+    evidence. A test asserts neither renders as success **or** failure. **Silence is only evidence
+    when silence is surprising** (D-16.3-4): `silent` is gated on `liveness`, so a `batch` connector
+    quiet for weeks is `idle` — flagging it would put a permanent false red on the panel and train
+    the operator to ignore it.
+    **Two defects fixed, because the scorecard is meaningless without them.** **F-16.3-1**:
+    `collector watch` ignored connector enablement AND capture-surface approvals entirely, so
+    D-M16-1's fixed observation set was not in force on the PRIMARY capture path (the Windows
+    service runs `watch --home …`) and every §5.1 figure scoped to that set had the wrong
+    denominator. It is a real behaviour change — capture reduces for anyone relying on the old
+    behaviour — pinned by a `cli.test.ts` regression test against a newly-added engine seam, since
+    `runWatch` had no seam at all and that is precisely how the missing filters survived.
+    **F-16.3-2**: one connector's throw rejected the watcher loop and unwound the WHOLE capture
+    engine, so "capture is broken" manifested as a dead process — indistinguishable from a closed
+    laptop. The header comment asserting "the lines are retried next tick" **was the defect** (the
+    15.5 class): true about the cursor, false about the loop, since there was no next tick. Fixed
+    per FILE, not per loop, with the failing test written first.
+    **D-16.3-3 — `watchGlobs` never reach the archive**, enforced four ways rather than remembered:
+    at the type level (`Omit<ConnectorInfo, "watchGlobs">`), by a collector test asserting the key's
+    absence, and at the HTTP edge. They are absolute paths under the operator's home, and
+    `requiredPermissions` carries the same information in the form §7 P0.4 review actually needs.
+    **A shipped bug found by spiking**: `connectorHealth.lastEventAt` was emitting Postgres text
+    (`"2026-08-01 00:00:00+00"`) on `GET /v1/monitor` — the M5 `lastActivity` / M9 `activeSessions`
+    `mode:"string"`-aggregate class, live on the wire. Fixed in both `connectorHealth` and its
+    windowed sibling and pinned by an ISO round-trip assertion.
+    **D-16.3-6 corrected under measurement.** The plan assumed `additionalProperties: false` meant a
+    newer collector against an older archive would 400 the whole heartbeat. It does not: Fastify's
+    ajv runs `removeAdditional: true`, so the field is silently stripped and the request succeeds.
+    Milder than feared, still silent — so the `onError` seam and the archive-before-collector deploy
+    order both stayed, and both behaviours are now tests rather than a comment.
 
 - [ ] **M17–M20 remain committed scope, unsequenced** (§3, PRD §25). Each still needs its own
       deferral-audit + scope conversation before it is executable. (**M20** is Cloud-hosted SaaS,

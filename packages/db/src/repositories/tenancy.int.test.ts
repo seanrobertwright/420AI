@@ -112,6 +112,11 @@ const TENANT_TABLES = [
   // about them because they are tenant tables on BOTH questions: read per-tenant AND org-owned.
   "outcome_labels",
   "outcome_label_revisions",
+  // M16 16.3 — the DECLARED half of capture health. Org-owned and read per-tenant, so like the two
+  // above (and unlike `audit_events`) it is in `rls.int.test.ts`'s STRICT list too: both files agree
+  // about it. Its `org_id` is derived from `machines.org_id` by the heartbeat route, never sent by
+  // the collector — a machine cannot nominate whose data it is.
+  "machine_connectors",
 ] as const;
 
 /** Tables that must NOT gain org_id — identities and deployment-global data (D-M15-9). */

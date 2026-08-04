@@ -139,6 +139,143 @@ describe("FileWatcher.tickOnce (poll-based discovery + capture)", () => {
     queue.close();
   });
 
+  /**
+   * F-16.3-2 REGRESSION PIN (M16 16.3).
+   *
+   * Before this fix `tickOnce` had no try/catch anywhere, so a throw from `onChange` rejected the
+   * tick, rejected `runLoop`, and rejected the `Promise.race([watcherLoop, syncLoop])` in
+   * `capture-engine.ts` — ONE connector's bad file stopped capture for ALL of them. The header
+   * comment claimed the opposite ("the lines are retried next tick"); there was no next tick, and
+   * the comment was the real defect.
+   *
+   * The catch is PER FILE, not around the loop: a loop-level catch would skip every remaining file
+   * in the tick, which is the same outage one file smaller.
+   */
+  it("a throwing connector does not stop the tick; a sibling's file is still captured", async () => {
+    const { home, queue, projectsDir } = setup();
+    const captured: string[] = [];
+    const errors: { id: string; message: string }[] = [];
+
+    const f1 = join(projectsDir, "aaaaaaaa-1111-1111-1111-111111111111.jsonl");
+    const f2 = join(projectsDir, "bbbbbbbb-1111-1111-1111-111111111111.jsonl");
+    writeFileSync(f1, REC1 + "\n", "utf8");
+    writeFileSync(f2, REC2 + "\n", "utf8");
+
+    const watcher = new FileWatcher({
+      connectors: [claudeCodeConnector],
+      home,
+      queue,
+      onChange: (_c, text) => {
+        // The FIRST discovered file blows up; the second must still be captured in the SAME tick.
+        if (text.includes("u-1")) throw new Error("EACCES: simulated parse failure");
+        captured.push(text);
+      },
+      onError: (connector, err) => {
+        errors.push({ id: connector.id, message: String(err) });
+      },
+    });
+
+    await expect(watcher.tickOnce()).resolves.toBeUndefined();
+    expect(captured).toHaveLength(1);
+    expect(captured[0]).toContain("u-2");
+    expect(errors).toHaveLength(1);
+    expect(errors[0]!.id).toBe("claude-code");
+    expect(errors[0]!.message).toContain("simulated parse failure");
+
+    // The cursor for the FAILED file was not committed, so the lines genuinely retry next tick —
+    // which is what the header comment has always claimed and only now delivers.
+    const discovered = await watcher.discover();
+    const failed = discovered.find((d) => d.path.includes("aaaaaaaa"));
+    expect(queue.getCursor(claudeCodeConnector.id, failed!.path)).toBeUndefined();
+
+    // …and the loop survives too, not merely the tick.
+    const ac = new AbortController();
+    const loop = watcher.runLoop(ac.signal, 1);
+    await new Promise((r) => setTimeout(r, 25));
+    ac.abort();
+    await expect(loop).resolves.toBeUndefined();
+    expect(errors.length).toBeGreaterThan(1); // it kept retrying rather than dying
+
+    queue.close();
+  });
+
+  it("a connector whose watchGlobs throw is reported and does not stop discovery", async () => {
+    const { home, queue, projectsDir } = setup();
+    const captured: string[] = [];
+    const errors: string[] = [];
+    const exploding = {
+      ...claudeCodeConnector,
+      id: "exploding",
+      watchGlobs: () => {
+        throw new Error("unreadable directory");
+      },
+    };
+
+    writeFileSync(join(projectsDir, "cccccccc-0000-0000-0000-000000000000.jsonl"), REC1 + "\n");
+
+    const watcher = new FileWatcher({
+      connectors: [exploding, claudeCodeConnector],
+      home,
+      queue,
+      onChange: (_c, text) => {
+        captured.push(text);
+      },
+      onError: (connector, err) => {
+        errors.push(`${connector.id}:${String(err)}`);
+      },
+    });
+
+    await watcher.tickOnce();
+    // The healthy connector still captured, and the failure is attributed to the connector whose
+    // pattern was being globbed — not to whichever one happened to be next.
+    expect(captured).toHaveLength(1);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain("exploding:");
+
+    queue.close();
+  });
+
+  /**
+   * F-16.3-2, the error path of the fix itself. `onError` is wired to a `queue.sqlite` write, which
+   * can throw (locked/full database, handle closed during shutdown). An unguarded reporter would
+   * reject `tickOnce` → `runLoop` → `Promise.race([watcherLoop, syncLoop])`, restoring the exact
+   * engine-wide unwind this slice removed — and reachable only when a connector is ALREADY failing,
+   * i.e. precisely when the scorecard is supposed to start working.
+   *
+   * The SIBLING assertion is what makes this a real pin rather than a "does not reject" tautology.
+   */
+  it("survives an onError that throws, and still captures the sibling connector", async () => {
+    const { home, queue, projectsDir } = setup();
+    const captured: string[] = [];
+    const exploding = {
+      ...geminiCliConnector,
+      id: "exploding",
+      watchGlobs: () => {
+        throw new Error("unreadable directory");
+      },
+    };
+    const watcher = new FileWatcher({
+      connectors: [exploding, claudeCodeConnector],
+      home,
+      queue,
+      onChange: (_c, text) => {
+        captured.push(text);
+      },
+      onError: () => {
+        throw new Error("queue.sqlite is locked");
+      },
+    });
+
+    const file = join(projectsDir, "cccccccc-0000-0000-0000-000000000000.jsonl");
+    writeFileSync(file, REC1 + "\n", "utf8");
+
+    await expect(watcher.tickOnce()).resolves.toBeUndefined();
+    // The healthy connector captured despite the reporter blowing up on its neighbour.
+    expect(captured).toHaveLength(1);
+
+    queue.close();
+  });
+
   it("discovers a second session file created mid-run", async () => {
     const { home, queue, projectsDir } = setup();
     const captured: string[] = [];

@@ -4,6 +4,7 @@ import { QUEUE_PATH, type Credentials } from "./identity.js";
 import { QueueStore, type SyncOutcome } from "./queue/queue-store.js";
 import { connectors as defaultConnectors } from "./connectors/connector.js";
 import type { Connector, PollContext } from "./connectors/connector.js";
+import { mapConnectorInfo, toMachineConnectorReport } from "./connectors/connector-info.js";
 import { FileWatcher } from "./watcher/file-watcher.js";
 import { syncOnce, runSyncLoop } from "./sync/sync-worker.js";
 import { captureGitCommits } from "./discovery/git-capture.js";
@@ -61,7 +62,16 @@ export interface CaptureEngineOptions {
   queuePath?: string;
   home?: string;
   intervalMs?: number;
+  /** What to CAPTURE — the enabled + approved subset. */
   connectors?: Connector[];
+  /**
+   * M16 16.3: what to REPORT — the FULL registry, including connectors that are disabled or
+   * withheld pending approval. The distinction is the whole point of the scorecard: a connector
+   * that is deliberately off must appear as `disabled`, not vanish (which is indistinguishable from
+   * broken). Defaults to `connectors`, deliberately NOT to `defaultConnectors` — a test that
+   * injects two connectors must not suddenly report eight.
+   */
+  registry?: Connector[];
   logger?: (msg: string) => void;
   /** M9: collector version (read from package.json by cli.ts) — enables heartbeats. */
   collectorVersion?: string;
@@ -73,6 +83,32 @@ export interface CaptureEngineOptions {
   onSyncSuccess?: (at: string) => void;
   /** M14 14.7: push-receiver port override (default `DEFAULT_PUSH_PORT`). Tests pass 0 for ephemeral. */
   pushPort?: number;
+  /**
+   * M16 16.3: resolve the DECLARED state of every registry connector for one report.
+   *
+   * The engine cannot derive this itself. It receives the already-FILTERED capture set, and
+   * "absent from that set" is ambiguous — the connector might be disabled OR withheld pending
+   * §10.4 approval, which are different health states with different remedies. Guessing would
+   * fabricate a fact, which is the Risk 2 failure this whole slice exists to avoid. So the caller,
+   * which holds the config and approvals, supplies it.
+   *
+   * BATCHED (registry → Map) RATHER THAN PER CONNECTOR, so the caller reads `connectors.json` and
+   * `approvals.json` ONCE per report instead of once per connector per report — with 8 built-ins
+   * and a 30 s heartbeat the per-connector shape was 16 synchronous file reads every 30 s, forever.
+   * It is still re-read on every report, deliberately: a connector disabled mid-session must show
+   * as `disabled` on the next heartbeat rather than at the next restart.
+   *
+   * The DEFAULT is honest precisely because `registry` defaults to `connectors`: when nothing was
+   * filtered, every registry connector IS in the capture set, so `enabled: true` is a fact rather
+   * than an assumption. A caller that passes a WIDER `registry` must pass this too.
+   */
+  connectorStates?: (registry: Connector[]) => Map<string, ConnectorDeclaredState>;
+}
+
+/** The declaration half of one connector's capture health, as the caller resolves it. */
+export interface ConnectorDeclaredState {
+  enabled: boolean;
+  approval: "approved" | "needs-approval";
 }
 
 /**
@@ -143,6 +179,10 @@ export async function pollLoop(
     home: string;
     queue: QueueStore;
     log: (msg: string) => void;
+    /** M16 16.3: report a poll failure so it renders `erroring` instead of vanishing. */
+    onError?: (connector: Connector, err: unknown) => void;
+    /** M16 16.3 (PR #77): a clean sweep clears the fault, so a resolved error stops reading red. */
+    onSuccess?: (connector: Connector) => void;
   },
   signal: AbortSignal,
 ): Promise<void> {
@@ -172,8 +212,23 @@ export async function pollLoop(
           );
         }
       }
-    } catch {
-      // Best-effort by contract: never let a poll/store error stop session capture.
+      // A full sweep with no throw clears the connector's fault — see `clearConnectorError`.
+      opts.onSuccess?.(opts.connector);
+    } catch (err) {
+      // Best-effort by contract: never let a poll/store error stop session capture. M16 16.3 —
+      // but it is no longer INVISIBLE: a best-effort/swallow path is the worst place to lose a
+      // signal, precisely because it is designed not to complain (the M15 15.3 lesson).
+      //
+      // The REPORTER is guarded too, for the same reason `FileWatcher.report` is: `onError` writes
+      // to `queue.sqlite`, and a throw here would reject this loop. That is quieter than the
+      // watcher's equivalent — `pollLoops` are absorbed by `Promise.allSettled`, so the engine
+      // survives — which makes it WORSE to diagnose: this connector's polling stops forever while
+      // the machine still reports `online` and the connector renders `idle` rather than `erroring`.
+      try {
+        opts.onError?.(opts.connector, err);
+      } catch {
+        /* an error reporter that throws must not become the outage it was reporting */
+      }
     }
     await abortableDelay(poll.intervalMs, signal);
   }
@@ -184,12 +239,54 @@ export async function runCaptureEngine(opts: CaptureEngineOptions): Promise<void
   const queue = new QueueStore(opts.queuePath ?? QUEUE_PATH);
   const home = opts.home ?? homedir();
   const connectors = opts.connectors ?? defaultConnectors;
+  // What to REPORT vs what to CAPTURE — see `registry` in the options. Defaults to `connectors`.
+  const registry = opts.registry ?? connectors;
+  const captureIds = new Set(connectors.map((c) => c.id));
+  const connectorStates =
+    opts.connectorStates ??
+    ((reg: Connector[]) =>
+      new Map(
+        reg.map((c) => [c.id, { enabled: captureIds.has(c.id), approval: "approved" as const }]),
+      ));
 
   // Boot recovery: re-send anything a crash left mid-flight.
   queue.recoverInflight();
 
+  /**
+   * M16 16.3: the DECLARED inventory for the heartbeat. Built fresh on EVERY send (it is a thunk)
+   * because `queue.connectorErrors()` changes as capture fails — a snapshot taken at construction
+   * would report the state the collector had at boot, forever.
+   */
+  const connectorReports = () => {
+    const errors = queue.connectorErrors();
+    // Resolved ONCE for the whole registry — see `connectorStates`. A connector missing from the
+    // map is reported as not-capturing rather than silently defaulted to enabled: the map comes
+    // from the same registry it is keyed on, so an absence is a caller bug, and guessing "enabled"
+    // would put a healthy-looking row on the scorecard (Risk 2).
+    const states = connectorStates(registry);
+    return registry.map((c) => {
+      const state = states.get(c.id) ?? { enabled: false, approval: "approved" as const };
+      return toMachineConnectorReport(
+        mapConnectorInfo(c, state.enabled, home, state.approval),
+        errors.get(c.id),
+        // The archive boundary: home-relativize any path in the permissions or the error message.
+        home,
+      );
+    });
+  };
+
+  /** Record a connector failure locally so it can ride the next heartbeat and render `erroring`. */
+  const recordConnectorError = (connector: Connector, err: unknown): void => {
+    queue.recordConnectorError(connector.id, String(err), new Date().toISOString());
+    log(`${connector.id}: capture error — ${String(err)}`);
+  };
+
   const onChange = (connector: Connector, text: string): void => {
     const parsed = connector.parse(text);
+    // A SUCCESSFUL capture clears the connector's fault (PR #77 review). Placed AFTER `parse`, which
+    // is the step that actually throws, so a still-broken connector does not clear itself by
+    // reaching this line. See `clearConnectorError` for why a fault that cannot clear is permanent.
+    queue.clearConnectorError(connector.id);
     for (const r of parsed.rawRecords) {
       queue.enqueue("raw", `${r.sourceConnector}:${r.id}`, toRawRecordPayload(r));
     }
@@ -198,9 +295,19 @@ export async function runCaptureEngine(opts: CaptureEngineOptions): Promise<void
     }
   };
 
-  const watcher = new FileWatcher({ connectors, home, queue, onChange });
+  // F-16.3-2: a per-file failure is now REPORTED rather than unwinding the whole engine.
+  const watcher = new FileWatcher({
+    connectors,
+    home,
+    queue,
+    onChange,
+    onError: recordConnectorError,
+  });
 
   log(`watching ${connectors.length} connector(s) under ${home}; syncing to ${opts.creds.url}`);
+  if (registry.length !== connectors.length) {
+    log(`reporting ${registry.length} connector(s) to the archive (including disabled/withheld)`);
+  }
 
   try {
     // Run watcher + sync loops concurrently. A fatal 401 ("stop") or SIGINT ends
@@ -219,6 +326,12 @@ export async function runCaptureEngine(opts: CaptureEngineOptions): Promise<void
         // M9: pass the version through so the sync loop sends heartbeats (best-effort).
         collectorVersion: opts.collectorVersion,
         heartbeatIntervalMs: opts.heartbeatIntervalMs,
+        // M16 16.3 — the DECLARED inventory rides the existing heartbeat (D-16.3-2).
+        connectorReports,
+        // D-16.3-6: the send failure stays swallowed, but is no longer SILENT. A newer collector
+        // against an older archive is the case this exists for.
+        onHeartbeatError: (e) =>
+          log(`heartbeat failed (capture health not reported): ${String(e)}`),
         onSync: opts.onSyncSuccess,
         onStop: () => {
           log(
@@ -254,7 +367,19 @@ export async function runCaptureEngine(opts: CaptureEngineOptions): Promise<void
     // this is an empty array and the behavior is byte-identical to before.
     const pollLoops = connectors
       .filter((c) => c.poll)
-      .map((c) => pollLoop({ connector: c, home, queue, log }, internal.signal));
+      .map((c) =>
+        pollLoop(
+          {
+            connector: c,
+            home,
+            queue,
+            log,
+            onError: recordConnectorError,
+            onSuccess: (connector) => queue.clearConnectorError(connector.id),
+          },
+          internal.signal,
+        ),
+      );
 
     // M14 14.7: a single best-effort push receiver for the enabled+approved push connectors
     // (Claude-live). Like the git/poll loops it is NOT part of the race (it resolves only on

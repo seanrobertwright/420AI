@@ -1,6 +1,7 @@
 import type { EventType, NormalizedEvent, RawSourceRecord } from "./events.js";
 import type { NormalizedTokens } from "./tokens.js";
 import type { CostResult } from "./cost.js";
+import type { MachineConnectorReport } from "./capture-health.js";
 
 /**
  * Ingest wire contract (PRD §8.3) — the payloads the collector POSTs to the
@@ -74,6 +75,17 @@ export interface HeartbeatRequest {
   queueInflight: number; // QueueStore.stats().inflight
   collectorVersion: string; // from the collector package.json, read at the entrypoint
   consecutiveSyncFailures?: number; // M12 12.6 archive.unreachable signal (optional → back-compat with older collectors)
+  /**
+   * M16 16.3 — the DECLARED connector inventory (§7 P0.1, D-16.3-2). Optional → back-compat with
+   * older collectors, the same shape `consecutiveSyncFailures` used in 12.6.
+   *
+   * `undefined` AND `[]` MEAN DIFFERENT THINGS AND MUST NOT BE COLLAPSED. `undefined` is "this
+   * collector does not report" (pre-16.3) and leaves the archive's existing rows alone; `[]` is
+   * "this collector reports zero connectors" and prunes them. Collapsing the two would let a
+   * collector downgrade silently wipe the inventory, or let an older collector's silence be read as
+   * "no connectors" — which the scorecard would then render as an honest zero.
+   */
+  connectors?: MachineConnectorReport[];
 }
 
 export interface HeartbeatResponse {

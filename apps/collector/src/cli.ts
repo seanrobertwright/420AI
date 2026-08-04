@@ -32,6 +32,8 @@ import {
   QUEUE_PATH,
   credentialsPathFor,
   queuePathFor,
+  connectorConfigPathFor,
+  connectorApprovalsPathFor,
   loadCredentials,
   saveCredentials,
   requireCredentials,
@@ -40,6 +42,19 @@ import {
 } from "./identity.js";
 import { QueueStore, type QueueStats, type SyncOutcome } from "./queue/queue-store.js";
 import { runCaptureEngine } from "./capture-engine.js";
+import { resolveConnectorStates } from "./connectors/connector-info.js";
+import {
+  loadConnectorConfig as loadConnectorConfigDefault,
+  filterConnectors,
+  type ConnectorConfig,
+} from "./connectors/connector-config.js";
+import {
+  loadConnectorApprovals as loadConnectorApprovalsDefault,
+  saveConnectorApprovals as saveConnectorApprovalsDefault,
+  seedMissingApprovals,
+  filterByApproval,
+  type ConnectorApprovals,
+} from "./connectors/connector-approvals.js";
 import { syncOnce } from "./sync/sync-worker.js";
 import {
   toEventPayload,
@@ -183,6 +198,15 @@ export async function runWatch(opts: {
   heartbeatIntervalMs?: number;
   /** M14 14.7: push-receiver port override (default `DEFAULT_PUSH_PORT`). */
   pushPort?: number;
+  /**
+   * M16 16.3 (F-16.3-1): seams mirroring `ServeDeps`, so the enablement/approval filtering below is
+   * actually TESTABLE. `runWatch` had no engine seam at all, which is exactly how the missing
+   * filters survived unnoticed — a fix that ships unpinned is silently undone by the next refactor.
+   */
+  runEngine?: typeof runCaptureEngine;
+  loadConnectorConfig?: () => ConnectorConfig;
+  loadConnectorApprovals?: () => ConnectorApprovals;
+  saveConnectorApprovals?: (cfg: ConnectorApprovals) => void;
 }): Promise<void> {
   const creds = resolveCreds(opts);
   const home = opts.home ?? homedir();
@@ -201,7 +225,46 @@ export async function runWatch(opts: {
   // while `serve` did both. Surface any dropped (invalid/colliding) defs through the logger.
   const { connectors, dropped } = loadRegistry(home, { catalog: cachedCatalog?.payload });
   for (const d of dropped) opts.logger?.(`custom connector "${d.id}" dropped: ${d.reason}`);
-  await runCaptureEngine({
+
+  /**
+   * F-16.3-1 (M16 16.3) — APPLY ENABLEMENT AND APPROVAL, mirroring `serve.ts` exactly.
+   *
+   * Until this fix `collector watch` handed the engine the WHOLE registry: a connector the operator
+   * disabled in the desktop UI kept capturing, and a connector WITHHELD pending §10.4 re-approval
+   * captured anyway. That is a real behaviour change and it reduces capture for anyone relying on
+   * the old behaviour — deliberately. `watch` is the PRIMARY capture path (the Windows service runs
+   * `watch --home …`), so before this, D-M16-1's fixed observation set was not actually in force
+   * where it matters most, and every §5.1 figure scoped to that set had the wrong denominator.
+   *
+   * Order copied from `serve.ts`: seed-on-first-sight (establishing the baseline so a LATER drift
+   * is detectable), then both filters composed. Default-on is preserved by both — an absent id
+   * means enabled, an unrecorded connector seeds as approved.
+   *
+   * BOTH FILES ARE READ FROM `home`, NOT FROM `homedir()` (PR #77 review). The defaults bake in
+   * `homedir()` at import time, so under the Windows service — `watch --home C:\Users\me` as
+   * LocalSystem — they resolved to `…\config\systemprofile\.420ai\` and found nothing, silently
+   * restoring the pre-fix behaviour on the ONE path this fix exists for. `--home` moves every
+   * collector-home artifact together or it moves none of them honestly (see `identity.ts`).
+   */
+  const loadCfg =
+    opts.loadConnectorConfig ?? (() => loadConnectorConfigDefault(connectorConfigPathFor(home)));
+  const loadApprovals =
+    opts.loadConnectorApprovals ??
+    (() => loadConnectorApprovalsDefault(connectorApprovalsPathFor(home)));
+  const saveApprovals =
+    opts.saveConnectorApprovals ??
+    ((cfg: ConnectorApprovals) =>
+      saveConnectorApprovalsDefault(cfg, connectorApprovalsPathFor(home)));
+  const seeded = seedMissingApprovals(connectors, loadApprovals(), home);
+  if (seeded.changed) saveApprovals(seeded.approvals);
+  const enabled = filterByApproval(filterConnectors(connectors, loadCfg()), loadApprovals(), home);
+  if (enabled.length !== connectors.length) {
+    opts.logger?.(
+      `${connectors.length - enabled.length} connector(s) not capturing (disabled or awaiting approval)`,
+    );
+  }
+
+  await (opts.runEngine ?? runCaptureEngine)({
     creds,
     signal: opts.signal,
     intervalMs: opts.intervalMs,
@@ -213,7 +276,14 @@ export async function runWatch(opts: {
     collectorVersion: opts.collectorVersion,
     heartbeatIntervalMs: opts.heartbeatIntervalMs,
     pushPort: opts.pushPort,
-    connectors,
+    // What to CAPTURE — the filtered subset (F-16.3-1).
+    connectors: enabled,
+    // What to REPORT — the FULL registry, so a disabled or withheld connector renders as such on
+    // the capture health scorecard instead of vanishing (which reads identically to broken).
+    registry: connectors,
+    // Config + approvals are read ONCE per report, not once per connector per report; the mapping
+    // itself is shared with `serve.ts` so the service and desktop views cannot drift.
+    connectorStates: (reg) => resolveConnectorStates(reg, loadCfg(), loadApprovals(), home),
   });
 }
 

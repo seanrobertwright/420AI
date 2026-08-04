@@ -120,7 +120,7 @@ this plan's; this milestone builds P0 in full and two of P1.
 | **16.0** | Truth + research scaffold    | S–M  | Renumber the SaaS milestone M16 → **M20** across 38 live sites (D-16.0-1); create `.agents/plans/m16-dogfood-instrumentation.md` (this file) and the `.agents/research/` artifact set required by research plan §3; write `docs/guide/data-boundary.md` (§7 P0.4 / Phase 0 item 7); run and log a **timed clean-room deploy** against the §5.2 < 30 min target. **No schema change; no behavioural code change** beyond F1/F2 (see below). |
 | **16.1** | Outcome label model + API    | M    | The §7 P0.2 data model: a separately auditable label table linked to a session — **never** a mutation of `raw_source_records` or `events` (CLAUDE.md "raw sacred / events disposable"). Author, timestamp, edit history, optional confidence. The six fields from research plan §4.3 (`task_type`, `intent`, `outcome`, `quality_rating`, `primary_friction`, `follow_up_commit_or_pr`). CRUD + export + delete routes. |
 | **16.2** | Label capture + review       | M    | The 15-second surface (§4.3: _offer skip, never nag, always editable, neutral wording_) in the desktop tray, plus a dashboard review/edit table. Folds in §7 P1.5 decision links.                                                                                                                                                                     |
-| **16.3** | Capture health scorecard     | M    | §7 P0.1. Builds on the existing `routes/heartbeat.ts` + `routes/monitor.ts` + dashboard monitor surfaces. **Inherits D3** (windowed connector-failure-rate) — see the deferral table.                                                                                                                                                                 |
+| **16.3** | Capture health scorecard     | M    | §7 P0.1. Builds on the existing `routes/heartbeat.ts` + `routes/monitor.ts` + dashboard monitor surfaces. ~~**Inherits D3**~~ — **stale, see the D3 erratum**: the windowed connector-failure-rate shipped in M13 13.5, so 16.3 inherits nothing and neither rebuilds nor re-derives it — the windowed alert stays where 13.5 put it.                                                                                                                                                                 |
 | **16.4** | Data-quality audit report    | M–L  | §7 P0.3, as a report artifact in the M7 versioned-artifact shape rather than a new surface. Powers the §5.1 metric table (capture coverage, project attribution, token completeness, parse success, duplicate rate, sync freshness, recoverability) and the §4.4 ten-session monthly reconciliation. Folds in §7 P1.7 git outcome confidence.        |
 
 **Ordering rationale.** 16.0 first because the renumber gets more expensive with every document
@@ -209,8 +209,22 @@ Four threads were open at M15 close. Each is dispositioned here rather than carr
 | ------ | ---------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **D1** | **Cross-connector dedup** — `claude-live` vs `claude-export` produce two sessions for one conversation (`extension-spike.md:122`) | **Avoided by configuration, deferred as work.** D-M16-1 does not run the extension during Phase 1, so the gap cannot contaminate the duplicate-rate metric. The dedup itself stays deferred to the M14 connector-ecosystem thread (→ M19).                  |
 | **D2** | **`discoverRoots`** refinement                                                                                                 | **Deferred.** No research metric depends on it; project attribution is measured (§5.1, ≥90%) and if it misses that target the failure earns a fix under the scope-change rule with evidence attached.                                                       |
-| **D3** | **Windowed connector-failure-rate**                                                                                            | **FOLDS INTO 16.3.** It is precisely the "distinguish no-work from broken" signal the capture health scorecard exists to provide — a point-in-time last-error is not enough to tell a flaky connector from a dead one.                                     |
+| **D3** | **Windowed connector-failure-rate**                                                                                            | ~~**FOLDS INTO 16.3.**~~ **ERRATUM (D-16.3-1, 2026-08-04): this row was STALE when written — D3 shipped in M13 13.5 and 16.3 inherits nothing.** See the erratum note below the table.                                                                     |
 | **D4** | **Antigravity connector**                                                                                                      | **Deferred.** D-M16-1 does not enable it, and research plan §2 places connector breadth for tools no active participant uses explicitly out of scope.                                                                                                     |
+
+> **ERRATUM — D3 (recorded 2026-08-04 during 16.3 planning; D-16.3-1).** The D3 row above, and the
+> "**Inherits D3**" note on the 16.3 roadmap row, were both **wrong when written**. The windowed
+> connector-failure-rate did not need building: it **shipped in M13 13.5**. `CONNECTOR_RATE_ALERT` and
+> `deriveConnectorFailureRateAlerts` (`packages/shared/src/alerts.ts`) and `connectorHealthWindowed`
+> (`packages/db/src/repositories/projections.ts`) exist and are wired into `routes/monitor.ts`;
+> `SUMMARY.md` records it.
+>
+> The entries are corrected here rather than rewritten, because the mistake is instructive: it is a
+> deferral that had already been resolved elsewhere and was carried forward on the strength of the
+> list rather than the code. 16.3 therefore inherits **nothing** here and deliberately does **not**
+> rebuild it. The windowed alert stays in the monitor snapshot + Alerts panel where 13.5 put it, and
+> the capture health panel neither reads nor re-derives it — two independently-derived failure rates
+> on one screen is exactly the "which number do I believe?" problem this milestone exists to remove.
 
 ---
 

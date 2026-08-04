@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import type { HeartbeatRequest, HeartbeatResponse } from "@420ai/shared";
 import { SERVICE_ROLE } from "@420ai/shared";
-import { recordHeartbeat, getMachineOrgId, withOrg } from "@420ai/db";
+import { recordHeartbeat, getMachineOrgId, replaceMachineConnectors, withOrg } from "@420ai/db";
 import { heartbeatBodySchema } from "../schemas.js";
 
 /**
@@ -23,14 +23,30 @@ export default async function heartbeatRoutes(app: FastifyInstance): Promise<voi
       if (!orgId) {
         return reply.code(401).send({ error: "machine has no organization" });
       }
-      await withOrg(app.db, orgId, SERVICE_ROLE, (tx) =>
-        recordHeartbeat(tx, request.machineId, {
+      const reports = request.body.connectors;
+      await withOrg(app.db, orgId, SERVICE_ROLE, async (tx) => {
+        await recordHeartbeat(tx, request.machineId, {
           queuePending: request.body.queuePending,
           queueInflight: request.body.queueInflight,
           collectorVersion: request.body.collectorVersion,
           consecutiveSyncFailures: request.body.consecutiveSyncFailures,
-        }),
-      );
+        });
+        // M16 16.3 — the DECLARED half of capture health, persisted in the SAME transaction on
+        // purpose: a heartbeat that records liveness but loses the inventory is a split state the
+        // scorecard would then misreport as an honest zero.
+        //
+        // `undefined` vs `[]` IS LOAD-BEARING (D-16.3-2). `undefined` means a pre-16.3 collector
+        // that does not report at all, and its existing rows must be left alone; `[]` means a
+        // collector that reports zero connectors, and prunes. Collapsing them would let a collector
+        // downgrade silently wipe the inventory.
+        //
+        // SERVICE_ROLE is correct and unchanged: this is a machine-authed write with no membership
+        // role, exactly like `recordHeartbeat`. It also satisfies the 0016 restrictive INSERT
+        // policy (`<> 'viewer'`).
+        if (reports !== undefined) {
+          await replaceMachineConnectors(tx, orgId, request.machineId, reports, new Date());
+        }
+      });
       return reply.code(200).send({ ok: true } satisfies HeartbeatResponse);
     },
   );

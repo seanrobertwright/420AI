@@ -10,6 +10,7 @@ export * from "./discovery.js";
 export * from "./projections.js";
 export * from "./report-metrics.js";
 export * from "./monitor.js";
+export * from "./capture-health.js";
 export * from "./roles.js";
 export * from "./audit.js";
 export * from "./outcome-labels.js";

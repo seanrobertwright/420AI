@@ -597,6 +597,9 @@ describe.skipIf(!TEST_URL)("ingest API (HTTP e2e via inject)", () => {
     const conns = health.json() as { sourceConnector: string; lastEventAt: string }[];
     const claude = conns.find((c) => c.sourceConnector === "claude-code");
     expect(claude!.lastEventAt).toContain("2026-06-14");
+    // M16 16.3 regression pin: `max(ts)` bypasses the `mode:"string"` parser and used to reach the
+    // wire as Postgres text (`2026-06-14 11:59:00+00`). ISO must round-trip exactly.
+    expect(claude!.lastEventAt).toBe(new Date(claude!.lastEventAt).toISOString());
 
     const git = await app.inject({
       method: "GET",

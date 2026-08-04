@@ -1277,3 +1277,81 @@ the URL and call `POST /v1/auth/password-reset/confirm` directly.
 | `select ... from audit_events` returns 0 rows               | You are connected as `420ai_app`. Use `DATABASE_URL` (the owner). There is no application read path at all.                                                                                 |
 | Renaming the org returns 403 for an admin                   | Expected: rename is **owner**-only. `admin` is the rung that manages people; renaming has no undo surface.                                                                                  |
 | `Reset 2FA` returns 403                                     | The target outranks you. An `admin` cannot strip an `owner`'s second factor — that is the escalation the route was held back for. Equal rank IS allowed, so a co-owner can help a co-owner. |
+
+## 16.3 — Reading the capture health scorecard
+
+`/monitor` → **Capture health** answers one question: _is a quiet week a fact about the week, or an
+unnoticed outage?_ Before this slice the archive could not tell you. Every signal it held was derived
+from **observed events**, and a connector that is enabled but **broken** emits nothing — so it
+produced no row at all, byte-identical to a connector that is **disabled** and byte-identical to a
+healthy connector on a day when no work happened.
+
+The panel joins what the collector **declares** (reported on the heartbeat, ≤30 s) against what the
+archive **observed**, and names the result. Two of the states mean _"I don't know"_, deliberately: a
+scorecard that cannot say so reports a healthy-looking zero, which turns an outage into evidence.
+
+| State              | Verdict       | What it means                                                                              | What to do                                                                   |
+| ------------------ | ------------- | ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
+| **Capturing**      | capturing     | Events arrived within the last 24 h.                                                       | Nothing.                                                                     |
+| **Idle**           | capturing     | No recent events, and nothing suggests breakage. **No work happened.**                     | Nothing. This is the honest zero.                                            |
+| **Error**          | broken        | The collector reported an error at or after the last successful capture.                   | Read the message (expand **Details**). Usually a permission or path problem. |
+| **Silent**         | broken        | A live-capture connector produced nothing while a **sibling on the same machine** did.     | Suspicious, not certain. Check that the tool was actually used.              |
+| **Needs approval** | broken        | Its capture surface changed and it is **withheld** from capture pending §10.4 re-approval. | Approve it in the desktop app's Connectors panel.                            |
+| **Disabled**       | not-capturing | Turned off in `~/.420ai/connectors.json` or the desktop UI. No capture is expected.        | Nothing, if that was intended.                                               |
+| **Not reported**   | unknown       | Events exist but no machine declares this connector — the collector predates 16.3.         | Upgrade the collector. **This never means "disabled".**                      |
+| **Unknown**        | unknown       | The machine has not checked in recently, so its declaration is stale.                      | Check the machine is online (the Collectors table above).                    |
+
+A **batch** connector (`claude-export`, `chatgpt-export`, `gemini-export`) is expected to be quiet for
+weeks — it captures only when you drop an export file in. Its silence is always `Idle`, never
+`Silent`. Only `streaming`/`near-real-time` connectors can be `Silent`, so the panel does not sit
+permanently red and train you to ignore it.
+
+An unreachable archive renders **"Could not reach the archive"**, never an empty table. A
+plausible-looking empty scorecard would be a lie about the one thing this panel exists to tell the
+truth about.
+
+### Behaviour change: `collector watch` now honours enablement and approvals (F-16.3-1)
+
+**`collector watch` previously ignored both.** A connector you disabled in the desktop UI kept
+capturing, and one withheld pending capture-surface approval captured anyway. Since `watch` is the
+primary capture path — the Windows service runs `watch --home <you>` — this meant per-connector
+settings were not actually in force where it matters most.
+
+They are now applied, mirroring `serve` exactly (seed-on-first-sight, then enablement **and**
+approval filters, both default-on). **If you have been relying on the old behaviour, capture will
+reduce.** Check `/monitor` → Capture health for anything unexpectedly `Disabled` or
+`Needs approval`, and re-enable or approve it.
+
+### Behaviour change: one connector's failure no longer stops the others (F-16.3-2)
+
+A throw while reading a session file used to reject the watcher loop, which unwound the whole capture
+engine — one bad file stopped capture for **every** connector, and the only symptom was the heartbeat
+stopping, which looks exactly like a closed laptop. Failures are now caught **per file**, reported,
+and the loop continues.
+
+The trade is deliberate and worth knowing: a permanently failing file now retries forever instead of
+crashing loudly. That is acceptable **because** it is now visible — it renders as `Error` with the
+message, which is strictly more diagnosable than a dead process.
+
+### Deploy order: archive BEFORE collector
+
+Roll the archive out first. A 16.3 collector reports a `connectors` array that a pre-16.3 server does
+not declare; Fastify's ajv runs with `removeAdditional: true`, so the field is **silently stripped**
+and the heartbeat still returns 200. Nothing breaks — the machine stays online — but capture health
+is silently absent, and every connector renders **Not reported**. If a heartbeat fails for any other
+reason the collector now logs `heartbeat failed (capture health not reported): …` rather than
+swallowing it in silence.
+
+Rolling the **schema** back below migration 0025 while running a 16.3 server is the loud failure:
+`POST /v1/heartbeat` 500s for any reporting collector (the inventory write shares the heartbeat's
+transaction on purpose), taking machine liveness down with it. Roll the code back with the schema.
+
+| Symptom                                               | Cause and fix                                                                                                                                                             |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Every connector shows **Not reported**                | The collector predates 16.3, or the archive predates it and is stripping the field. Upgrade the archive first, then the collector.                                        |
+| Every connector shows **Unknown**                     | The machine is offline. Its declaration is stale, so nothing below it can be trusted — check the Collectors table.                                                        |
+| A connector you use daily shows **Disabled**          | F-16.3-1: `watch` now honours `~/.420ai/connectors.json`, which it previously ignored. Re-enable it there or in the desktop app.                                          |
+| A connector shows **Needs approval** after an upgrade | Its capture surface changed (12.7b §10.4). Approve it in the desktop app's Connectors panel; it is withheld from capture until you do.                                    |
+| The panel says "Could not reach the archive"          | Ingest is down or `INGEST_URL` is wrong. This is deliberately NOT rendered as an empty scorecard.                                                                         |
+| `POST /v1/heartbeat` 500s for every REPORTING machine | The schema is older than migration 0025 while the server is 16.3+. Run `npm run db:migrate`.                                                                              |
+| An error message contains a file path                 | Expected and intended — the path is usually the whole diagnostic. See `docs/guide/data-boundary.md` for what a heartbeat carries. `watchGlobs` are deliberately NOT sent. |

@@ -30,6 +30,13 @@ export default defineConfig({
       "@420ai/shared/roles": fileURLToPath(
         new URL("./packages/shared/src/roles.ts", import.meta.url),
       ),
+      // M16 16.3 — the capture health scorecard's types + pure derivation. Imported by
+      // `apps/dashboard/src/lib/capture-health-display.ts` (a `src/lib/*.test.ts` DOES exercise
+      // this one) and by the panel island, which must not pull the root barrel into the browser
+      // bundle: it re-exports `catalog-signing` and eight parsers.
+      "@420ai/shared/capture-health": fileURLToPath(
+        new URL("./packages/shared/src/capture-health.ts", import.meta.url),
+      ),
       "@420ai/shared": fileURLToPath(new URL("./packages/shared/src/index.ts", import.meta.url)),
       "@420ai/db": fileURLToPath(new URL("./packages/db/src/index.ts", import.meta.url)),
       // The dashboard uses the `@/*` → `apps/dashboard/src/*` path alias (its tsconfig

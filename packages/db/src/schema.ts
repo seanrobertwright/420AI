@@ -28,6 +28,8 @@ import type {
   CostResult,
   ModelPricing,
   ConnectorCatalogPayload,
+  ConnectorCatalogLiveness,
+  ConnectorInfo,
 } from "@420ai/shared";
 
 /**
@@ -817,6 +819,87 @@ export const machineHeartbeats = pgTable(
   (t) => [
     index("machine_heartbeats_by_machine_ts").on(t.machineId, t.ts),
     index("machine_heartbeats_by_org").on(t.orgId),
+  ],
+);
+
+/**
+ * M16 16.3 — the DECLARED half of capture health (research plan §7 P0.1).
+ *
+ * The latest per-(machine, connector) inventory the collector reports on its heartbeat. It exists
+ * because every capture-health signal the archive held before this slice was derived from OBSERVED
+ * events, and a connector that is enabled-but-BROKEN emits nothing — producing no row at all,
+ * byte-identical to a connector that is disabled and to a healthy one on a quiet day. Joining this
+ * declaration against `events` is what lets the scorecard answer P0.1's actual question.
+ *
+ * NOT A HISTORY. One row per (machine, connector), upserted and pruned on every heartbeat
+ * (`replaceMachineConnectors`) — the collector is the source of truth for `error_count` and
+ * `last_error_*` (D-16.3-7) and the server never accumulates its own, because two counters would
+ * diverge and the operator would have no way to know which to believe. Losing the whole table is
+ * therefore mild: the next heartbeat (≤30 s) rebuilds it.
+ *
+ * NO `watch_globs` COLUMN, DELIBERATELY (D-16.3-3). `ConnectorInfo` carries them, but they are
+ * absolute paths under the operator's home, so persisting them would write their username and
+ * directory layout into a database a design partner is later asked to trust (§7 P0.4).
+ * `required_permissions` is the human-readable capture scope built for exactly that review and IS
+ * stored. The exclusion is enforced at the type level in `@420ai/shared` and pinned by a test.
+ *
+ * TIMESTAMPTZ MODE: `last_error_at` / `reported_at` are PLAIN (`mode` unset ⇒ JS `Date`), matching
+ * `machines`. That is deliberate — the repository selects them directly and never aggregates them,
+ * so `machineStatuses`'s `.toISOString()` mechanism applies. The `mode:"string"`-aggregate hazard
+ * (`max(events.ts)` → Postgres text) is a DIFFERENT mechanism and applies to the event-side
+ * aggregates that sit ten lines away in this slice's own repository file. Do not conflate them.
+ *
+ * STRICT TENANT TABLE (`STRICT_TABLES` in `rls.int.test.ts`): the 0015 org policy plus the 0016
+ * RESTRICTIVE role-write backstop. It is none of the other four classifications — not BOOTSTRAP
+ * (nothing reads it to DISCOVER an org; the heartbeat route already resolved the org from
+ * `machines`), not ROLE-GATED-BOOTSTRAP, not APPEND_ONLY (it has a real per-tenant read path and
+ * the prune step must DELETE), not NO_RLS (it carries `org_id` and tenant content).
+ */
+export const machineConnectors = pgTable(
+  "machine_connectors",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    // M15 15.1 tenancy (D-M15-1). Derived from `machines.org_id` by the heartbeat route.
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organizations.id),
+    machineId: uuid("machine_id")
+      .notNull()
+      .references(() => machines.id),
+    // Connector registry id (`claude-code`, `codex-cli`, …). Globally scoped like every other
+    // connector-supplied string, which is why the unique index below leads with `machine_id` — a
+    // uuid whose org is fixed by `machines.org_id` — and never with `connector_id` alone.
+    connectorId: text("connector_id").notNull(),
+    enabled: boolean("enabled").notNull(),
+    // "approved" | "needs-approval" (12.7b §10.4). `needs-approval` ⇒ WITHHELD from capture, which
+    // is a health state and not a footnote: it explains the connector's silence.
+    approval: text("approval").notNull().$type<ConnectorInfo["approval"]>(),
+    status: text("status").notNull().$type<ConnectorInfo["status"]>(),
+    captureMethod: text("capture_method").notNull(),
+    // "streaming" | "near-real-time" | "snapshot" | "batch" — gates the `silent` state (D-16.3-4).
+    liveness: text("liveness").notNull().$type<ConnectorCatalogLiveness>(),
+    tokens: text("tokens").notNull().$type<ConnectorInfo["tokens"]>(),
+    cost: text("cost").notNull().$type<ConnectorInfo["cost"]>(),
+    knownGaps: text("known_gaps")
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    requiredPermissions: text("required_permissions")
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    custom: boolean("custom").notNull().default(false),
+    // Collector-owned (D-16.3-7); overwritten wholesale on every report, never accumulated here.
+    lastErrorMessage: text("last_error_message"),
+    lastErrorAt: timestamp("last_error_at", { withTimezone: true }),
+    errorCount: integer("error_count").notNull().default(0),
+    reportedAt: timestamp("reported_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // The upsert's conflict target. ONE row per (machine, connector) — two machines in one org
+    // running the same connector are two rows, which is the truth the panel must show.
+    uniqueIndex("machine_connectors_machine_connector").on(t.machineId, t.connectorId),
+    index("machine_connectors_by_org").on(t.orgId),
   ],
 );
 

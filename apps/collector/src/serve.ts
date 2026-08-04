@@ -4,9 +4,15 @@ import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { isSea } from "node:sea";
 import { runCaptureEngine, type CaptureEngineOptions } from "./capture-engine.js";
-import { loadCredentials, QUEUE_PATH, type Credentials } from "./identity.js";
+import {
+  loadCredentials,
+  QUEUE_PATH,
+  connectorConfigPathFor,
+  connectorApprovalsPathFor,
+  type Credentials,
+} from "./identity.js";
 import { QueueStore, type QueueStats } from "./queue/queue-store.js";
-import { connectors as defaultConnectors, type Connector } from "./connectors/connector.js";
+import type { Connector } from "./connectors/connector.js";
 import { loadRegistry } from "./connectors/registry.js";
 import {
   fetchActiveConnectorCatalog,
@@ -24,15 +30,12 @@ import {
   loadConnectorApprovals as loadConnectorApprovalsDefault,
   saveConnectorApprovals as saveConnectorApprovalsDefault,
   seedMissingApprovals,
-  approvalStatus,
   approveConnector,
   filterByApproval,
   type ConnectorApprovals,
 } from "./connectors/connector-approvals.js";
-import type { ControlCommand, ControlEvent, ConnectorInfo } from "@420ai/shared";
-
-/** Built-in connector ids, computed once — `mapConnectorInfo` flags anything else as `custom`. */
-const BUILTIN_IDS = new Set(defaultConnectors.map((c) => c.id));
+import { mapConnectorInfo, resolveConnectorStates } from "./connectors/connector-info.js";
+import type { ControlCommand, ControlEvent } from "@420ai/shared";
 
 /**
  * The `serve` entrypoint (M11): the long-running stdio protocol server the Tauri
@@ -91,36 +94,6 @@ export interface ServeDeps {
   home?: string;
 }
 
-/**
- * Map a `Connector` (+ its resolved enablement + home) to the serializable
- * `ConnectorInfo` wire shape. The SINGLE conversion point (`@420ai/shared` can't
- * import `Connector`, so the fidelity fields are mirrored on the wire) — a serve
- * test asserts this mapping stays 1:1 with `ConnectorFidelity`.
- */
-function mapConnectorInfo(
-  c: Connector,
-  enabled: boolean,
-  home: string,
-  approval: "approved" | "needs-approval",
-): ConnectorInfo {
-  return {
-    id: c.id,
-    enabled,
-    status: c.fidelity.status,
-    captureMethod: c.fidelity.captureMethod,
-    liveness: c.fidelity.liveness,
-    tokens: c.fidelity.tokens,
-    cost: c.fidelity.cost,
-    knownGaps: c.fidelity.knownGaps,
-    watchGlobs: c.watchGlobs(home),
-    // Slice 12.7b: the declared §10.3 scope + the §10.4 approval state.
-    requiredPermissions: c.fidelity.requiredPermissions,
-    approval,
-    // A connector whose id is not a built-in is a user-defined custom connector (M10-S2).
-    custom: !BUILTIN_IDS.has(c.id),
-  };
-}
-
 /** Default queue-stats reader: a short-lived WAL read, mirroring cli.ts `runQueueStatus`. */
 function defaultQueueStats(): QueueStats {
   const queue = new QueueStore(QUEUE_PATH);
@@ -158,10 +131,20 @@ export function runServe(deps: ServeDeps = {}): Promise<void> {
     ? { connectors: deps.connectorRegistry, dropped: [] as { id: string; reason: string }[] }
     : loadRegistry(home, { catalog: loadCachedCatalog()?.payload });
   const connectorRegistry = registry.connectors;
-  const loadConnectorCfg = deps.loadConnectorConfig ?? loadConnectorConfigDefault;
-  const saveConnectorCfg = deps.saveConnectorConfig ?? saveConnectorConfigDefault;
-  const loadApprovals = deps.loadConnectorApprovals ?? loadConnectorApprovalsDefault;
-  const saveApprovals = deps.saveConnectorApprovals ?? saveConnectorApprovalsDefault;
+  // PR #77 review — resolved from `home`, not from the import-time `homedir()` constants, so
+  // `serve` and `watch` read ONE profile's connector settings. See `identity.ts`: `--home` must
+  // move every collector-home artifact together or it moves none of them honestly.
+  const cfgPath = connectorConfigPathFor(home);
+  const approvalsPath = connectorApprovalsPathFor(home);
+  const loadConnectorCfg = deps.loadConnectorConfig ?? (() => loadConnectorConfigDefault(cfgPath));
+  const saveConnectorCfg =
+    deps.saveConnectorConfig ??
+    ((cfg: ConnectorConfig) => saveConnectorConfigDefault(cfg, cfgPath));
+  const loadApprovals =
+    deps.loadConnectorApprovals ?? (() => loadConnectorApprovalsDefault(approvalsPath));
+  const saveApprovals =
+    deps.saveConnectorApprovals ??
+    ((cfg: ConnectorApprovals) => saveConnectorApprovalsDefault(cfg, approvalsPath));
 
   // Slice 12.7b: seed-on-first-sight (default-on). Record the current capture-surface
   // fingerprint for any connector not yet known, establishing the baseline so a LATER
@@ -204,16 +187,18 @@ export function runServe(deps: ServeDeps = {}): Promise<void> {
 
   /** Emit the current registry + persisted enablement + approval state as a `connectors` event. */
   function emitConnectors(): void {
-    const cfg = loadConnectorCfg();
-    const approvals = loadApprovals();
-    const connectors = connectorRegistry.map((c) =>
-      mapConnectorInfo(
-        c,
-        cfg.connectors[c.id]?.enabled !== false,
-        home,
-        approvalStatus(c, approvals, home),
-      ),
+    // Same resolver the engine's heartbeat report uses, so the webview and the archive can never
+    // show different enablement for the same connector.
+    const states = resolveConnectorStates(
+      connectorRegistry,
+      loadConnectorCfg(),
+      loadApprovals(),
+      home,
     );
+    const connectors = connectorRegistry.map((c) => {
+      const s = states.get(c.id);
+      return mapConnectorInfo(c, s?.enabled ?? false, home, s?.approval ?? "approved");
+    });
     emit({ type: "connectors", connectors });
   }
 
@@ -248,6 +233,13 @@ export function runServe(deps: ServeDeps = {}): Promise<void> {
       collectorVersion,
       heartbeatIntervalMs: deps.heartbeatIntervalMs,
       connectors: enabledConnectors,
+      // M16 16.3: REPORT the full registry, CAPTURE the filtered subset — the same split `cli.ts`
+      // makes, so the desktop and service paths produce the same scorecard.
+      registry: connectorRegistry,
+      // Config + approvals read ONCE per report; the mapping is shared with `cli.ts` so the desktop
+      // and the Windows service cannot disagree about what "enabled" means.
+      connectorStates: (reg) =>
+        resolveConnectorStates(reg, loadConnectorCfg(), loadApprovals(), home),
       onSyncSuccess: (at) => {
         lastSyncAt = at;
       },

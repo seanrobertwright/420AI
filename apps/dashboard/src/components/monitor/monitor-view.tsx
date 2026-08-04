@@ -13,6 +13,7 @@ import {
 import { cn } from "@/lib/utils";
 import { formatAgo } from "@/lib/format";
 import { AlertsPanel } from "@/components/monitor/alerts-panel";
+import { CaptureHealthPanel } from "@/components/monitor/capture-health-panel";
 
 const STATUS_BADGE: Record<MonitorStatus, string> = {
   online: "border-transparent bg-emerald-500/15 text-emerald-400",
@@ -31,6 +32,7 @@ export function MonitorView({ snapshot, nowMs }: { snapshot: LiveMonitorSnapshot
   for (const m of machines) counts[m.status]++;
   const totalBacklog = machines.reduce((sum, m) => sum + (m.queuePending ?? 0), 0);
   const anyBacklogHigh = machines.some((m) => m.backlogHigh);
+  const totalToolsFailed = connectors.reduce((sum, c) => sum + c.toolsFailed, 0);
 
   return (
     <div className="space-y-8">
@@ -64,7 +66,27 @@ export function MonitorView({ snapshot, nowMs }: { snapshot: LiveMonitorSnapshot
           title={`${activeSessions.length}`}
           subtitle="Active sessions"
           status={activeSessions.length > 0 ? "active" : "inactive"}
-          fields={[{ label: "Connectors", value: String(connectors.length) }]}
+          // M16 16.3: labelled "Connectors seen", NOT "Connectors". This count comes from
+          // `connectorHealth`, a GROUP BY over OBSERVED events, so it can only ever include
+          // connectors that already produced something — a broken or disabled one is absent. The
+          // Capture health panel below reports the DECLARED inventory and will legitimately show a
+          // different, larger number. Two connector counts on one screen is the "which number do I
+          // believe?" problem D-16.3-1 refuses to create, so the label names which question this
+          // one answers rather than leaving the reader to reconcile them.
+          // "Tool failures" is here because removing the old Connectors card took the ONLY surface
+          // that showed `toolsFailed` with it (PR #77 review) — a slice about making capture failure
+          // visible must not silently drop a failure count that already existed. It stays on this
+          // OBSERVED-side tile rather than moving into the Capture health panel: it is derived from
+          // `connectorHealth`, which the panel deliberately does not read, and folding it in would
+          // put two differently-sourced numbers in one table.
+          fields={[
+            { label: "Connectors seen", value: String(connectors.length) },
+            {
+              label: "Tool failures",
+              value: String(totalToolsFailed),
+              highlight: totalToolsFailed > 0,
+            },
+          ]}
         />
       </div>
 
@@ -120,48 +142,12 @@ export function MonitorView({ snapshot, nowMs }: { snapshot: LiveMonitorSnapshot
         </CardContent>
       </Card>
 
-      {/* Connectors */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Connectors</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {connectors.length === 0 ? (
-            <p className="text-muted-foreground text-sm">No connector activity yet.</p>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Connector</TableHead>
-                  <TableHead>Last event</TableHead>
-                  <TableHead>Events</TableHead>
-                  <TableHead>Failures</TableHead>
-                  <TableHead>Models</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {connectors.map((c) => (
-                  <TableRow key={c.sourceConnector}>
-                    <TableCell className="font-medium">{c.sourceConnector}</TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {formatAgo(c.lastEventAt, nowMs)}
-                    </TableCell>
-                    <TableCell>{c.eventCount}</TableCell>
-                    <TableCell>
-                      <span className={cn(c.toolsFailed > 0 && "text-destructive font-semibold")}>
-                        {c.toolsFailed}
-                      </span>
-                    </TableCell>
-                    <TableCell className="text-muted-foreground text-xs">
-                      {c.models.length ? c.models.join(", ") : "—"}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
+      {/* M16 16.3 — replaces the old Connectors card, which was a projection over OBSERVED events
+          and so could only list connectors that had already produced something. A connector that was
+          enabled but BROKEN emitted nothing and had no row at all — indistinguishable from disabled,
+          and from healthy-on-a-quiet-day. This panel joins the collector's DECLARED inventory
+          against the observation, so every connector appears with an explicit state. */}
+      <CaptureHealthPanel nowMs={nowMs} />
 
       {/* Active sessions */}
       <Card>

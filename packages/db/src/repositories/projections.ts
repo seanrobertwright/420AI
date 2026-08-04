@@ -14,6 +14,7 @@ import {
 } from "@420ai/shared";
 import type { DbClient } from "../client.js";
 import { events, machines, workspaceKeys, workspaces } from "../schema.js";
+import { toIso } from "./sql-coerce.js";
 
 /**
  * Deterministic projection repository (M6, PRD §16.1). Read-only aggregation over
@@ -21,6 +22,18 @@ import { events, machines, workspaceKeys, workspaces } from "../schema.js";
  * workspaces.ts) with token/cost/shape aggregates. Reads ONLY the plaintext
  * columns — never decrypts a payload (PRD §18.1, D3). On-demand, no materialized
  * rollups (D2). Silent library (CLAUDE.md): throws, never logs.
+ *
+ * TIMESTAMP COERCION (CLAUDE.md "Drizzle / SQL gotchas"): inside a raw `sql` template the
+ * `events.ts` `mode:"string"` parser does NOT apply, so `max(ts)`/`min(ts)` come back as Postgres
+ * TEXT (`2026-08-01 00:00:00+00`), not ISO. Normalize every aggregate timestamp through `toIso`.
+ *
+ * A BARE `events.ts` SELECTION IS NOT ISO EITHER — an earlier version of this comment said it was,
+ * which is the wrong-mechanism class this repo keeps paying for. Measured: node-postgres returns a
+ * JS `Date` for timestamptz (drizzle's node-postgres driver installs no `setTypeParser` override),
+ * and `PgTimestampString.mapFromDriverValue` then formats it back to Postgres style — for
+ * `2026-08-01T00:00:00.000Z` it yields `"2026-08-01 00:00:00.000-04"`: space-separated, no `Z`, and
+ * stamped with the SERVER's local offset. The aggregate case is the LOUDEST instance of the hazard,
+ * not the only one. If the wire contract says ISO, normalize — aggregate or not.
  *
  * M15 15.2 ORG-SCOPING RULE (applies repo-wide): a read keyed by a CONNECTOR-SUPPLIED
  * string — `session_id`, `project_path`, `fingerprint` — MUST take `orgId` and apply
@@ -341,7 +354,10 @@ export async function connectorHealth(db: DbClient, orgId: string): Promise<Conn
     .orderBy(events.sourceConnector);
   return rows.map((r) => ({
     sourceConnector: r.sourceConnector,
-    lastEventAt: r.lastEventAt ?? null,
+    // `max(ts)` inside a raw `sql` aggregate bypasses the `mode:"string"` parser and returns
+    // Postgres TEXT — `ConnectorHealthRow.lastEventAt` is documented as ISO, so normalize (M16
+    // 16.3 spike S2 measured `"2026-08-01 00:00:00+00"` going out on the wire from here).
+    lastEventAt: toIso(r.lastEventAt),
     eventCount: r.eventCount,
     toolCalls: r.toolCalls,
     toolsFailed: r.toolsFailed,
@@ -387,7 +403,10 @@ export async function connectorHealthWindowed(
     .orderBy(events.sourceConnector);
   return rows.map((r) => ({
     sourceConnector: r.sourceConnector,
-    lastEventAt: r.lastEventAt ?? null,
+    // `max(ts)` inside a raw `sql` aggregate bypasses the `mode:"string"` parser and returns
+    // Postgres TEXT — `ConnectorHealthRow.lastEventAt` is documented as ISO, so normalize (M16
+    // 16.3 spike S2 measured `"2026-08-01 00:00:00+00"` going out on the wire from here).
+    lastEventAt: toIso(r.lastEventAt),
     eventCount: r.eventCount,
     toolCalls: r.toolCalls,
     toolsFailed: r.toolsFailed,

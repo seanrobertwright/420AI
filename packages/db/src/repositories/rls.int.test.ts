@@ -117,6 +117,11 @@ const STRICT_TABLES = [
   // the label is (D-16.1-6), which an APPEND_ONLY `REVOKE DELETE` would forbid.
   "outcome_labels",
   "outcome_label_revisions",
+  // M16 16.3: the DECLARED half of capture health (migration 0025). Same strict org policy as the
+  // other fifteen. Not APPEND_ONLY despite being overwritten wholesale on every heartbeat —
+  // `replaceMachineConnectors` must UPDATE on conflict and DELETE to prune, and the table IS the
+  // per-tenant read path the scorecard renders.
+  "machine_connectors",
 ] as const;
 
 /** BOOTSTRAP-PERMISSIVE policy (D-15.3-3): enforced with a context, open without one. */
