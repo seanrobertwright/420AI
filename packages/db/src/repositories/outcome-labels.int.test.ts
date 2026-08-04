@@ -4,6 +4,7 @@ import type { IngestBatch } from "@420ai/shared";
 import { createDb, ingestBatch, withOrg } from "../index.js";
 import { machines, outcomeLabels, users } from "../schema.js";
 import { ensurePersonalOrg } from "./organizations.js";
+import type { OutcomeLabelRow } from "./outcome-labels.js";
 import {
   createOutcomeLabel,
   deleteOutcomeLabel,
@@ -208,6 +209,64 @@ describe.skipIf(!TEST_URL || !APP_URL)("M16 16.1 outcome labels (two-role integr
     expect(asOwner.rows[0]!.n).toBe(1);
   });
 
+  /**
+   * 2b ── THE WRONG-CONTEXT CASE, which is the one that actually discriminates.
+   *
+   * Test 2 above proves an UNSET context reads zero rows. That is a real property, but it is not
+   * the leak scenario — the leak scenario is "org A's context can see org B's row". Every other
+   * test in this file goes through a repository function carrying an explicit `eq(orgId)`
+   * predicate, so all of them stay green if `outcome_labels_org_isolation` is replaced with
+   * `USING (true)`: measured during 16.1, only 2 of 16 turned red. That is 15.2's primary defence
+   * working, and it is exactly why the backstop needs its OWN assertion.
+   *
+   * So this reads the tables with a PREDICATE-FREE raw select under org A's context. Nothing but
+   * the policy can scope it, which makes it the test that fails when the policy is loosened.
+   */
+  it("under org A's context a PREDICATE-FREE read sees only org A's rows", async () => {
+    await seedLabelA();
+    await withOrg(appRole.db, orgB, WRITE_ROLE, (tx) =>
+      createOutcomeLabel(tx, orgB, {
+        sessionId: SHARED_SESSION,
+        authorUserId: userB,
+        status: "skipped",
+      }),
+    );
+    // Both orgs hold a label for the SAME session id — the owner handle sees both.
+    const total = await owner.db.execute<{ n: number }>(
+      sql`select count(*)::int as n from outcome_labels`,
+    );
+    expect(total.rows[0]!.n).toBe(2);
+
+    await withOrg(appRole.db, orgA, WRITE_ROLE, async (tx) => {
+      const labels = await tx.execute<{ n: number }>(
+        sql`select count(*)::int as n from outcome_labels`,
+      );
+      const revisions = await tx.execute<{ n: number }>(
+        sql`select count(*)::int as n from outcome_label_revisions`,
+      );
+      expect(labels.rows[0]!.n, "org A must not see org B's label").toBe(1);
+      expect(revisions.rows[0]!.n, "org A must not see org B's revisions").toBe(1);
+    });
+  });
+
+  // 2c ── The 15.4 role backstop on UPDATE. INSERT and DELETE are covered by test 12; UPDATE is the
+  //       third RESTRICTIVE policy and the one protecting an EXISTING judgement from a read-only
+  //       account whose route gate someone later removes.
+  it("a viewer context cannot UPDATE an existing label (loud, via WITH CHECK)", async () => {
+    await seedLabelA();
+    await expectRlsRejection(
+      withOrg(appRole.db, orgA, "viewer", (tx) =>
+        updateOutcomeLabel(tx, orgA, SHARED_SESSION, userA, { qualityRating: 1 }),
+      ),
+    );
+    // The judgement is untouched — counted on the owner handle so no policy can mask it.
+    const row = await owner.db.execute<{ revision: number; quality_rating: number }>(
+      sql`select revision, quality_rating from outcome_labels`,
+    );
+    expect(row.rows[0]!.revision).toBe(1);
+    expect(row.rows[0]!.quality_rating).toBe(4);
+  });
+
   // 3 ── D-16.1-3. THE 15.1/15.2 BUG SHAPE: two tenants holding the SAME connector session id.
   it("two orgs label the SAME session_id independently and never see each other's", async () => {
     await seedLabelA();
@@ -382,6 +441,51 @@ describe.skipIf(!TEST_URL || !APP_URL)("M16 16.1 outcome labels (two-role integr
     );
     expect(row!.status).toBe("skipped");
     expect(row!.revision).toBe(1);
+  });
+
+  /**
+   * REGRESSION (prp-review): patching FIELDS onto a still-`skipped` row must not silently blank it.
+   *
+   * The first version of the skip-clearing fix keyed on the EFFECTIVE status
+   * (`patch.status ?? existing.status`), so a `PATCH {"qualityRating": 4}` against a row that was
+   * already `skipped` took the blanking branch: the supplied values were discarded, the row was
+   * rewritten all-NULL, `revision` bumped, and a snapshot identical to its predecessor was
+   * appended — all behind a 200. `minProperties: 1` catches an EMPTY body and is blind to a
+   * semantically-empty one, so nothing else would have caught it.
+   */
+  it("patching fields onto a still-skipped row is refused, not silently dropped", async () => {
+    await withOrg(appRole.db, orgA, WRITE_ROLE, (tx) =>
+      createOutcomeLabel(tx, orgA, {
+        sessionId: SHARED_SESSION,
+        authorUserId: userA,
+        status: "skipped",
+      }),
+    );
+    let thrown: unknown;
+    try {
+      await withOrg(appRole.db, orgA, WRITE_ROLE, (tx) =>
+        updateOutcomeLabel(tx, orgA, SHARED_SESSION, userA, {
+          qualityRating: 4,
+          outcome: "shipped",
+        }),
+      );
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(OutcomeLabelError);
+    expect((thrown as OutcomeLabelError).reason).toBe("incomplete_label");
+    // The message names what the caller tried to set, so the surface can explain the refusal.
+    expect((thrown as OutcomeLabelError).message).toContain("qualityRating");
+
+    // Nothing was written: still revision 1, and no second snapshot.
+    const row = await withOrg(appRole.db, orgA, WRITE_ROLE, (tx) =>
+      getOutcomeLabel(tx, orgA, SHARED_SESSION),
+    );
+    expect(row!.revision).toBe(1);
+    const revisions = await withOrg(appRole.db, orgA, WRITE_ROLE, (tx) =>
+      listOutcomeLabelRevisions(tx, orgA, SHARED_SESSION),
+    );
+    expect(revisions).toHaveLength(1);
   });
 
   it("a skip CAN be upgraded to a labeled row when the judgement comes with it", async () => {
@@ -596,6 +700,15 @@ describe.skipIf(!TEST_URL || !APP_URL)("M16 16.1 outcome labels (two-role integr
       sql`select count(*)::int as n from outcome_labels`,
     );
     expect(survived.rows[0]!.n).toBe(1);
+    // AND THE HISTORY SURVIVED TOO. `deleteOutcomeLabel` deletes the revisions FIRST, so a policy
+    // that blocked only the parent would leave the label in place with its history destroyed — a
+    // silent loss on the one table whose purpose is auditability. Both tables carry byte-identical
+    // RESTRICTIVE policies precisely so this pair is 0/0; assert the child explicitly, or the day
+    // they diverge this test stays green while the damage lands.
+    const revisionsSurvived = await owner.db.execute<{ n: number }>(
+      sql`select count(*)::int as n from outcome_label_revisions`,
+    );
+    expect(revisionsSurvived.rows[0]!.n).toBe(1);
   });
 
   // 13 ── A cross-org INSERT is LOUD, with no explicit WITH CHECK on the policy: a `FOR ALL`
@@ -686,6 +799,10 @@ describe.skipIf(!TEST_URL || !APP_URL)("M16 16.1 outcome labels (two-role integr
 
     const first = createDb(APP_URL!);
     let releaseFirst: () => void = () => {};
+    // Hoisted so the `finally` can settle them — declared inside the `try` they would be out of
+    // scope exactly where the cleanup needs them.
+    let firstTx: Promise<unknown> = Promise.resolve();
+    let secondTx: Promise<unknown> = Promise.resolve();
     try {
       // Transaction 1: patch, then HOLD the transaction open without committing.
       const held = new Promise<void>((resolve) => {
@@ -695,7 +812,7 @@ describe.skipIf(!TEST_URL || !APP_URL)("M16 16.1 outcome labels (two-role integr
       const lockTaken = new Promise<void>((resolve) => {
         signalLockTaken = resolve;
       });
-      const firstTx = first.db.transaction(async (tx) => {
+      firstTx = first.db.transaction(async (tx) => {
         await tx.execute(sql`SELECT set_config('app.current_org', ${orgA}, true)`);
         await tx.execute(sql`SELECT set_config('app.current_role', ${WRITE_ROLE}, true)`);
         await updateOutcomeLabel(tx, orgA, SHARED_SESSION, userA, { qualityRating: 2 });
@@ -705,13 +822,20 @@ describe.skipIf(!TEST_URL || !APP_URL)("M16 16.1 outcome labels (two-role integr
       await lockTaken;
 
       // Transaction 2 now races a lock that is DEFINITELY held. It must not settle.
+      //
+      // A `.catch` is attached AT CREATION, not later: if the discriminating assertion below
+      // throws, this promise is never awaited, and an un-caught rejection would surface as an
+      // UNHANDLED REJECTION instead of the assertion that actually failed — the same "real failure
+      // wearing a fake one" this test's own header warns about, one level out. The `finally` then
+      // settles both before ending the pool.
       let secondSettled = false;
-      const secondTx = withOrg(appRole.db, orgA, WRITE_ROLE, (tx) =>
+      secondTx = withOrg(appRole.db, orgA, WRITE_ROLE, (tx) =>
         updateOutcomeLabel(tx, orgA, SHARED_SESSION, userA, { qualityRating: 3 }),
       ).then((r) => {
         secondSettled = true;
         return r;
       });
+      secondTx.catch(() => {});
 
       await new Promise((r) => setTimeout(r, 400));
       // THE DISCRIMINATING ASSERTION. Remove `.for("update")` and this reads `true`.
@@ -719,7 +843,9 @@ describe.skipIf(!TEST_URL || !APP_URL)("M16 16.1 outcome labels (two-role integr
 
       releaseFirst();
       await firstTx;
-      const second = await secondTx;
+      // `secondTx` is hoisted as `Promise<unknown>` so the `finally` can settle it, so the row
+      // shape is re-stated here rather than inferred.
+      const second = (await secondTx) as OutcomeLabelRow;
 
       // The loser re-read the bumped revision after the lock released, so the history is
       // contiguous rather than two rows both claiming to be v2.
@@ -730,8 +856,10 @@ describe.skipIf(!TEST_URL || !APP_URL)("M16 16.1 outcome labels (two-role integr
       expect(revisions.map((r) => r.revision)).toEqual([1, 2, 3]);
     } finally {
       // Unblock the held transaction FIRST — otherwise `pool.end()` waits on its live client and a
-      // failed assertion above surfaces as a timeout instead of itself.
+      // failed assertion above surfaces as a timeout instead of itself. Then let BOTH transactions
+      // settle before ending the pool, so no in-flight query is torn down mid-statement.
       releaseFirst();
+      await Promise.allSettled([firstTx, secondTx]);
       await first.pool.end();
     }
   }, 15_000);

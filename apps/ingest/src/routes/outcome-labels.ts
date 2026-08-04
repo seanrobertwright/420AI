@@ -87,10 +87,14 @@ function serializeLabel(row: OutcomeLabelRow): Record<string, unknown> {
 }
 
 /**
- * The POST body AS IT ARRIVES — every §4.3 field optional and the closed sets typed as bare
- * strings, because that is what the wire actually carries. The narrowing happens once, below, after
- * ajv has already constrained each value to its enum; re-deriving these from the shared unions here
- * would claim a guarantee the type system cannot make about an untrusted request.
+ * The POST body as it arrives, with the closed sets typed as their SHARED UNIONS and every §4.3
+ * field optional (a skip carries none of them).
+ *
+ * THOSE UNION TYPES ARE AN ASSERTION ABOUT VALIDATED INPUT, NOT A PROOF. What makes them true is
+ * `createOutcomeLabelBodySchema`'s ajv enums, which run before this handler does; the compiler
+ * cannot see that and is simply trusting the schema. Stated plainly because an earlier version of
+ * this comment described the option that was NOT taken — it claimed the sets were "typed as bare
+ * strings" with "narrowing below", and there is no narrowing below, only the `!` assertions.
  */
 interface LabelBody {
   status: LabelStatus;

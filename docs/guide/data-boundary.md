@@ -172,15 +172,16 @@ but "redacted" here means "these 14 classes were masked", not "no secret can sur
 
 ## 5. What can be exported
 
-Four export surfaces, all authenticated, all redacted before the bytes leave the archive
-(`apps/ingest/src/routes/exports.ts:33`):
+Four export surfaces, all authenticated, all redacted before the bytes leave the archive — three in
+`exports.ts` (whose header at `apps/ingest/src/routes/exports.ts:33` states the §18 gate for them)
+plus the M16 label export in `apps/ingest/src/routes/outcome-labels.ts:331-343`:
 
-| Endpoint                                                           | Content                              | Redaction                                     |
-| ------------------------------------------------------------------ | ------------------------------------ | --------------------------------------------- |
-| `GET /v1/exports/events` (`exports.ts:150`)                        | Event stream, plaintext columns only | `redactJson(rows)` (`exports.ts:193`)         |
-| `GET /v1/reports/:id/export` (`exports.ts:232`)                    | A rendered report artifact (md/json) | `redactJson(…)` (`exports.ts:252`)            |
-| `GET /v1/sessions/:sessionId/transcript/export` (`exports.ts:299`) | Session transcript (md/json/jsonl)   | `redact(e.text)` per entry (`exports.ts:320`) |
-| `GET /v1/labels/export` (`outcome-labels.ts:358`)                  | Outcome labels (json/jsonl/csv)      | `redactJson(rows)` (`outcome-labels.ts:375`)  |
+| Endpoint                                                           | Content                              | Redaction                                                        |
+| ------------------------------------------------------------------ | ------------------------------------ | ---------------------------------------------------------------- |
+| `GET /v1/exports/events` (`exports.ts:150`)                        | Event stream, plaintext columns only | `redactJson(rows)` (`exports.ts:193`)                            |
+| `GET /v1/reports/:id/export` (`exports.ts:232`)                    | A rendered report artifact (md/json) | `redactJson(…)` (`exports.ts:252`)                               |
+| `GET /v1/sessions/:sessionId/transcript/export` (`exports.ts:299`) | Session transcript (md/json/jsonl)   | `redact(e.text)` per entry (`exports.ts:320`)                    |
+| `GET /v1/labels/export` (`outcome-labels.ts:358`)                  | Outcome labels (json/jsonl/csv)      | `redactJson(rows.map(serializeLabel))` (`outcome-labels.ts:375`) |
 
 The label export is the only one whose content is **human-authored free text** rather than captured
 or derived data, and that is precisely why it redacts: `intent` is 200 characters somebody typed, and
@@ -237,7 +238,10 @@ before enrolment, not after.
 ### Outcome labels are the one exception, and they have a written policy
 
 M16 16.1 added the §4.3 **outcome label** — a voluntary human judgement of a session — and with it
-the first real delete API in the archive (D-16.1-6):
+the first delete API for **archive content** (D-16.1-6). Be precise about that scope: identity and
+access objects have always been deletable (an invite, an API key, a session, a membership, an SSO
+link), and none of them is captured data. What was never deletable through the API, and still is
+not, is anything the collector captured:
 
 > **A `DELETE` of an outcome label is a HARD delete of the label row and all of its revision rows,
 > in one transaction. Nothing is retained, and nothing else is touched — the session's raw records,
@@ -245,7 +249,7 @@ the first real delete API in the archive (D-16.1-6):
 
 `DELETE /v1/sessions/:sessionId/label` (`apps/ingest/src/routes/outcome-labels.ts:262`) is that API;
 the cascade is deliberately visible in code rather than hidden in DDL
-(`packages/db/src/repositories/outcome-labels.ts:386`). Anyone at `member` or above may delete their
+(`packages/db/src/repositories/outcome-labels.ts:569-577`). Anyone at `member` or above may delete their
 own label; `admin` and above may delete any label in the organization, as a data-hygiene lever.
 Editing is stricter than deleting on purpose — no rung, including `owner`, may **rewrite** a label
 it did not author, because retraction is not falsification.

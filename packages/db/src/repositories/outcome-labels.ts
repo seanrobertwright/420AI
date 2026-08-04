@@ -7,12 +7,18 @@ import type { TaskType, LabelOutcome, Friction, LabelConfidence } from "@420ai/s
  * M16 16.1 — the §4.3 OUTCOME LABEL repository (research plan §4.3 / §7 P0.2). Silent library
  * (CLAUDE.md): throws typed errors, never logs.
  *
- * `DbClient`, not `Db`, and here that is load-bearing rather than conventional. Every caller
- * reaches these from inside `withOrg`, which IS a transaction, and `updateOutcomeLabel` takes a
- * `FOR UPDATE` lock on the label row that only holds across the mutation if the read and the write
- * share one transaction. Taking a `Tx`-compatible type is what makes that true by type rather than
- * by convention. Do NOT call `withOrg` inside these functions — `insertReportArtifact` does, but
- * that is a deliberate exception for its retry loop, and there is no retry here.
+ * `DbClient` IS `Db | Tx` (`client.ts`), SO THE SIGNATURE ENFORCES NOTHING — and saying so
+ * precisely matters, because the first version of this paragraph claimed the opposite ("taking a
+ * `Tx`-compatible type is what makes that true by type rather than by convention"), which is the
+ * M15 15.5 defect verbatim: a comment asserting a mechanism prevents the race it names. A caller
+ * passing the pool-backed `app.db` would get `.for("update")` in autocommit, where the lock
+ * releases at statement end and the lost-update race in `updateOutcomeLabel` is fully back.
+ *
+ * What actually holds the locks across their mutations is that EVERY caller reaches this file from
+ * inside `withOrg`, which opens a transaction. That is a CONVENTION, enforced at the route layer
+ * and structurally checked by `routes/org-scoping.test.ts` — not by this type. Do NOT call
+ * `withOrg` inside these functions: `insertReportArtifact` does, but that is a deliberate exception
+ * for its retry loop, and there is no retry here.
  *
  * `orgId` IS ALWAYS THE SECOND PARAMETER (CLAUDE.md's 15.2 rule), so a transposed argument between
  * two adjacent `string` parameters is visible in review. It matters more than usual here:
@@ -159,8 +165,10 @@ export type CreateOutcomeLabelInput =
 
 /**
  * What a caller may change on an existing label. Every field optional; `undefined` means LEAVE
- * ALONE and `null` means CLEAR. The route's schema rejects an empty patch (`minProperties: 1`) so
- * an edit always produces a real revision rather than a no-op bump.
+ * ALONE and `null` means CLEAR. The route's schema rejects an EMPTY patch (`minProperties: 1`), so
+ * a revision bump always corresponds to a request that named at least one field — but note what is
+ * NOT claimed: re-sending an unchanged value still bumps `revision` and appends a snapshot equal to
+ * its predecessor. Value-level idempotency is not offered.
  *
  * BE PRECISE ABOUT WHICH FIELDS ARE ACTUALLY CLEARABLE, because an earlier version of this comment
  * was not and the review caught it: only `followUpCommitOrPr` and `confidence` accept `null` over
@@ -267,17 +275,33 @@ function assertLabelShape(fields: LabelFieldValues, status: string): void {
   }
 }
 
-/** Normalize a create input into the full nullable field set a row (and its snapshot) carries. */
+/**
+ * Normalize a create input into the full nullable field set a row (and its snapshot) carries.
+ *
+ * EVERY FIELD GOES THROUGH `?? null`, INCLUDING THE FIVE THE TYPE SAYS ARE REQUIRED, and that is
+ * not belt-and-braces. `CreateOutcomeLabelInput` promises `taskType: TaskType`, but the route
+ * reaches this across an untyped wire boundary with `body.taskType!` — a `!` that ajv usually
+ * earns and cannot be relied on to. So a real `undefined` can arrive in a slot the type calls
+ * `TaskType`, and drizzle DROPS `undefined` keys from `.values()`, which would insert a `labeled`
+ * row with all five §4.3 columns NULL: exactly the 16.4-numerator corruption `assertLabelShape`
+ * exists to refuse, committed with no error anywhere.
+ *
+ * Before this normalization the ONLY thing standing between that and the database was
+ * `assertLabelShape`'s `=== undefined` arm — a comparison TypeScript believes can never be true,
+ * and therefore one a linter's `no-unnecessary-condition` or a well-meaning simplification would
+ * delete without a second thought. Coercing here makes the `null` arm do the work and leaves the
+ * `undefined` arm genuinely defensive rather than load-bearing-and-invisible.
+ */
 function fieldsFromCreate(input: CreateOutcomeLabelInput): LabelFieldValues {
   if (input.status === "skipped") {
     return { ...EMPTY_LABEL_FIELDS };
   }
   return {
-    taskType: input.taskType,
-    intent: input.intent,
-    outcome: input.outcome,
-    qualityRating: input.qualityRating,
-    primaryFriction: input.primaryFriction,
+    taskType: input.taskType ?? null,
+    intent: input.intent ?? null,
+    outcome: input.outcome ?? null,
+    qualityRating: input.qualityRating ?? null,
+    primaryFriction: input.primaryFriction ?? null,
     followUpCommitOrPr: input.followUpCommitOrPr ?? null,
     confidence: input.confidence ?? null,
   };
@@ -318,7 +342,7 @@ export async function createOutcomeLabel(
         revision: 1,
       })
       .returning(outcomeLabelRowColumns);
-    row = created as OutcomeLabelRow;
+    row = created;
   } catch (e) {
     if (isAlreadyLabeled(e)) {
       throw new OutcomeLabelError("this session is already labelled", "already_labeled");
@@ -355,7 +379,7 @@ export async function getOutcomeLabel(
     .from(outcomeLabels)
     .where(and(eq(outcomeLabels.orgId, orgId), eq(outcomeLabels.sessionId, sessionId)))
     .limit(1);
-  return row as OutcomeLabelRow | undefined;
+  return row;
 }
 
 /**
@@ -390,7 +414,7 @@ export async function updateOutcomeLabel(
     .for("update");
 
   if (!current) throw new OutcomeLabelError("no label for this session", "not_found");
-  const existing = current as OutcomeLabelRow;
+  const existing = current;
   if (existing.authorUserId !== authorUserId) {
     throw new OutcomeLabelError("only the label's author may edit it", "not_author");
   }
@@ -427,8 +451,30 @@ export async function updateOutcomeLabel(
   // 16.4 reads these as evidence. The blanking is deliberate DATA LOSS on the current row and it is
   // safe precisely because of D-16.1-1: every prior revision keeps its own snapshot, so the
   // judgement is still readable at `GET …/label/revisions` — it has been retracted, not erased.
-  const merged =
-    status === "skipped" ? { status, ...EMPTY_LABEL_FIELDS } : { status, ...mergedFields };
+  //
+  // IT FIRES ONLY ON AN EXPLICIT TRANSITION, and the difference is a bug the prp-review caught.
+  // Keying the blank on the EFFECTIVE status (`patch.status ?? existing.status`) meant that for a
+  // row already `skipped`, a `PATCH {"qualityRating": 4}` — which never mentions `status` — took
+  // the blanking branch: the supplied values were silently discarded, the row was rewritten
+  // all-NULL, `revision` bumped, and a snapshot identical to its predecessor was appended, all
+  // behind a 200. That is exactly the pollution `minProperties: 1` was added to prevent; that guard
+  // catches an EMPTY body and cannot catch a semantically-empty one.
+  //
+  // So a patch that supplies §4.3 fields to a `skipped` row is a 400, not a silent no-op. The
+  // caller's next move is the one they almost certainly meant: send `status: "labeled"` with the
+  // full judgement (the D-16.1-2 upgrade), which `assertLabelShape` then validates.
+  const explicitSkip = patch.status === "skipped";
+  const suppliedFields = (Object.keys(mergedFields) as (keyof LabelFieldValues)[]).filter(
+    (k) => patch[k] !== undefined,
+  );
+  if (status === "skipped" && !explicitSkip && suppliedFields.length > 0) {
+    throw new OutcomeLabelError(
+      `cannot set ${suppliedFields.join(", ")} on a skipped label — send status:"labeled" with the full judgement`,
+      "incomplete_label",
+    );
+  }
+
+  const merged = explicitSkip ? { status, ...EMPTY_LABEL_FIELDS } : { status, ...mergedFields };
   // …and the other direction: a row claiming to be `labeled` must actually carry a judgement.
   assertLabelShape(merged, status);
 
@@ -448,7 +494,7 @@ export async function updateOutcomeLabel(
     ...merged,
   });
 
-  return updated as OutcomeLabelRow;
+  return updated;
 }
 
 /**
@@ -473,6 +519,24 @@ export async function updateOutcomeLabel(
  * REVISIONS FIRST: the FK is `ON DELETE no action` by this schema's convention, so the child rows
  * must go first. The cascade is deliberately visible HERE, in code, rather than hidden in DDL —
  * a reader of this function can see exactly what a delete destroys.
+ *
+ * THE READ TAKES `FOR UPDATE`, FOR THE SAME REASON `updateOutcomeLabel` DOES — and it shipped
+ * without one, which two independent prp-review agents caught. The lock is not decoration here:
+ *
+ *   1. T2 (this DELETE) reads the label unlocked and deletes revisions v1..vN;
+ *   2. T1 (a concurrent PATCH) holds `FOR UPDATE` on the label, bumps it and inserts v(N+1);
+ *   3. T2's parent `DELETE` blocks on T1's row lock, then re-qualifies the row after T1 commits —
+ *      and the `ON DELETE no action` RI trigger, which deliberately runs against the LATEST
+ *      snapshot, finds T1's freshly-inserted child and raises 23503.
+ *
+ * That surfaces as `update or delete on table "outcome_labels" violates foreign key constraint`,
+ * i.e. an opaque 500 on a request whose contract is 204/404. Locking the row here makes T2 block
+ * BEFORE it destroys any child rows, so it re-reads after T1 commits and either deletes cleanly or
+ * finds the row gone and answers 404. Same lesson as 15.5, one function over: the enclosing
+ * transaction is atomicity, not isolation.
+ *
+ * The lock also covers the AUTHORIZATION read — `row.authorUserId` is the value the `force` check
+ * below decides on, and deciding it from an unlocked read is the same class of mistake.
  */
 export async function deleteOutcomeLabel(
   tx: DbClient,
@@ -484,18 +548,34 @@ export async function deleteOutcomeLabel(
     .select({ id: outcomeLabels.id, authorUserId: outcomeLabels.authorUserId })
     .from(outcomeLabels)
     .where(and(eq(outcomeLabels.orgId, orgId), eq(outcomeLabels.sessionId, sessionId)))
-    .limit(1);
+    .limit(1)
+    .for("update");
 
   if (!row) return false;
   if (!opts.force && row.authorUserId !== opts.requesterUserId) return false;
 
-  await tx
+  // The child count is captured so the parent's 0-row case can be told apart from "nothing to do".
+  // Today the only way to reach `children > 0 && deleted.length === 0` is a viewer whose RESTRICTIVE
+  // DELETE policy blocked the parent — and because both tables carry byte-identical policies
+  // (migration 0024), the child delete is blocked too, so the pair is 0/0 and this never fires.
+  // It is here for the day those two policies diverge: without it, a blocked parent delete would
+  // COMMIT the child deletion and return `false`, telling the caller the label does not exist while
+  // silently destroying its history — a loss with no error, on the one table whose purpose is
+  // auditability. Postgres cannot make a filtered DELETE loud (no WITH CHECK for DELETE), so the
+  // only place this can be caught is here.
+  const removedRevisions = await tx
     .delete(outcomeLabelRevisions)
-    .where(and(eq(outcomeLabelRevisions.orgId, orgId), eq(outcomeLabelRevisions.labelId, row.id)));
+    .where(and(eq(outcomeLabelRevisions.orgId, orgId), eq(outcomeLabelRevisions.labelId, row.id)))
+    .returning({ id: outcomeLabelRevisions.id });
   const deleted = await tx
     .delete(outcomeLabels)
     .where(and(eq(outcomeLabels.orgId, orgId), eq(outcomeLabels.id, row.id)))
     .returning({ id: outcomeLabels.id });
+  if (removedRevisions.length > 0 && deleted.length === 0) {
+    throw new Error(
+      "outcome label delete removed revisions but not the label — rolling back to avoid orphaning its history",
+    );
+  }
   return deleted.length > 0;
 }
 
@@ -536,18 +616,29 @@ export async function listOutcomeLabels(
   if (filter?.limit !== undefined) query.limit(filter.limit);
   if (filter?.offset !== undefined) query.offset(filter.offset);
   const rows = await query;
-  return rows as OutcomeLabelRow[];
+  return rows;
 }
 
 /**
- * The full edit history of one session's label, oldest revision first. Empty when there is no
- * label (the route 404s on the label itself first, so an empty list here means the label exists and
- * somehow has no snapshots — which `createOutcomeLabel` makes unrepresentable).
+ * The full edit history of one session's label, oldest revision first.
  *
- * The join carries an org predicate on BOTH sides. `outcome_label_revisions.org_id` alone gives
- * ISOLATION; the predicate on the LABEL is what gives OWNERSHIP — without it, org B asking for org
- * A's session id would get an empty list rather than a wrong one, but the join would be scoped by
- * a connector-supplied string alone, which is the 15.2 shape this repo has been bitten by twice.
+ * EMPTY WHEN THERE IS NO LABEL, and the route does NOT 404 first — it answers `200 {revisions: []}`.
+ * An earlier version of this comment claimed the opposite, which mattered because a caller would
+ * have read it as "an empty list means the label exists with no snapshots" (a state
+ * `createOutcomeLabel` makes unrepresentable, since it writes v1 in the same transaction). The real
+ * contract is that "no label" and "label with no snapshots" are indistinguishable here, and only
+ * the first is reachable.
+ *
+ * That asymmetry with `GET …/label`'s 404 is deliberate rather than an oversight: a SINGLETON that
+ * does not exist is a 404, a COLLECTION that is empty is a 200 with an empty array. 16.2 should
+ * call `GET …/label` to ask whether a label exists and this endpoint only to render its history.
+ *
+ * The join carries an org predicate on BOTH sides. The revisions-side one gives ISOLATION; the
+ * label-side one is DEFENCE IN DEPTH rather than the thing establishing ownership — be precise,
+ * because the earlier wording overstated it. `label_id` is an org-owned uuid, so the join already
+ * confines the result to this org's label; the second predicate exists because the 15.2 rule is to
+ * name the org on every table a connector-supplied string touches, rather than to rely on a join
+ * keeping its current shape.
  */
 export async function listOutcomeLabelRevisions(
   tx: DbClient,
@@ -566,5 +657,5 @@ export async function listOutcomeLabelRevisions(
       ),
     )
     .orderBy(asc(outcomeLabelRevisions.revision));
-  return rows as OutcomeLabelRevisionRow[];
+  return rows;
 }

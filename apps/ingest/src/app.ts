@@ -292,7 +292,7 @@ export function buildApp(opts: BuildAppOptions): FastifyInstance {
       return reply.code(409).send({ error: err.message, reason: err.reason });
     }
     // M16 16.1 — an outcome-label mutation refused by the repository. Mapped BY REASON rather than
-    // collapsed to one code, because the three answers are genuinely different questions:
+    // collapsed to one code, because the four answers are genuinely different questions:
     // `not_found` is a missing subject (404); `already_labeled` is a CONFLICT with the org's current
     // state — D-16.1-3 makes a second author a 409, never a silent overwrite of somebody's
     // judgement; and `not_author` is an AUTHORIZATION refusal (403), because a label is an opinion

@@ -1174,7 +1174,8 @@ export const auditEvents = pgTable(
  * are entitled to retract. That is what earns it a real DELETE without weakening the invariant.
  *
  * STRICT TENANT TABLE (`STRICT_TABLES` in `rls.int.test.ts`): the same 0015 org policy and 0016
- * RESTRICTIVE role-write backstop as the other thirteen. It is none of the other classifications —
+ * RESTRICTIVE role-write backstop as the thirteen STRICT tables that preceded it (and as its own
+ * revisions sibling). It is none of the other classifications —
  * every writer reaches it from inside `withOrg` with a real principal, so nothing straddles the
  * org-context boundary the way `audit_events` does, and it has a genuine per-tenant read path.
  *

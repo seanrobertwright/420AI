@@ -333,8 +333,9 @@ label leaves the session's captured data completely untouched.
 Writing needs a `member`-rung key or better; reading, listing and exporting need only `viewer`.
 
 ```bash
-# Record a label (201). `taskType`, `intent`, `outcome`, `qualityRating` and `primaryFriction` are
-# required; `followUpCommitOrPr` and `confidence` are optional.
+# Record a label (201). `status` is the ONLY always-required field. When it is "labeled",
+# `taskType`, `intent`, `outcome`, `qualityRating` and `primaryFriction` are required too;
+# `followUpCommitOrPr` and `confidence` stay optional. A "skipped" body carries none of them.
 curl.exe -s -X POST "$BASE/v1/sessions/<sessionId>/label" \
   -H "authorization: Bearer $ADMIN" -H "content-type: application/json" \
   --data-binary "@label.json"
@@ -343,16 +344,20 @@ curl.exe -s -X POST "$BASE/v1/sessions/<sessionId>/label" \
 # {"status":"labeled","taskType":"feature","intent":"ship the label API",
 #  "outcome":"shipped","qualityRating":4,"primaryFriction":"none","confidence":"high"}
 
-# Skip instead — a real row, so nothing asks you about this session again:
+# Skip instead — a real row, so nothing asks you about this session again.
+# Use a FILE for every body, not an inline escaped string: PowerShell forwards the literal
+# backslashes and curl receives invalid JSON (see the PowerShell note in the operations guide).
+# skip.json is: {"status":"skipped"}
 curl.exe -s -X POST "$BASE/v1/sessions/<sessionId>/label" \
   -H "authorization: Bearer $ADMIN" -H "content-type: application/json" \
-  --data-binary "{\"status\":\"skipped\"}"
+  --data-binary "@skip.json"
 
-# Read, edit (bumps the revision), and read the full edit history:
+# Read, edit (bumps the revision), and read the full edit history.
+# patch.json is: {"qualityRating":2,"primaryFriction":"context"}
 curl.exe -s "$BASE/v1/sessions/<sessionId>/label"            -H "authorization: Bearer $ADMIN"
 curl.exe -s -X PATCH "$BASE/v1/sessions/<sessionId>/label" \
   -H "authorization: Bearer $ADMIN" -H "content-type: application/json" \
-  --data-binary "{\"qualityRating\":2,\"primaryFriction\":\"context\"}"
+  --data-binary "@patch.json"
 curl.exe -s "$BASE/v1/sessions/<sessionId>/label/revisions" -H "authorization: Bearer $ADMIN"
 
 # List across the org, optionally filtered and paged:
@@ -369,6 +374,19 @@ Notes worth knowing before you start labelling:
 
 - **One label per session.** A second `POST` returns `409` rather than overwriting — a label is
   somebody's judgement, not a mutable field.
+- **The session must already be captured.** A session id with no events is a `404 no such session`
+  — there is no foreign key to catch a typo, so the API checks before writing rather than leaving a
+  permanent orphan label behind.
+- **Turning a skip into a judgement needs the whole judgement in the same body.** `PATCH
+{"status":"labeled"}` on its own is a `400` with `reason: "incomplete_label"` naming the five
+  fields it still needs; send them together. Likewise, sending §4.3 fields to a row that is still
+  `skipped` without also sending `status: "labeled"` is a `400` rather than a silent no-op.
+- **An empty `PATCH` body is a `400`** (`minProperties: 1`), so a revision bump always corresponds
+  to a request that named a field. Re-sending an unchanged value still bumps — value-level
+  idempotency is not offered.
+- **Only `followUpCommitOrPr` and `confidence` accept an explicit `null`** to clear them; the five
+  required-when-`labeled` fields do not. To retract a judgement entirely, patch `status` to
+  `skipped`, which clears all seven at once and keeps the prior judgement in the revision history.
 - **Edits are author-only**, at every rung including `owner`. Deletes are author-or-`admin`, because
   retraction is not rewriting.
 - **The history is a record, not a counter.** Revision 1 keeps the values you first gave, so a rating

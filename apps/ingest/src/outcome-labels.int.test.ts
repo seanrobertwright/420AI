@@ -355,6 +355,21 @@ describe.skipIf(!TEST_URL || !APP_URL)("M16 16.1 outcome labels (two-role HTTP)"
     expect(await countLabels()).toBe(0);
   });
 
+  /**
+   * 3b ── THE EXISTENCE GUARD IS ORG-SCOPED, which is the case that can break silently.
+   *
+   * Test 3 uses a session id that exists nowhere, so it passes even if `sessionDetail`'s `orgId`
+   * argument were dropped or transposed. `SESSION_A2` exists ONLY in org A and is the probe that
+   * discriminates: without the org predicate, org B could create a label against org A's session —
+   * an orphan in B's tenant pointing at a session B cannot see, corrupting 16.4's denominator on
+   * both sides.
+   */
+  it("org B cannot label a session that exists only in org A", async () => {
+    const res = await postLabel(tokenB, SESSION_A2, LABELED_BODY);
+    expect(res.statusCode).toBe(404);
+    expect(await countLabels()).toBe(0);
+  });
+
   // 4 ── D-16.1-3 / 15.2. Two tenants sharing a connector session id stay completely separate.
   it("org B cannot see org A's label for a SHARED session id", async () => {
     await postLabel(tokenA, SHARED_SESSION, { ...LABELED_BODY, intent: "ORG-A-ONLY-INTENT" });
@@ -391,6 +406,9 @@ describe.skipIf(!TEST_URL || !APP_URL)("M16 16.1 outcome labels (two-role HTTP)"
     });
     expect(read.body).toContain("sk-ant-api03");
 
+    // A `not.toContain` on its own is VACUOUS — an empty body passes it, and so would a redactor
+    // that deleted the field rather than masking it, or a broken serializer. So each format also
+    // asserts the row is actually THERE and that `intent` survived as a changed, non-empty string.
     for (const format of ["json", "jsonl", "csv"] as const) {
       const exported = await app.inject({
         method: "GET",
@@ -399,6 +417,44 @@ describe.skipIf(!TEST_URL || !APP_URL)("M16 16.1 outcome labels (two-role HTTP)"
       });
       expect(exported.statusCode).toBe(200);
       expect(exported.body, `${format} export must be redacted`).not.toContain("sk-ant-api03");
+      expect(exported.headers["x-export-row-count"], `${format} row count`).toBe("1");
+      expect(exported.body.length, `${format} export must not be empty`).toBeGreaterThan(0);
+
+      if (format === "json") {
+        const parsed = exported.json() as {
+          manifest: {
+            subject: string;
+            format: string;
+            rowCount: number;
+            truncated: boolean;
+            redactionVersion: string;
+          };
+          rows: { intent: string; sessionId: string }[];
+        };
+        expect(parsed.manifest.subject).toBe("labels");
+        expect(parsed.manifest.format).toBe("json");
+        expect(parsed.manifest.rowCount).toBe(1);
+        expect(parsed.manifest.truncated).toBe(false);
+        expect(parsed.manifest.redactionVersion).toBeTruthy();
+        expect(parsed.rows).toHaveLength(1);
+        expect(parsed.rows[0]!.sessionId).toBe(SHARED_SESSION);
+        // MASKED, not dropped: still a non-empty string, and no longer the original.
+        expect(parsed.rows[0]!.intent).toBeTruthy();
+        expect(parsed.rows[0]!.intent).not.toBe(SECRET_INTENT);
+      } else if (format === "jsonl") {
+        const lines = exported.body.trim().split("\n");
+        expect(lines).toHaveLength(1);
+        expect(() => JSON.parse(lines[0]!)).not.toThrow();
+      } else {
+        const lines = exported.body.trim().split("\r\n");
+        // Pins the CSV column ORDER, which nothing else does — a reordered header silently breaks
+        // every downstream consumer that reads by position.
+        expect(lines[0]).toBe(
+          "id,sessionId,authorUserId,status,taskType,intent,outcome,qualityRating,primaryFriction,followUpCommitOrPr,confidence,revision,createdAt,updatedAt",
+        );
+        expect(lines).toHaveLength(2);
+        expect(lines[1]).toContain(SHARED_SESSION);
+      }
     }
   });
 
@@ -556,7 +612,8 @@ describe.skipIf(!TEST_URL || !APP_URL)("M16 16.1 outcome labels (two-role HTTP)"
       (history.json() as { revisions: { outcome: string | null }[] }).revisions[0]!.outcome,
     ).toBe("shipped");
 
-    // Upgrading back to `labeled` with no judgement is a 400 that NAMES the missing fields.
+    // Upgrading back to `labeled` with no judgement is a 400 that NAMES the missing fields — ALL
+    // five of them, so a guard that reported only the first would fail this.
     const empty = await app.inject({
       method: "PATCH",
       url: `/v1/sessions/${SHARED_SESSION}/label`,
@@ -566,7 +623,46 @@ describe.skipIf(!TEST_URL || !APP_URL)("M16 16.1 outcome labels (two-role HTTP)"
     expect(empty.statusCode).toBe(400);
     const err = empty.json() as { error: string; reason: string };
     expect(err.reason).toBe("incomplete_label");
-    expect(err.error).toContain("outcome");
+    for (const field of [
+      "taskType",
+      "intent",
+      "outcome",
+      "qualityRating",
+      "primaryFriction",
+    ] as const) {
+      expect(err.error, `400 must name ${field}`).toContain(field);
+    }
+
+    // REGRESSION (prp-review): sending fields to a row that is STILL skipped, without also sending
+    // `status: "labeled"`, must be refused rather than silently discarded behind a 200.
+    const sneaky = await app.inject({
+      method: "PATCH",
+      url: `/v1/sessions/${SHARED_SESSION}/label`,
+      headers: asJson(tokenA),
+      payload: { qualityRating: 5 },
+    });
+    expect(sneaky.statusCode).toBe(400);
+    expect((sneaky.json() as { reason: string }).reason).toBe("incomplete_label");
+  });
+
+  // 8d ── The `not_found → 404` arm of the OutcomeLabelError map is otherwise never exercised
+  //       through HTTP (409/403/400 all are), so a wrong ternary arm would ship silently.
+  it("PATCH and DELETE on an unlabeled session are 404 with the right reason", async () => {
+    const patched = await app.inject({
+      method: "PATCH",
+      url: `/v1/sessions/${SESSION_A2}/label`,
+      headers: asJson(tokenA),
+      payload: { qualityRating: 3 },
+    });
+    expect(patched.statusCode).toBe(404);
+    expect((patched.json() as { reason: string }).reason).toBe("not_found");
+
+    const deleted = await app.inject({
+      method: "DELETE",
+      url: `/v1/sessions/${SESSION_A2}/label`,
+      headers: asUser(tokenA),
+    });
+    expect(deleted.statusCode).toBe(404);
   });
 
   // 8c ── The two §4.3 OPTIONAL fields accept an explicit `null` over the wire; the required ones

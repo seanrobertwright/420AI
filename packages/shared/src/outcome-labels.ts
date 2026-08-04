@@ -5,11 +5,17 @@
  * happened (tokens, cost, tool calls, commits) and cannot answer whether the work was useful.
  * These sets are the specification for that answer.
  *
- * TEXT, not a pg enum, matching `memberships.role` (schema.ts:87), `ROLES` and every other closed
+ * TEXT, not a pg enum, matching `memberships.role` (schema.ts:90), `ROLES` and every other closed
  * set in this repo — adding a value is a code change, not a migration. The `outcome_labels` columns
- * carry NO CHECK constraint, so THESE GUARDS PLUS THE ROUTE'S JSON-SCHEMA ENUMS ARE THE
- * ENFORCEMENT. The route builds its enums from these arrays (`[...TASK_TYPES]`) rather than
- * re-typing the strings, so a value added here cannot be silently rejected at the HTTP edge.
+ * carry NO CHECK constraint, so THE ROUTE'S JSON-SCHEMA ENUMS ARE THE ENFORCEMENT on the write
+ * path: it builds them from these arrays (`[...TASK_TYPES]`) rather than re-typing the strings, so
+ * a value added here cannot be silently rejected at the HTTP edge.
+ *
+ * THE GUARDS BELOW ARE NOT PART OF THAT WRITE PATH, and an earlier version of this paragraph
+ * claimed they were. They have ZERO production call sites today: they are narrowing helpers for a
+ * value read back OUT of a TEXT column — 16.2's form, 16.4's audit, and the one case no ajv enum
+ * ever sees, a value written by a break-glass `psql` session under D-M15-7. Saying they "are the
+ * enforcement" when nothing calls them is the M15 15.5 mistake, so it is said accurately here.
  *
  * THE VALUES ARE THE RESEARCH PLAN'S, NOT THIS MODULE'S. `.agents/supplemental docs/
  * research-analysis-plan.md` §4.3 owns WHAT is measured; this repo owns HOW it is built. Changing,
@@ -23,9 +29,12 @@
  * only place the two spellings differ, and `isFriction("model/tool")` deliberately returns FALSE
  * so the un-normalized form cannot enter the archive by a side door (asserted in the unit test).
  *
- * PRIVACY, stated because §4.3 makes it a rule rather than a nicety: labels are private to the
- * user's own archive. They are org-scoped tenant rows behind the M15 15.3 RLS backstop, and the
- * export path redacts them (D-16.1-7) because `intent` is free human text.
+ * PRIVACY, stated because §4.3 makes it a rule rather than a nicety — and stated PRECISELY, because
+ * "private to the user's own archive" reads as author-scoped and the implementation is not. Labels
+ * never leave the ORG: they are org-scoped tenant rows behind the M15 15.3 RLS backstop, readable
+ * by any member of that org at `viewer` and above (D-15.4-2 — every member sees every project and
+ * machine in their org, and 16.4's aggregate needs the whole org's rows). Only the AUTHOR may edit
+ * one (D-16.1-4). The export path redacts them (D-16.1-7) because `intent` is free human text.
  */
 
 /** §4.3 `task_type` — what KIND of work the session was. Enables meaningful comparisons. */

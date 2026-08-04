@@ -695,9 +695,10 @@ export const createApiKeyBodySchema = {
  *
  * ONLY `status` is required, because A SKIP IS A ROW (D-16.1-2) and carries none of the six §4.3
  * fields. The required-when-`labeled` shape is deliberately NOT expressed here: ajv could do it with
- * `if/then`, but the repository's discriminated union already makes an incomplete `labeled` create a
- * compile error at every internal call site, and the route checks it explicitly so the 400 NAMES the
- * missing field instead of emitting an opaque if/then validation error.
+ * `if/then`, but the REPOSITORY's `assertLabelShape` checks the merged row, so the 400 names the
+ * missing fields instead of emitting an opaque if/then validation error — and, decisively, it
+ * covers PATCH too, which an `if/then` here could not: a partial edit of an already-complete label
+ * legitimately sends one field, so only the merged state can be judged.
  */
 export const createOutcomeLabelBodySchema = {
   type: "object",

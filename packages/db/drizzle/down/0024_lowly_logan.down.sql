@@ -1,8 +1,11 @@
 -- Down-migration for 0024 (M16 16.1, the §4.3 outcome labels). Two bare DROP TABLEs: the policies,
 -- the indexes and all five FKs drop with their tables, so there is no policy-ordering hazard of the
 -- kind 0015-0017's downs had to navigate. REVISIONS FIRST — `outcome_label_revisions.label_id`
--- references `outcome_labels.id`, and the FK is `ON DELETE no action`, so dropping the parent first
--- fails.
+-- references `outcome_labels.id`, so dropping the parent while the child table still exists fails
+-- with `cannot drop table … because other objects depend on it`. Note the mechanism precisely: the
+-- referential ACTION (`ON DELETE no action`) is irrelevant to `DROP TABLE` — it governs row
+-- deletion, not object dependency. Only `DROP … CASCADE` would sidestep it, and that would silently
+-- drop the child table's FK rather than making us think about the order, which is the whole point.
 --
 -- D-M15-13 rollback-drill note: THIS DESTROYS EVERY HUMAN OUTCOME LABEL AND ITS ENTIRE EDIT
 -- HISTORY, IRRECOVERABLY — and it is worth being precise about why that is a stronger claim here

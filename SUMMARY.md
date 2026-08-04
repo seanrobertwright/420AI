@@ -860,11 +860,12 @@ enforced`, the sibling of `skipped ≠ passed`. Closes the Spike-6 hole: a cross
     §7 P0.2's "preserve … edits" a record rather than a claim: v1 keeps the values first given, so a
     rating revised upward a week later is visible **as** hindsight (D-16.1-1). One repository, one
     closed-set module in `@420ai/shared` built from §4.3's own value table, seven routes, and TWO
-    two-role integration suites (16 repository + 11 HTTP tests). A **skip is a row** (D-16.1-2) —
+    two-role integration suites (20 repository + 13 HTTP tests). A **skip is a row** (D-16.1-2) —
     without one, §4.3's "do not nag repeatedly" is unimplementable. Edits are **author-only at every
     rung including `owner`**, because 16.4 reads these rows as evidence; DELETE is author-or-`admin`,
     because retraction is not rewriting (D-16.1-4). It also closes half of the gap 16.0 wrote down
-    rather than hid: labels are the **first deletable object** in the archive and now have a written
+    rather than hid: labels are the first deletable **archive content** (identity and access objects
+    were always deletable) and now have a written
     policy (D-16.1-6, `docs/guide/data-boundary.md` §6) — which does not weaken "raw records sacred",
     since a label is neither raw nor derived but volunteered human ground truth. Both suites assert
     the §7 P0.2 core claim directly (`events` and `raw_source_records` counts unchanged across the
