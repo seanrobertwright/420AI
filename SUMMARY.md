@@ -872,7 +872,7 @@ enforced`, the sibling of `skipped ≠ passed`. Closes the Spike-6 hole: a cross
     full create/edit/delete lifecycle) rather than assuming it. **No UI** — the tray and dashboard
     surfaces are 16.2.
 
-  - **16.2** ✅ **DONE `2026-08-04` (PR #NN)** — Label capture (desktop) + review (dashboard). The
+  - **16.2** ✅ **DONE `2026-08-04` (PR #76)** — Label capture (desktop) + review (dashboard). The
     surfaces that make 16.1's model reachable by a human: before this, every label cost a terminal,
     a session id looked up by hand and a JSON body, so completion over a 24-week research period
     would have been zero and every 16.4 outcome metric would have been computed over an empty set
