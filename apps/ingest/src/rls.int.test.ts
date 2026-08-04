@@ -470,6 +470,50 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.3 RLS through the HTTP surface", 
     }
   });
 
+  // 10 ── M16 16.4. The audit's BEHAVIOURAL app-role proof, and it is the test that matters for
+  //       that slice. `org-scoping.test.ts` is a structural grep and is FILE-granular — one
+  //       `withOrg(` anywhere exempts the whole file — which is exactly how CLAUDE.md records
+  //       `deliverPendingFirings` shipping dead (zero rows read silently, every webhook stopped,
+  //       every owner-connected test still green).
+  //
+  //       An audit report is ESPECIALLY vulnerable to that failure, more so than the alert path:
+  //       under a missing org context every count returns 0, and 0 is a PLAUSIBLE-LOOKING audit
+  //       result. It would not look like a bug — it would look like a quiet week. So the assertion
+  //       here is on the SIDE EFFECT actually having happened: real, non-zero, org-scoped numbers.
+  it("generates a data-quality audit with REAL data under the app role (not a silent all-zero read)", async () => {
+    // `windowDays: 365` — this suite's fixtures are seeded at 2026-07-01, outside the 7-day
+    // default. The window is the thing being widened, NOT the assertion.
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/audit/data-quality",
+      headers: { ...asUser(tokenA), "content-type": "application/json" },
+      payload: { windowDays: 365, sampleSize: 5 },
+    });
+    expect(res.statusCode).toBe(201);
+    const row = res.json() as {
+      scopeId: string;
+      metrics: {
+        sessionsInWindow: number;
+        eventsInWindow: number;
+        metrics: { parseSuccess: { kind: string; denominator?: number } };
+        reconciliation: { sampleSize: number };
+      };
+    };
+
+    // THE assertion: org A's own two events are visible. A handler missing its `withOrg` reads
+    // zero rows here, which every owner-connected suite in the repo would happily call correct.
+    expect(row.metrics.sessionsInWindow).toBeGreaterThan(0);
+    expect(row.metrics.eventsInWindow).toBe(2);
+    expect(row.metrics.metrics.parseSuccess.kind).toBe("measured");
+    expect(row.metrics.metrics.parseSuccess.denominator).toBeGreaterThan(0);
+    expect(row.metrics.reconciliation.sampleSize).toBeGreaterThan(0);
+
+    // …and NOT org B's three. Both orgs seeded the SAME session id and project path, so a count of
+    // 5 would be the cross-tenant merge 15.2 exists to prevent, arriving through a new read path.
+    expect(row.metrics.eventsInWindow).not.toBe(5);
+    expect(row.scopeId).toBe(orgA);
+  });
+
   /** `login`, but against an arbitrary app instance (test 9 builds its own). */
   async function loginOn(
     target: FastifyInstance,

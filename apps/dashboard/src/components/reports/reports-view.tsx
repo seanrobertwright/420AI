@@ -17,6 +17,7 @@ import { cn } from "@/lib/utils";
 import { formatDate } from "@/lib/format";
 import { ReportCompare } from "@/components/reports/report-compare";
 import { ReportMarkdown } from "@/components/reports/report-markdown";
+import { AuditActions } from "@/components/reports/audit-actions";
 
 /** Page size — matches the server's default `limit` on GET /v1/reports (13.4). */
 const REPORTS_PAGE = 50;
@@ -58,12 +59,17 @@ export function ReportsView({ reports: initialReports }: { reports: ReportArtifa
   return (
     <PageShell
       title="Reports"
-      subtitle="Versioned report artifacts (cost-over-time, session autopsy)."
+      subtitle="Versioned report artifacts (cost-over-time, session autopsy, data-quality audit)."
     >
       <div className="space-y-8">
         <Card>
-          <CardHeader>
+          <CardHeader className="flex flex-row items-start justify-between gap-4">
             <CardTitle>Artifacts</CardTitle>
+            {/* M16 16.4 — the ONLY generation control on this page, and deliberately so: every
+                other report type is scoped to a project or a session and is generated from that
+                surface (which carries the scope id). The audit is org-scoped, so this page is the
+                only place it belongs (D-16.4-7). */}
+            <AuditActions />
           </CardHeader>
           <CardContent>
             {reports.length === 0 ? (

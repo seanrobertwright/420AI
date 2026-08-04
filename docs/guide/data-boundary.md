@@ -237,6 +237,38 @@ including home paths, and that the **route** is contractually required to redact
 Event exports are bounded at **100,000 rows** (`repositories/exports.ts:22`), and truncation is
 surfaced in the manifest and header rather than being silent.
 
+### The data-quality audit decrypts a bounded sample, and stores none of it (M16 16.4)
+
+`POST /v1/audit/data-quality` generates an org-scoped report artifact of the capture-quality
+metrics. Six of its seven metrics read **plaintext metadata only** — counts, timestamps, model
+names, connector ids, `project_path` — and never touch an encrypted column.
+
+The seventh, **recoverability**, is the one place in the reporting layer that decrypts. It answers
+"can this archive still re-derive its events from its raw records?", which cannot be answered
+without reading the raw records. Concretely, per sampled session it:
+
+1. reads that session's `raw_source_records` and **decrypts them in server memory**;
+2. re-runs the same parser the collector runs at capture time;
+3. compares the **fingerprint set** it produces against the fingerprint set already stored;
+4. keeps four integers — `storedEvents`, `reparsedEvents`, `missing`, `extra` — and discards the
+   plaintext.
+
+Three properties bound it, and each is enforced rather than intended:
+
+- **Bounded.** Only the sampled sessions are decrypted — 10 by default, and the request schema caps
+  `sampleSize` at 50 (`apps/ingest/src/schemas.ts`). It is never an archive-wide decrypt.
+- **Nothing decrypted is stored or rendered.** The artifact's `metrics` and `markdown` contain
+  counts and session ids only. No message body, no tool payload, no file content, and no decrypted
+  text of any kind reaches the report, the search index, or the export endpoints above.
+- **It writes nothing at all.** `reparseDryRun` performs no insert, update or delete — it is a
+  read-only twin of the M13 re-parse engine, deliberately kept separate so measuring recoverability
+  cannot mutate the archive it is measuring. An integration test snapshots the `events` and
+  `raw_source_records` row counts across a run and asserts both are unchanged
+  (`packages/db/src/repositories/recoverability.int.test.ts`).
+
+The decrypt happens **server-side only**. The browser never receives raw payloads from this path;
+it receives the rendered Markdown, on the same terms as every other report artifact.
+
 ## 6. What is deleted, and how
 
 **Read this section carefully — the answer is "almost nothing, automatically."**

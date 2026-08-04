@@ -3,7 +3,9 @@
  * generate-reports — OS-cron scheduled report generation (M13 13.6, PRD §15/§19 step 13).
  *
  *   node scripts/generate-reports.mjs [--types <csv|all>] [--project <uuid|all>]
+ *   node scripts/generate-reports.mjs --audit [--window-days <n>] [--sample-size <n>]
  *   # or: npm run reports:generate -- --types project.efficiency --project <uuid>
+ *   # or: npm run reports:generate -- --audit            (the M16 16.4 weekly data-quality audit)
  *
  * There is NO in-server scheduler (docs/guide/operations.md is explicit — the server owns no
  * background dispatch). This is the script the OS scheduler runs: it walks every project
@@ -39,10 +41,31 @@ export const PROJECT_REPORT_TYPES = [
 
 const TIMEOUT_MS = 30_000;
 
-/** Parse `--types <csv|all>` and `--project <uuid|all>` (no deps). Throws on an unknown flag. */
+/** Parse a `--flag <n>` integer value, or throw with the flag named. */
+function intArg(args, i, flag) {
+  const raw = args[i];
+  if (raw === undefined) throw new Error(`${flag} requires a positive integer value`);
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1) throw new Error(`${flag} requires a positive integer value`);
+  return n;
+}
+
+/**
+ * Parse `--types <csv|all>`, `--project <uuid|all>`, and the M16 16.4 `--audit` flag (no deps).
+ * Throws on an unknown flag — deliberately kept, so a typo in a cron line fails loudly rather than
+ * silently generating the default sweep.
+ *
+ * `--audit` is a MODE, not a report type, and that is the whole reason it is a separate flag rather
+ * than a seventh entry in `PROJECT_REPORT_TYPES`: the audit is ORG-scoped, so putting it in that
+ * list would make `--types all` POST one audit per project — N identical org-wide artifacts, each
+ * claiming to be about a different project.
+ */
 export function parseArgs(args) {
   let types = "all";
   let project = "all";
+  let audit = false;
+  let windowDays;
+  let sampleSize;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--types") {
@@ -53,11 +76,17 @@ export function parseArgs(args) {
       project = args[++i];
       if (project === undefined)
         throw new Error("--project requires a value (a project uuid, or 'all')");
+    } else if (a === "--audit") {
+      audit = true;
+    } else if (a === "--window-days") {
+      windowDays = intArg(args, ++i, "--window-days");
+    } else if (a === "--sample-size") {
+      sampleSize = intArg(args, ++i, "--sample-size");
     } else {
       throw new Error(`unknown argument: ${a}`);
     }
   }
-  return { types, project };
+  return { types, project, audit, windowDays, sampleSize };
 }
 
 /** Resolve `--types` to a concrete, validated list of known project report types. */
@@ -118,9 +147,42 @@ async function main(args, env) {
     );
   }
 
-  const { types, project } = parseArgs(args);
-  const reportTypes = resolveReportTypes(types);
+  const { types, project, audit, windowDays, sampleSize } = parseArgs(args);
   const headers = { authorization: `Bearer ${apiKey}`, "content-type": "application/json" };
+
+  // M16 16.4 — the org-scoped data-quality audit. ONE POST, org-wide, then return WITHOUT
+  // iterating projects: every §5.1 metric is a statement about the capture PIPELINE, not about a
+  // project (a per-project parse-success rate would invite "project X has bad data" when the real
+  // subject is a connector, a machine, or a parser version).
+  if (audit) {
+    const body = {};
+    if (windowDays !== undefined) body.windowDays = windowDays;
+    if (sampleSize !== undefined) body.sampleSize = sampleSize;
+    try {
+      const res = await fetch(`${baseUrl}/v1/audit/data-quality`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+      });
+      if (!res.ok) {
+        console.error(`FAIL org.data_quality_audit → HTTP ${res.status} ${await safeText(res)}`);
+        return 1;
+      }
+      const row = await res.json();
+      console.log(
+        `ok   org.data_quality_audit → artifact ${row.id} v${row.version ?? "?"} (${row.reportVersion ?? "?"})`,
+      );
+      return 0;
+    } catch (err) {
+      console.error(
+        `FAIL org.data_quality_audit → ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return 1;
+    }
+  }
+
+  const reportTypes = resolveReportTypes(types);
 
   const projectIds = project === "all" ? await fetchProjectIds(baseUrl, headers) : [project];
   if (projectIds.length === 0) {

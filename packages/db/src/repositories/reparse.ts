@@ -68,8 +68,12 @@ function* chunks<T>(arr: T[], size: number): Generator<T[]> {
  * index). This makes the re-parse assign byte-identical rawRecordIds — and
  * therefore identical fingerprints — to unchanged events, and preserves the
  * turn_context model carry-forward order exactly.
+ *
+ * EXPORTED for M16 16.4's read-only dry run (D-16.4-6). ONE implementation, two callers: the write
+ * engine below and `recoverability.ts`. A duplicated reassembler would drift from this one and make
+ * the recoverability metric measure the copy rather than the product.
  */
-function reassembleCodex(rows: { sourceRecordId: string; plaintext: string }[]): string {
+export function reassembleCodex(rows: { sourceRecordId: string; plaintext: string }[]): string {
   const byIndex = new Map<number, string>();
   let maxIndex = -1;
   let parseable = true;
@@ -100,8 +104,11 @@ function reassembleCodex(rows: { sourceRecordId: string; plaintext: string }[]):
  * bounds the synthetic session-start/end projections). Lines without a
  * timestamp inherit the previous line's sort key, so they stay adjacent to
  * their neighbors under the stable sort.
+ *
+ * EXPORTED for M16 16.4's read-only dry run (D-16.4-6) — see `reassembleCodex` above for why this
+ * is a visibility change rather than a second copy.
  */
-function reassembleClaude(rows: { plaintext: string }[]): string {
+export function reassembleClaude(rows: { plaintext: string }[]): string {
   let carry = "";
   const keyed = rows.map((r) => {
     let ts: string | undefined;

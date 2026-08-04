@@ -200,8 +200,14 @@ function msOf(iso: string | null): number | null {
  * (`claude-export`, `chatgpt-export`, `gemini-export`) capture only when an export file is dropped
  * in, which may be never. Flagging their quiet would put a permanent false red on the panel and
  * train the operator to ignore it — the same "cry wolf" failure §4.3 avoids for labels (D-16.3-4).
+ *
+ * EXPORTED for M16 16.4 (D-16.4-2's rule, applied to a predicate rather than a verdict). The
+ * data-quality audit's sync-freshness metric needs the same live-vs-batch split — a batch
+ * connector's "agreed liveness window" is "whenever an export is dropped in", which the archive
+ * cannot know — and a second copy of this two-line test is exactly the kind of judgement that
+ * drifts silently. One definition, two callers.
  */
-const isLiveCapture = (liveness: ConnectorCatalogLiveness): boolean =>
+export const isLiveCapture = (liveness: ConnectorCatalogLiveness): boolean =>
   liveness === "streaming" || liveness === "near-real-time";
 
 /**
