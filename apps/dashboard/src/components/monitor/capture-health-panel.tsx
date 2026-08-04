@@ -2,7 +2,6 @@
 
 import { Fragment, useCallback, useEffect, useState } from "react";
 import type { CaptureHealthRow, CaptureHealthSnapshot } from "@420ai/shared/capture-health";
-import { CAPTURE_HEALTH_VERDICT } from "@420ai/shared/capture-health";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -21,6 +20,7 @@ import {
   STATE_LABELS,
   VERDICT_LABELS,
   badgeClassForState,
+  summarizeVerdicts,
 } from "@/lib/capture-health-display";
 
 /**
@@ -140,11 +140,12 @@ function CaptureHealthTable({
     );
   }
 
-  const counts = rows.reduce<Record<string, number>>((acc, r) => {
-    const v = CAPTURE_HEALTH_VERDICT[r.state];
-    acc[v] = (acc[v] ?? 0) + 1;
-    return acc;
-  }, {});
+  // Reads `r.verdict` — the value the SERVER derived — rather than re-deriving it from the state.
+  // The panel used to recompute `CAPTURE_HEALTH_VERDICT[r.state]` here while the wire already
+  // carried the answer, which is two derivations of one number: the exact shape D-16.3-1 refuses
+  // elsewhere. Now the field has one producer and one reader. Tallying itself lives in
+  // `lib/capture-health-display` because it is a decidable judgement and this lane has no tests.
+  const counts = summarizeVerdicts(rows);
 
   return (
     <div className="space-y-4">
@@ -153,8 +154,7 @@ function CaptureHealthTable({
       <div className="text-muted-foreground flex flex-wrap gap-x-6 gap-y-1 text-xs">
         {(["capturing", "broken", "not-capturing", "unknown"] as const).map((v) => (
           <span key={v}>
-            <span className="text-foreground font-medium">{counts[v] ?? 0}</span>{" "}
-            {VERDICT_LABELS[v]}
+            <span className="text-foreground font-medium">{counts[v]}</span> {VERDICT_LABELS[v]}
           </span>
         ))}
       </div>

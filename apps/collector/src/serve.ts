@@ -4,7 +4,13 @@ import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { isSea } from "node:sea";
 import { runCaptureEngine, type CaptureEngineOptions } from "./capture-engine.js";
-import { loadCredentials, QUEUE_PATH, type Credentials } from "./identity.js";
+import {
+  loadCredentials,
+  QUEUE_PATH,
+  connectorConfigPathFor,
+  connectorApprovalsPathFor,
+  type Credentials,
+} from "./identity.js";
 import { QueueStore, type QueueStats } from "./queue/queue-store.js";
 import type { Connector } from "./connectors/connector.js";
 import { loadRegistry } from "./connectors/registry.js";
@@ -24,12 +30,11 @@ import {
   loadConnectorApprovals as loadConnectorApprovalsDefault,
   saveConnectorApprovals as saveConnectorApprovalsDefault,
   seedMissingApprovals,
-  approvalStatus,
   approveConnector,
   filterByApproval,
   type ConnectorApprovals,
 } from "./connectors/connector-approvals.js";
-import { mapConnectorInfo } from "./connectors/connector-info.js";
+import { mapConnectorInfo, resolveConnectorStates } from "./connectors/connector-info.js";
 import type { ControlCommand, ControlEvent } from "@420ai/shared";
 
 /**
@@ -126,10 +131,20 @@ export function runServe(deps: ServeDeps = {}): Promise<void> {
     ? { connectors: deps.connectorRegistry, dropped: [] as { id: string; reason: string }[] }
     : loadRegistry(home, { catalog: loadCachedCatalog()?.payload });
   const connectorRegistry = registry.connectors;
-  const loadConnectorCfg = deps.loadConnectorConfig ?? loadConnectorConfigDefault;
-  const saveConnectorCfg = deps.saveConnectorConfig ?? saveConnectorConfigDefault;
-  const loadApprovals = deps.loadConnectorApprovals ?? loadConnectorApprovalsDefault;
-  const saveApprovals = deps.saveConnectorApprovals ?? saveConnectorApprovalsDefault;
+  // PR #77 review — resolved from `home`, not from the import-time `homedir()` constants, so
+  // `serve` and `watch` read ONE profile's connector settings. See `identity.ts`: `--home` must
+  // move every collector-home artifact together or it moves none of them honestly.
+  const cfgPath = connectorConfigPathFor(home);
+  const approvalsPath = connectorApprovalsPathFor(home);
+  const loadConnectorCfg = deps.loadConnectorConfig ?? (() => loadConnectorConfigDefault(cfgPath));
+  const saveConnectorCfg =
+    deps.saveConnectorConfig ??
+    ((cfg: ConnectorConfig) => saveConnectorConfigDefault(cfg, cfgPath));
+  const loadApprovals =
+    deps.loadConnectorApprovals ?? (() => loadConnectorApprovalsDefault(approvalsPath));
+  const saveApprovals =
+    deps.saveConnectorApprovals ??
+    ((cfg: ConnectorApprovals) => saveConnectorApprovalsDefault(cfg, approvalsPath));
 
   // Slice 12.7b: seed-on-first-sight (default-on). Record the current capture-surface
   // fingerprint for any connector not yet known, establishing the baseline so a LATER
@@ -172,16 +187,18 @@ export function runServe(deps: ServeDeps = {}): Promise<void> {
 
   /** Emit the current registry + persisted enablement + approval state as a `connectors` event. */
   function emitConnectors(): void {
-    const cfg = loadConnectorCfg();
-    const approvals = loadApprovals();
-    const connectors = connectorRegistry.map((c) =>
-      mapConnectorInfo(
-        c,
-        cfg.connectors[c.id]?.enabled !== false,
-        home,
-        approvalStatus(c, approvals, home),
-      ),
+    // Same resolver the engine's heartbeat report uses, so the webview and the archive can never
+    // show different enablement for the same connector.
+    const states = resolveConnectorStates(
+      connectorRegistry,
+      loadConnectorCfg(),
+      loadApprovals(),
+      home,
     );
+    const connectors = connectorRegistry.map((c) => {
+      const s = states.get(c.id);
+      return mapConnectorInfo(c, s?.enabled ?? false, home, s?.approval ?? "approved");
+    });
     emit({ type: "connectors", connectors });
   }
 
@@ -219,21 +236,10 @@ export function runServe(deps: ServeDeps = {}): Promise<void> {
       // M16 16.3: REPORT the full registry, CAPTURE the filtered subset — the same split `cli.ts`
       // makes, so the desktop and service paths produce the same scorecard.
       registry: connectorRegistry,
-      // Config + approvals are read ONCE per report, not once per connector per report — the same
-      // hoist `emitConnectors` above already does, and the same shape `cli.ts` uses.
-      connectorStates: (reg) => {
-        const cfg = loadConnectorCfg();
-        const approvals = loadApprovals();
-        return new Map(
-          reg.map((c) => [
-            c.id,
-            {
-              enabled: cfg.connectors[c.id]?.enabled !== false,
-              approval: approvalStatus(c, approvals, home),
-            },
-          ]),
-        );
-      },
+      // Config + approvals read ONCE per report; the mapping is shared with `cli.ts` so the desktop
+      // and the Windows service cannot disagree about what "enabled" means.
+      connectorStates: (reg) =>
+        resolveConnectorStates(reg, loadConnectorCfg(), loadApprovals(), home),
       onSyncSuccess: (at) => {
         lastSyncAt = at;
       },

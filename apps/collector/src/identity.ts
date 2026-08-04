@@ -38,6 +38,29 @@ export function credentialsPathFor(home: string): string {
 export function queuePathFor(home: string): string {
   return join(collectorHomeFor(home), "queue.sqlite");
 }
+/**
+ * M16 16.3 (PR #77 review) — connector ENABLEMENT and APPROVALS are `--home`-scoped too, and their
+ * absence here was a real hole rather than an omission of convenience.
+ *
+ * `CONNECTOR_CONFIG_PATH` / `CONNECTOR_APPROVALS_PATH` bake in `homedir()` at import time exactly as
+ * the constants above do. Until 16.3 that was harmless, because only `serve` (which runs as the
+ * desktop user) read them. 16.3's F-16.3-1 fix made `watch` read them as well — and `watch --home`
+ * is precisely the Windows SERVICE invocation, running as LocalSystem. So the service read
+ * `…\config\systemprofile\.420ai\connectors.json`, which does not exist, fell through to default-on,
+ * and kept capturing a connector the operator had disabled — while REPORTING it as `enabled: true`
+ * on the capture health scorecard. A fabricated fact, on the primary capture path, from the very
+ * slice built to stop fabricating facts.
+ *
+ * This is the footgun the `--home` doc above already warns about ("a flag that moved only the
+ * connector home but not creds+queue"), one file further out: the flag must move EVERY collector-home
+ * artifact or it moves none of them honestly.
+ */
+export function connectorConfigPathFor(home: string): string {
+  return join(collectorHomeFor(home), "connectors.json");
+}
+export function connectorApprovalsPathFor(home: string): string {
+  return join(collectorHomeFor(home), "connector-approvals.json");
+}
 
 export interface Credentials {
   url: string;

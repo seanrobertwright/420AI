@@ -2,6 +2,7 @@ import { and, eq, gte, sql } from "drizzle-orm";
 import type { ActiveSessionRow, BacklogSample, MachineStatusRow } from "@420ai/shared";
 import type { DbClient } from "../client.js";
 import { events, machineHeartbeats, machines } from "../schema.js";
+import { toIso } from "./sql-coerce.js";
 
 /**
  * M9 Live Monitor projections (PRD §8.4, §10.1.1, §20). Read-only, CLOCK-FREE —
@@ -81,8 +82,6 @@ export async function machineStatuses(db: DbClient, orgId: string): Promise<Mach
  * NOT ISO — normalize to ISO with `toIso()` for a clean wire contract.
  */
 
-/** Normalize a Postgres timestamp string (or already-ISO string) to a strict ISO string. */
-const toIso = (v: string | null): string | null => (v ? new Date(v).toISOString() : null);
 export async function activeSessions(
   db: DbClient,
   orgId: string,

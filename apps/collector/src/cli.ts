@@ -32,6 +32,8 @@ import {
   QUEUE_PATH,
   credentialsPathFor,
   queuePathFor,
+  connectorConfigPathFor,
+  connectorApprovalsPathFor,
   loadCredentials,
   saveCredentials,
   requireCredentials,
@@ -40,6 +42,7 @@ import {
 } from "./identity.js";
 import { QueueStore, type QueueStats, type SyncOutcome } from "./queue/queue-store.js";
 import { runCaptureEngine } from "./capture-engine.js";
+import { resolveConnectorStates } from "./connectors/connector-info.js";
 import {
   loadConnectorConfig as loadConnectorConfigDefault,
   filterConnectors,
@@ -49,7 +52,6 @@ import {
   loadConnectorApprovals as loadConnectorApprovalsDefault,
   saveConnectorApprovals as saveConnectorApprovalsDefault,
   seedMissingApprovals,
-  approvalStatus,
   filterByApproval,
   type ConnectorApprovals,
 } from "./connectors/connector-approvals.js";
@@ -237,10 +239,22 @@ export async function runWatch(opts: {
    * Order copied from `serve.ts`: seed-on-first-sight (establishing the baseline so a LATER drift
    * is detectable), then both filters composed. Default-on is preserved by both — an absent id
    * means enabled, an unrecorded connector seeds as approved.
+   *
+   * BOTH FILES ARE READ FROM `home`, NOT FROM `homedir()` (PR #77 review). The defaults bake in
+   * `homedir()` at import time, so under the Windows service — `watch --home C:\Users\me` as
+   * LocalSystem — they resolved to `…\config\systemprofile\.420ai\` and found nothing, silently
+   * restoring the pre-fix behaviour on the ONE path this fix exists for. `--home` moves every
+   * collector-home artifact together or it moves none of them honestly (see `identity.ts`).
    */
-  const loadCfg = opts.loadConnectorConfig ?? loadConnectorConfigDefault;
-  const loadApprovals = opts.loadConnectorApprovals ?? loadConnectorApprovalsDefault;
-  const saveApprovals = opts.saveConnectorApprovals ?? saveConnectorApprovalsDefault;
+  const loadCfg =
+    opts.loadConnectorConfig ?? (() => loadConnectorConfigDefault(connectorConfigPathFor(home)));
+  const loadApprovals =
+    opts.loadConnectorApprovals ??
+    (() => loadConnectorApprovalsDefault(connectorApprovalsPathFor(home)));
+  const saveApprovals =
+    opts.saveConnectorApprovals ??
+    ((cfg: ConnectorApprovals) =>
+      saveConnectorApprovalsDefault(cfg, connectorApprovalsPathFor(home)));
   const seeded = seedMissingApprovals(connectors, loadApprovals(), home);
   if (seeded.changed) saveApprovals(seeded.approvals);
   const enabled = filterByApproval(filterConnectors(connectors, loadCfg()), loadApprovals(), home);
@@ -267,20 +281,9 @@ export async function runWatch(opts: {
     // What to REPORT — the FULL registry, so a disabled or withheld connector renders as such on
     // the capture health scorecard instead of vanishing (which reads identically to broken).
     registry: connectors,
-    // Config + approvals are read ONCE per report, not once per connector per report.
-    connectorStates: (reg) => {
-      const cfg = loadCfg();
-      const approvals = loadApprovals();
-      return new Map(
-        reg.map((c) => [
-          c.id,
-          {
-            enabled: cfg.connectors[c.id]?.enabled !== false,
-            approval: approvalStatus(c, approvals, home),
-          },
-        ]),
-      );
-    },
+    // Config + approvals are read ONCE per report, not once per connector per report; the mapping
+    // itself is shared with `serve.ts` so the service and desktop views cannot drift.
+    connectorStates: (reg) => resolveConnectorStates(reg, loadCfg(), loadApprovals(), home),
   });
 }
 

@@ -1173,6 +1173,29 @@ entire purpose is to end those. It is not acceptable to leave it silent even tho
 (archive first) makes it unlikely, so task 19 adds the `onError` seam and the engine logs it. The
 swallow itself **stays** — a heartbeat failure must never stall the sync loop (residual risk e).
 
+> **ERRATUM — D-16.3-6 (measured during execution; corrected again at PR #77 review).** The
+> paragraph above reasons about JSON Schema's `additionalProperties` **specification**, but the
+> behaviour is decided by a **configuration**: Fastify registers ajv with `removeAdditional: true`,
+> so an undeclared property is **STRIPPED and the request returns 200** — measured, and now pinned by
+> two tests in `apps/ingest/src/capture-health.int.test.ts`. There is no 400.
+>
+> The consequence inverts in the direction that matters. A newer collector against an older archive
+> does **not** get a loud rejection whose swallow hides it; it gets a cheerful **200 with the whole
+> inventory silently discarded**, the machine stays **online**, and `onError` never fires because
+> nothing failed. That is *milder* than the plan feared and strictly *less* visible. The `onError`
+> seam and the archive-before-collector deploy order both stay — but the deploy order, not the
+> schema, is what actually protects this.
+>
+> Recorded as an erratum rather than a rewrite for the same reason the D3 row above is: the mistake
+> is the instructive part. **When a plan states a failure mode at a framework boundary, spike the
+> framework, not the spec.** Ten spikes ran during planning and not one posted a body with an extra
+> field; one `app.inject` would have cost a minute.
+>
+> Note also that the bound violations this schema *does* enforce (`maxItems`/`maxLength`) are **not**
+> stripped — those are a real 400, which rejects the whole heartbeat including the machine's
+> liveness. PR #77 moved the clamping to the sender (`toMachineConnectorReport`) so a well-behaved
+> collector can never trigger it.
+
 **D-16.3-7 — `errorCount` is owned by the collector, never accumulated server-side.**
 The collector persists it in `queue.sqlite` and the server overwrites on every report. A
 server-side counter would be a second source of truth that drifts on every re-pair, restart or

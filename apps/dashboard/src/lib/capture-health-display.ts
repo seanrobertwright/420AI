@@ -72,3 +72,31 @@ export const VERDICT_LABELS = {
 
 export const badgeClassForState = (s: CaptureHealthState): string =>
   TONE_BADGE_CLASS[STATE_TONE[s]];
+
+/**
+ * Tally rows by VERDICT for the summary line above the table (PR #77 review).
+ *
+ * Lives here, not in the `.tsx`, because it is a decidable judgement and the dashboard has no
+ * component-test lane — the panel's own header asserts that no such judgement lives in that file,
+ * and the tally was quietly making that comment false.
+ *
+ * READS `row.verdict` rather than re-deriving it from `row.state`. The server already stamped it
+ * from `CAPTURE_HEALTH_VERDICT`; recomputing here would be a second derivation of one number that
+ * can only ever agree or silently disagree.
+ *
+ * Every verdict is present in the result even at ZERO, deliberately: "Can't tell: 0" is the
+ * scorecard visibly demonstrating it CAN say "I don't know", which is the M16 Risk 2 mitigation. A
+ * count that only appears when non-zero would hide the capability exactly when things look fine.
+ */
+export function summarizeVerdicts(
+  rows: { verdict: CaptureHealthVerdict }[],
+): Record<CaptureHealthVerdict, number> {
+  const counts: Record<CaptureHealthVerdict, number> = {
+    capturing: 0,
+    "not-capturing": 0,
+    broken: 0,
+    unknown: 0,
+  };
+  for (const r of rows) counts[r.verdict] = (counts[r.verdict] ?? 0) + 1;
+  return counts;
+}

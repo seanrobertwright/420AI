@@ -34,6 +34,13 @@ export const CAPTURE_HEALTH_VERSION = "m16-capture-health-v1";
  * not something anyone has to remember.
  */
 export type MachineConnectorReport = Omit<ConnectorInfo, "watchGlobs"> & {
+  /**
+   * REQUIRED here even though `ConnectorInfo.custom` is optional (PR #77 review). The wire schema
+   * lists `custom` in `required`, so the two must agree or a producer typed against THIS type can
+   * legitimately omit a field the edge then 400s — taking the whole heartbeat, and the machine's
+   * liveness, with it. `toMachineConnectorReport` already always sets it, so narrowing costs nothing.
+   */
+  custom: boolean;
   /** Last capture error for this connector, collector-owned (D-16.3-7). Null once never-errored. */
   lastErrorMessage: string | null;
   /** ISO timestamp of `lastErrorMessage`. */
@@ -333,6 +340,24 @@ function classifyDeclared(
   // Silence is only evidence when silence is SURPRISING. A batch connector is expected to be quiet
   // for weeks; a live-capture one that produced nothing while a sibling on the same machine did is
   // suspicious — worded as suspicion on the panel, never as a verdict.
-  if (isLiveCapture(d.liveness) && machinesWithRecentActivity.has(d.machineId)) return "silent";
+  //
+  // BUT SIBLING EVIDENCE CANNOT BE THE ONLY TRIGGER, and assuming it could was a real hole
+  // (D-16.3-4, extended after PR #77 review). The realistic outage is MACHINE-WIDE — the documented
+  // Windows footgun is a service running under LocalSystem whose `homedir()` is
+  // `…\config\systemprofile`, so EVERY connector's globs match nothing at the same moment. Nothing
+  // throws, so `lastErrorAt` stays null; the heartbeat still flows, so the machine is `online`. With
+  // no sibling left to blow the whistle, every connector fell through to `idle` — whose verdict is
+  // `capturing` — and the panel reported "2 Capturing" for a machine capturing NOTHING. That is the
+  // healthy-looking zero this module exists to prevent, in the exact dogfood configuration (two
+  // live connectors, no third to act as a control). Proven with a test before this branch existed.
+  //
+  // So a live-capture connector that has NEVER produced ANYTHING is `silent` on its own evidence:
+  // "no events, ever" is not a quiet week, it is an unproven capture path. Sibling evidence remains
+  // the trigger for a connector that USED to produce and then stopped, which is the case it was
+  // always the right signal for. Batch connectors are untouched — their quiet is still `idle`.
+  if (isLiveCapture(d.liveness)) {
+    if (d.lastEventAt === null) return "silent";
+    if (machinesWithRecentActivity.has(d.machineId)) return "silent";
+  }
   return "idle";
 }

@@ -6,6 +6,7 @@ import type {
 } from "@420ai/shared";
 import type { DbClient } from "../client.js";
 import { events, machineConnectors, machines } from "../schema.js";
+import { toIso } from "./sql-coerce.js";
 
 /**
  * M16 16.3 — the DECLARED × OBSERVED join behind the capture health scorecard (§7 P0.1).
@@ -24,13 +25,14 @@ import { events, machineConnectors, machines } from "../schema.js";
  *   - `max(events.ts)` is an AGGREGATE over a `mode:"string"` column. The column's parser does NOT
  *     apply inside a raw `sql` template, so it comes back as Postgres TEXT
  *     (`2026-08-01 00:00:00+00`) and MUST go through `toIso`. Measured, not assumed (spike S2).
- *   - `machineConnectors.reportedAt` / `.lastErrorAt` are PLAIN timestamptz columns selected
- *     directly, so the driver returns a JS `Date` and the fix is `.toISOString()`, exactly as
- *     `machineStatuses` (repositories/monitor.ts:61) does.
+ *   - `machineConnectors.reportedAt` / `.lastErrorAt` are PLAIN timestamptz columns (no `mode`), so
+ *     the driver `Date` reaches us untouched and the fix is `.toISOString()` — a DIFFERENT
+ *     mechanism, as `machineStatuses` does. `toIso` is not what you want for these.
+ *
+ * `toIso` itself lives in `./sql-coerce.js`, once, with the full mechanism written down — it had
+ * been copy-pasted into four repository files, which is the wrong shape for the helper whose
+ * ABSENCE CLAUDE.md records as a repeatedly-shipped bug.
  */
-
-/** Postgres timestamp text → strict ISO. For AGGREGATES only — see the header. */
-const toIso = (v: string | null): string | null => (v ? new Date(v).toISOString() : null);
 
 /** Explicit column list — keeps `DeclaredConnectorRow` honest and keeps `org_id` off the wire. */
 const declaredColumns = {
@@ -51,6 +53,22 @@ const declaredColumns = {
   errorCount: machineConnectors.errorCount,
   reportedAt: machineConnectors.reportedAt,
 } as const;
+
+/**
+ * A wire timestamp → `Date`, or null when absent OR UNPARSEABLE (PR #77 review).
+ *
+ * The schema bounds `lastErrorAt` to 40 characters but declares no `format`, so `"yesterday"`
+ * validates. `new Date("yesterday")` is an `Invalid Date`, which node-postgres serializes as
+ * `NaN-aN-aN…` and Postgres rejects with `22007` — 500ing the ENTIRE heartbeat transaction,
+ * liveness write included, on every retry. A well-formed request would then hold a machine
+ * permanently `offline`. The shared `msOf` is already defensive in the same way on the read side;
+ * this is the write side catching up.
+ */
+function toDateOrNull(iso: string | null | undefined): Date | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
 
 /**
  * Replace one machine's declared connector inventory: upsert every report, then prune whatever the
@@ -76,11 +94,18 @@ export async function replaceMachineConnectors(
   reports: MachineConnectorReport[],
   now: Date,
 ): Promise<void> {
-  if (reports.length > 0) {
+  // LAST WINS on a duplicate connector id (PR #77 review). Postgres raises
+  // `ON CONFLICT DO UPDATE command cannot affect row a second time` when one statement proposes two
+  // rows with the same conflict key, which would 500 the shared heartbeat transaction and take
+  // liveness down with it. `loadRegistry` already drops id-colliding defs, so the real collector
+  // cannot produce this — but a machine-authed endpoint should not offer a persistent 500 to a
+  // hand-rolled client, and JSON Schema cannot express "unique by property".
+  const deduped = [...new Map(reports.map((r) => [r.id, r])).values()];
+  if (deduped.length > 0) {
     await db
       .insert(machineConnectors)
       .values(
-        reports.map((r) => ({
+        deduped.map((r) => ({
           orgId,
           machineId,
           connectorId: r.id,
@@ -95,7 +120,7 @@ export async function replaceMachineConnectors(
           requiredPermissions: r.requiredPermissions,
           custom: r.custom ?? false,
           lastErrorMessage: r.lastErrorMessage,
-          lastErrorAt: r.lastErrorAt ? new Date(r.lastErrorAt) : null,
+          lastErrorAt: toDateOrNull(r.lastErrorAt),
           errorCount: r.errorCount,
           reportedAt: now,
         })),
@@ -133,7 +158,7 @@ export async function replaceMachineConnectors(
   // the one operation Postgres cannot make loud (15.4: no `WITH CHECK` for DELETE, so a blocked one
   // is an unavoidable silent `DELETE 0`). Scoping both halves of a "replace" by the same predicate
   // keeps the function correct standalone instead of correct-because-the-caller-wrapped-it.
-  const ids = reports.map((r) => r.id);
+  const ids = deduped.map((r) => r.id);
   const machineScope = and(
     eq(machineConnectors.orgId, orgId),
     eq(machineConnectors.machineId, machineId),

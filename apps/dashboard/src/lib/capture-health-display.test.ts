@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { CAPTURE_HEALTH_VERDICT } from "@420ai/shared/capture-health";
-import type { CaptureHealthState } from "@420ai/shared/capture-health";
+import type { CaptureHealthState, CaptureHealthVerdict } from "@420ai/shared/capture-health";
 import {
   STATE_DESCRIPTIONS,
   STATE_LABELS,
@@ -8,6 +8,7 @@ import {
   TONE_BADGE_CLASS,
   VERDICT_LABELS,
   badgeClassForState,
+  summarizeVerdicts,
 } from "./capture-health-display";
 
 /**
@@ -72,5 +73,30 @@ describe("capture health display maps", () => {
     for (const s of ALL_STATES) {
       expect(VERDICT_LABELS[CAPTURE_HEALTH_VERDICT[s]], `no verdict label for ${s}`).toBeTruthy();
     }
+  });
+});
+
+describe("summarizeVerdicts (PR #77 review)", () => {
+  const row = (verdict: CaptureHealthVerdict) => ({ verdict });
+
+  it("reports every verdict even at zero, so 'Can't tell' is visibly available", () => {
+    // The M16 Risk 2 mitigation is only a mitigation if the operator can SEE that the scorecard is
+    // able to say "I don't know". A key that vanishes at zero hides that exactly when all is well.
+    expect(summarizeVerdicts([])).toEqual({
+      capturing: 0,
+      "not-capturing": 0,
+      broken: 0,
+      unknown: 0,
+    });
+  });
+
+  it("tallies by the verdict the SERVER stamped, not by re-deriving from state", () => {
+    const counts = summarizeVerdicts([
+      row("capturing"),
+      row("capturing"),
+      row("broken"),
+      row("unknown"),
+    ]);
+    expect(counts).toEqual({ capturing: 2, "not-capturing": 0, broken: 1, unknown: 1 });
   });
 });

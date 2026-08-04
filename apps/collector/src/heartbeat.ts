@@ -66,11 +66,25 @@ export async function maybeSendHeartbeat(
   const nowMs = deps.now().getTime();
   if (nowMs - state.lastSentMs < deps.intervalMs) return; // throttle to the cadence
   state.lastSentMs = nowMs;
-  const { pending, inflight } = deps.queue.stats();
-  // Read the inventory HERE, at send time — see `connectorReports`. Omitted entirely when no thunk
-  // is wired, because `undefined` and `[]` are different facts to the server (D-16.3-2).
-  const connectors = deps.connectorReports?.();
+  // INSIDE THE TRY, AND THAT PLACEMENT IS THE POINT (PR #77 review — the fourth unguarded
+  // reporter, and the one with the largest blast radius).
+  //
+  // `queue.stats()` reads `queue.sqlite`, and `connectorReports()` reads it again
+  // (`connectorErrors()`) plus calls the caller's `connectorStates()` — which in `cli.ts`/`serve.ts`
+  // reads two config files from disk — plus `watchGlobs(home)` for every registry connector. None of
+  // that is infallible: SQLITE_BUSY under the documented double-writer (a service AND "run on login")
+  // is enough. Both used to sit ABOVE the try, so a throw rejected `maybeSendHeartbeat`, which
+  // `runSyncLoop` awaits unguarded, which `Promise.race([watcherLoop, syncLoop])` awaits — unwinding
+  // the WHOLE capture engine. That is F-16.3-2 reached through the reporting path, and the swallow
+  // below could not catch it because it had not started yet. The comment further down about an
+  // observer that must not become the failure it reports was defeated by two lines above it.
+  //
+  // Omitted entirely when no thunk is wired, because `undefined` and `[]` are different facts to the
+  // server (D-16.3-2). A thunk that THROWS is treated as "could not read the inventory" and also
+  // omits it, rather than pruning the archive's rows on the strength of a local sqlite hiccup.
   try {
+    const { pending, inflight } = deps.queue.stats();
+    const connectors = deps.connectorReports?.();
     await (deps.post ?? postHeartbeat)(deps.url, deps.token, {
       queuePending: pending,
       queueInflight: inflight,

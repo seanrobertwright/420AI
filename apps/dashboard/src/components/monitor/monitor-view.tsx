@@ -32,6 +32,7 @@ export function MonitorView({ snapshot, nowMs }: { snapshot: LiveMonitorSnapshot
   for (const m of machines) counts[m.status]++;
   const totalBacklog = machines.reduce((sum, m) => sum + (m.queuePending ?? 0), 0);
   const anyBacklogHigh = machines.some((m) => m.backlogHigh);
+  const totalToolsFailed = connectors.reduce((sum, c) => sum + c.toolsFailed, 0);
 
   return (
     <div className="space-y-8">
@@ -72,7 +73,20 @@ export function MonitorView({ snapshot, nowMs }: { snapshot: LiveMonitorSnapshot
           // different, larger number. Two connector counts on one screen is the "which number do I
           // believe?" problem D-16.3-1 refuses to create, so the label names which question this
           // one answers rather than leaving the reader to reconcile them.
-          fields={[{ label: "Connectors seen", value: String(connectors.length) }]}
+          // "Tool failures" is here because removing the old Connectors card took the ONLY surface
+          // that showed `toolsFailed` with it (PR #77 review) — a slice about making capture failure
+          // visible must not silently drop a failure count that already existed. It stays on this
+          // OBSERVED-side tile rather than moving into the Capture health panel: it is derived from
+          // `connectorHealth`, which the panel deliberately does not read, and folding it in would
+          // put two differently-sourced numbers in one table.
+          fields={[
+            { label: "Connectors seen", value: String(connectors.length) },
+            {
+              label: "Tool failures",
+              value: String(totalToolsFailed),
+              highlight: totalToolsFailed > 0,
+            },
+          ]}
         />
       </div>
 

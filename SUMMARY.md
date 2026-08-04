@@ -941,7 +941,7 @@ enforced`, the sibling of `skipped ≠ passed`. Closes the Spike-6 hole: a cross
     laptop. The header comment asserting "the lines are retried next tick" **was the defect** (the
     15.5 class): true about the cursor, false about the loop, since there was no next tick. Fixed
     per FILE, not per loop, with the failing test written first.
-    **D-16.3-3 — `watchGlobs` never reach the archive**, enforced three ways rather than remembered:
+    **D-16.3-3 — `watchGlobs` never reach the archive**, enforced four ways rather than remembered:
     at the type level (`Omit<ConnectorInfo, "watchGlobs">`), by a collector test asserting the key's
     absence, and at the HTTP edge. They are absolute paths under the operator's home, and
     `requiredPermissions` carries the same information in the form §7 P0.4 review actually needs.

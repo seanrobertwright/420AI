@@ -2,6 +2,7 @@ import { and, eq, sql } from "drizzle-orm";
 import type { LabelQueueRow } from "@420ai/shared";
 import type { DbClient } from "../client.js";
 import { events, machines, outcomeLabels } from "../schema.js";
+import { toIso } from "./sql-coerce.js";
 
 /**
  * M16 16.2 — the LABEL QUEUE: settled, in-window sessions that carry no label row yet
@@ -54,9 +55,6 @@ import { events, machines, outcomeLabels } from "../schema.js";
  * SECOND parameter (the 15.2 convention). Silent library — throws, never logs. The caller wraps
  * this in `withOrg`; do NOT call `withOrg` in here.
  */
-
-/** Normalize a Postgres timestamp string (or already-ISO string) to a strict ISO string. */
-const toIso = (v: string | null): string | null => (v ? new Date(v).toISOString() : null);
 
 export async function labelQueue(
   db: DbClient,

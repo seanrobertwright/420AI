@@ -181,6 +181,8 @@ export async function pollLoop(
     log: (msg: string) => void;
     /** M16 16.3: report a poll failure so it renders `erroring` instead of vanishing. */
     onError?: (connector: Connector, err: unknown) => void;
+    /** M16 16.3 (PR #77): a clean sweep clears the fault, so a resolved error stops reading red. */
+    onSuccess?: (connector: Connector) => void;
   },
   signal: AbortSignal,
 ): Promise<void> {
@@ -210,6 +212,8 @@ export async function pollLoop(
           );
         }
       }
+      // A full sweep with no throw clears the connector's fault — see `clearConnectorError`.
+      opts.onSuccess?.(opts.connector);
     } catch (err) {
       // Best-effort by contract: never let a poll/store error stop session capture. M16 16.3 —
       // but it is no longer INVISIBLE: a best-effort/swallow path is the worst place to lose a
@@ -265,6 +269,8 @@ export async function runCaptureEngine(opts: CaptureEngineOptions): Promise<void
       return toMachineConnectorReport(
         mapConnectorInfo(c, state.enabled, home, state.approval),
         errors.get(c.id),
+        // The archive boundary: home-relativize any path in the permissions or the error message.
+        home,
       );
     });
   };
@@ -277,6 +283,10 @@ export async function runCaptureEngine(opts: CaptureEngineOptions): Promise<void
 
   const onChange = (connector: Connector, text: string): void => {
     const parsed = connector.parse(text);
+    // A SUCCESSFUL capture clears the connector's fault (PR #77 review). Placed AFTER `parse`, which
+    // is the step that actually throws, so a still-broken connector does not clear itself by
+    // reaching this line. See `clearConnectorError` for why a fault that cannot clear is permanent.
+    queue.clearConnectorError(connector.id);
     for (const r of parsed.rawRecords) {
       queue.enqueue("raw", `${r.sourceConnector}:${r.id}`, toRawRecordPayload(r));
     }
@@ -359,7 +369,14 @@ export async function runCaptureEngine(opts: CaptureEngineOptions): Promise<void
       .filter((c) => c.poll)
       .map((c) =>
         pollLoop(
-          { connector: c, home, queue, log, onError: recordConnectorError },
+          {
+            connector: c,
+            home,
+            queue,
+            log,
+            onError: recordConnectorError,
+            onSuccess: (connector) => queue.clearConnectorError(connector.id),
+          },
           internal.signal,
         ),
       );

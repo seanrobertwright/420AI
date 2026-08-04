@@ -292,6 +292,27 @@ export class QueueStore {
       .run(connectorId, bounded, atIso ?? this.now().toISOString());
   }
 
+  /**
+   * Clear a connector's error after a SUCCESSFUL capture (M16 16.3, PR #77 review).
+   *
+   * WITHOUT THIS, ONE TRANSIENT ERROR IS PERMANENT, and the mechanism is worth stating because it is
+   * not obvious. `classifyDeclared` decides `erroring` by `lastErrorAt >= lastEventAt` — but those
+   * are two DIFFERENT clocks: `lastErrorAt` is the collector's wall clock, while `lastEventAt` is
+   * `max(events.ts)`, the CONTENT timestamp. For the export connectors that content is the original
+   * conversation date, routinely weeks old. So after a single EACCES, every subsequent SUCCESSFUL
+   * import still lands events dated before the error, the predicate stays true forever, and the
+   * connector reads "Needs attention" for good — unfixable without hand-editing `queue.sqlite`.
+   * A scorecard that cannot clear a resolved fault trains the operator to ignore red, which is the
+   * same "cry wolf" failure D-16.3-4 avoids for `silent`.
+   *
+   * Deletes rather than zeroing: `errorCount` is a count of the CURRENT fault, not a lifetime
+   * tally, and D-16.3-7 makes the collector its only source of truth. The archive's copy is
+   * overwritten wholesale on the next heartbeat, so the row disappears there too.
+   */
+  clearConnectorError(connectorId: string): void {
+    this.db.prepare(`DELETE FROM connector_errors WHERE connector_id = ?`).run(connectorId);
+  }
+
   /** The latest error per connector, keyed by connector id. Empty when nothing has ever failed. */
   connectorErrors(): Map<string, ConnectorErrorRecord> {
     const rows = this.db

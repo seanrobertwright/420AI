@@ -158,24 +158,40 @@ describe("the liveness gate (D-16.3-4)", () => {
     expect(stateOf(i, "codex-cli")).toBe("silent");
   });
 
-  it("a live connector quiet on a machine where NOTHING captured is idle, not silent", () => {
+  /**
+   * THIS TEST USED TO ASSERT `idle`, AND IT WAS ENCODING THE BUG (corrected in PR #77 review).
+   *
+   * A machine where nothing captured is the OUTAGE case, not the quiet-week case, and `idle`'s
+   * verdict is `capturing` — so the suite was actively certifying that a total capture failure
+   * reads as "Capturing". A connector that has produced NOTHING, EVER is an unproven capture path
+   * and does not get the benefit of the doubt; sibling evidence remains the trigger for a connector
+   * that used to produce and stopped. The stale-but-non-null sibling below is deliberately kept so
+   * this still exercises "no fresh activity anywhere on the machine".
+   */
+  it("a live connector that never produced is silent even when NOTHING else captured either", () => {
     const i = inputs({
       declared: [
         declared({ connectorId: "codex-cli", lastEventAt: null }),
         declared({ connectorId: "claude-code", lastEventAt: ago(5 * DAY) }),
       ],
     });
-    expect(stateOf(i, "codex-cli")).toBe("idle");
+    expect(stateOf(i, "codex-cli")).toBe("silent");
+    // Its sibling HAS produced before, just not recently, and no fresh sibling accuses it — so it
+    // stays `idle`. The two rules coexist rather than one swallowing the other.
+    expect(stateOf(i, "claude-code")).toBe("idle");
   });
 
   it("a sibling on a DIFFERENT machine does not make this one silent", () => {
+    // The connector under test has a STALE but non-null `lastEventAt` on purpose: with `null` it
+    // would now be `silent` for the never-produced reason and this test would pass without ever
+    // exercising the machine-scoping it exists to check (it did, until PR #77 review).
     const i = inputs({
       machines: [
         { id: "m1", name: "laptop", status: "online" },
         { id: "m2", name: "desktop", status: "online" },
       ],
       declared: [
-        declared({ machineId: "m1", connectorId: "codex-cli", lastEventAt: null }),
+        declared({ machineId: "m1", connectorId: "codex-cli", lastEventAt: ago(5 * DAY) }),
         declared({ machineId: "m2", connectorId: "claude-code", lastEventAt: ago(MINUTE) }),
       ],
     });
@@ -343,5 +359,107 @@ describe("shape", () => {
     const row = deriveCaptureHealth(i, NOW)[0];
     expect(row?.machineName).toBe("m1");
     expect(row?.state).toBe("unknown");
+  });
+});
+
+/**
+ * PR #77 review. Every case below was a gap that a MUTATION survived — the reviewer broke the
+ * production code and all 30 existing tests still passed. A test suite that stays green while the
+ * decision it is supposed to pin is inverted is measuring nothing, so each of these was written
+ * against the specific mutation that escaped.
+ */
+describe("deriveCaptureHealth — the decisions nothing was pinning", () => {
+  it("a live connector that NEVER produced is silent, with no sibling to accuse it", () => {
+    // THE OUTAGE CASE, and the one that made the whole scorecard lie. A machine-wide failure (the
+    // documented LocalSystem `--home` footgun) leaves every connector with no events and no error,
+    // so before the fix each fell through to `idle` — whose verdict is `capturing` — and the panel
+    // reported "2 Capturing" for a machine capturing NOTHING.
+    const i = inputs({
+      declared: [
+        declared({ connectorId: "claude-code", lastEventAt: null, eventCount: 0 }),
+        declared({ connectorId: "codex-cli", lastEventAt: null, eventCount: 0 }),
+      ],
+    });
+    const rows = deriveCaptureHealth(i, NOW);
+    expect(rows.map((r) => r.state)).toEqual(["silent", "silent"]);
+    // The verdict is what the operator actually reads.
+    expect(rows.every((r) => r.verdict === "broken")).toBe(true);
+  });
+
+  it("a BATCH connector that never produced is still idle — the D-16.3-4 gate holds", () => {
+    // The guard on the fix above: an export connector may legitimately never have run.
+    const i = inputs({
+      declared: [declared({ liveness: "batch", lastEventAt: null, eventCount: 0 })],
+    });
+    expect(stateOf(i)).toBe("idle");
+  });
+
+  it("sibling evidence counts OBSERVED rows, not just declared ones", () => {
+    // Mutation that escaped: deleting `...inputs.observed` from the evidence set. A machine whose
+    // only fresh activity comes from an UNDECLARED (pre-16.3) connector must still incriminate its
+    // declared siblings. Uses a stale-but-non-null lastEventAt so the never-produced rule above is
+    // not what makes it pass.
+    const i = inputs({
+      declared: [declared({ lastEventAt: ago(3 * DAY) })],
+      observed: [
+        {
+          machineId: "m1",
+          connectorId: "cursor",
+          lastEventAt: ago(MINUTE),
+          eventCount: 5,
+          parserVersions: [],
+        },
+      ],
+    });
+    expect(stateOf(i)).toBe("silent");
+  });
+
+  it("an error EXACTLY at the last event is erroring — the >= boundary", () => {
+    // Mutation that escaped: weakening `errorMs >= eventMs` to `>`. This is the single comparison
+    // deciding erroring-vs-healthy, and the comment documents "at or after".
+    const at = ago(30 * MINUTE);
+    const i = inputs({
+      declared: [declared({ lastEventAt: at, lastErrorAt: at, lastErrorMessage: "EACCES" })],
+    });
+    expect(stateOf(i)).toBe("erroring");
+  });
+
+  it("an observed-only row on an OFFLINE machine stays unreported, never unknown", () => {
+    // The observed branch hardcodes `unreported` and the comment says machine status must not
+    // override it: "your collector does not report this yet" is the more actionable of two unknowns.
+    const i = inputs({
+      machines: [{ id: "m1", name: "laptop", status: "offline" }],
+      observed: [
+        {
+          machineId: "m1",
+          connectorId: "cursor",
+          lastEventAt: ago(2 * DAY),
+          eventCount: 3,
+          parserVersions: [],
+        },
+      ],
+    });
+    expect(stateOf(i, "cursor")).toBe("unreported");
+  });
+
+  it("an unparseable lastErrorAt is not treated as an error", () => {
+    // `msOf` returns null on garbage, so the connector is NEVER erroring. Pinned so the direction is
+    // a decision rather than an accident: an unreadable error timestamp must not manufacture a red
+    // row, and the freshness side already fails safe the same way.
+    const i = inputs({
+      declared: [declared({ lastErrorAt: "not a date", lastErrorMessage: "EACCES" })],
+    });
+    expect(stateOf(i)).toBe("healthy");
+  });
+
+  it("sorts by machine id when two machines share a name — row order is the panel's contract", () => {
+    const i = inputs({
+      machines: [
+        { id: "m2", name: "laptop", status: "online" },
+        { id: "m1", name: "laptop", status: "online" },
+      ],
+      declared: [declared({ machineId: "m2" }), declared({ machineId: "m1" })],
+    });
+    expect(deriveCaptureHealth(i, NOW).map((r) => r.machineId)).toEqual(["m1", "m2"]);
   });
 });

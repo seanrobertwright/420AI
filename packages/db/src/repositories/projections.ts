@@ -14,12 +14,7 @@ import {
 } from "@420ai/shared";
 import type { DbClient } from "../client.js";
 import { events, machines, workspaceKeys, workspaces } from "../schema.js";
-
-/**
- * Postgres timestamp text → strict ISO. Mirrors `repositories/monitor.ts`'s `toIso`; both exist
- * because the `mode:"string"` column parser does not reach inside a raw `sql` aggregate.
- */
-const toIso = (v: string | null): string | null => (v ? new Date(v).toISOString() : null);
+import { toIso } from "./sql-coerce.js";
 
 /**
  * Deterministic projection repository (M6, PRD §16.1). Read-only aggregation over
@@ -31,7 +26,14 @@ const toIso = (v: string | null): string | null => (v ? new Date(v).toISOString(
  * TIMESTAMP COERCION (CLAUDE.md "Drizzle / SQL gotchas"): inside a raw `sql` template the
  * `events.ts` `mode:"string"` parser does NOT apply, so `max(ts)`/`min(ts)` come back as Postgres
  * TEXT (`2026-08-01 00:00:00+00`), not ISO. Normalize every aggregate timestamp through `toIso`.
- * A bare `events.ts` column selection IS already ISO — the two are different mechanisms.
+ *
+ * A BARE `events.ts` SELECTION IS NOT ISO EITHER — an earlier version of this comment said it was,
+ * which is the wrong-mechanism class this repo keeps paying for. Measured: node-postgres returns a
+ * JS `Date` for timestamptz (drizzle's node-postgres driver installs no `setTypeParser` override),
+ * and `PgTimestampString.mapFromDriverValue` then formats it back to Postgres style — for
+ * `2026-08-01T00:00:00.000Z` it yields `"2026-08-01 00:00:00.000-04"`: space-separated, no `Z`, and
+ * stamped with the SERVER's local offset. The aggregate case is the LOUDEST instance of the hazard,
+ * not the only one. If the wire contract says ISO, normalize — aggregate or not.
  *
  * M15 15.2 ORG-SCOPING RULE (applies repo-wide): a read keyed by a CONNECTOR-SUPPLIED
  * string — `session_id`, `project_path`, `fingerprint` — MUST take `orgId` and apply
