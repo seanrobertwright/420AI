@@ -8,8 +8,8 @@ and API reference.
 
 ## 1. The desktop app, panel by panel
 
-The app window stacks five panels (top to bottom): **Pairing**, **Capture**, **Sync & Health**,
-**Connectors**, **Settings**.
+The app window stacks six panels (top to bottom): **Pairing**, **Capture**, **Sync & Health**,
+**Sessions to label**, **Connectors**, **Settings**.
 
 ### Pairing
 
@@ -34,10 +34,39 @@ opening the window.
 ### Sync & Health
 
 - **Local** backlog: `local state`, `pending`, `inflight`.
-- **Server fleet view** (needs the admin token, configured in Settings): `Collectors` with
-  `online`/`stale`/`offline` counts, `server backlog`, `connectors`, `active sessions`.
+- **Server fleet view** (needs an API key configured in Settings — `ADMIN_TOKEN` was retired in M15
+  15.9): `Collectors` with `online`/`stale`/`offline` counts, `server backlog`, `connectors`,
+  `active sessions`.
 - **Alerts** table (`Severity` / `Alert` / `Scope` / `Since`); `No active alerts.` when clear.
 - **Refresh** re-pulls the snapshot.
+
+### Sessions to label (M16 16.2)
+
+Automatic capture records what happened; it cannot record whether the work was **useful**. This
+panel is where you say so — about 15 seconds per session.
+
+- It lists **settled, unlabeled** sessions: last event more than 15 minutes ago (so you are not
+  asked about work you are still in the middle of) and less than 14 days old.
+- **Label** opens seven fields — five required (task type, what you were trying to do, outcome,
+  usefulness 1–5, what got in the way) and two optional (a confidence and a commit/PR link).
+- **Skip** is one click and always available. A skip is recorded as a real row, so **the session
+  leaves the queue permanently** — nothing will ask you about it again.
+- **Nothing to label. You are up to date.** when the queue is empty.
+
+**The app never interrupts you.** It does not raise a window, fire a notification, steal focus or
+poll while you work. That is deliberate: a prompt during deep work would change the very thing this
+data exists to measure.
+
+The queue is only ever refreshed when you open the app or press **Refresh**. **Label sessions…** in
+the tray brings the window forward and nothing more — it does not re-read the queue, so press
+**Refresh** if the app has been open a while.
+
+**Labelling needs a `member`-rung API key** (see
+[operations §15.9](./operations.md#159--api-keys-and-the-retirement-of-admin_token)). With a
+`viewer` key the queue still loads and saving is refused with a message telling you to mint a
+`member` key. Capture is unaffected either way.
+
+To review, edit or delete a label later, use the dashboard's **Labels** page (below).
 
 ### Connectors
 
@@ -66,7 +95,11 @@ Right-click the tray icon (tooltip **420AI Collector**):
 | ---------------------------------- | ------------------------------------------------------- |
 | **Start** / **Pause** / **Resume** | drive the collector sidecar (same as the Capture panel) |
 | **Server: manage in Settings**     | display-only label (server controls live in Settings)   |
+| **Label sessions…**                | brings the app window to the front (the panel is on it) |
 | **Quit**                           | exits the app (tears the sidecar down cleanly)          |
+
+There is deliberately **no unread count** on the label item. A caption that changed on its own would
+be a notification with extra steps, and this app does not notify — see the panel above.
 
 ---
 
@@ -229,6 +262,12 @@ from the persistent top nav:
   filters; snippets are content-safe (masked before storage).
 - **Machines** (`/machines`) — collector health, sync backlog, heartbeat, and the workspace→project
   mapping.
+- **Labels** (`/labels`) — every outcome label your org has recorded (M16 16.2). Filter by status,
+  outcome or task type; **Export CSV** downloads the same list **redacted**.
+  > **Redacted means masked, not removed.** The export scrubs _detected_ secrets — API keys, JWTs,
+  > bearer headers, connection strings, private-key blocks, emails, home paths — from every field.
+  > `intent` and the follow-up link are still exported **in full** apart from those matches, and no
+  > rule detects a customer or project name. Review a label export before sharing it.
 
 The browser never holds a machine credential: every page renders server-side and every browser→ingest call goes
 through a same-origin proxy Route Handler that adds the admin bearer on the server→ingest hop only.
@@ -258,6 +297,35 @@ Route Handler, checks the result, disables in-flight to avoid duplicate writes, 
 - **Settings** (`/settings`) — **read-only** system status: ingest health, the monitor version, the active
   pricing-catalog version, and whether the server env is configured (shown as "configured", never the
   value). Editable settings arrive in a later M12 slice.
+
+- **Labels** (`/labels`, M16 16.2) — review and correct your judgements:
+  - **Edit** re-opens the same seven fields. Only the label's **author** may edit it; no rung overrides
+    that, because 16.4's audit reads these rows as evidence and rewriting someone else's answer is
+    falsification rather than administration. An admin may **delete** one — retraction is not
+    rewriting.
+  - **Retract to skip** blanks the current row's judgement while keeping the earlier revision
+    readable in the label's history. Use this instead of **Delete** when you want to withdraw an
+    opinion without destroying the record that you once held it.
+  - Turning a **skip** back into a label needs the whole judgement, not a partial edit — the form
+    handles this for you.
+  - **Delete** removes the label and its full edit history. The session's raw records, events and
+    reports are untouched: a label is the one thing in the archive you may retract, because it is
+    the one thing a human volunteered.
+  - Each session row on a **project detail** page carries the same affordance, so you can label a
+    session while looking at its numbers.
+
+#### Linking a decision to a session (§7 P1.5)
+
+**Log a decision** on any label (or session row) generates a ready-to-paste `DEC-YYYY-NN` entry for
+`.agents/research/decisions.md`, pre-filled with the session id, timestamps, event count and the
+values you selected. Copy it, paste it into that file, fill in the blanks, and number it.
+
+> **It deliberately carries no free text.** `decisions.md` is committed to a **public repository**,
+> and its privacy rule is _links and IDs only_. Your `intent` line and any follow-up URL are
+> excluded by construction. The CSV export only MASKS detected secrets inside them and still emits
+> both fields; the stub omits them entirely. A public git
+> commit is permanent in a way a local download is not. The session id is the link; anyone with
+> archive access can follow it, and anyone without it learns nothing.
 
 Deferred to a later slice: rich Markdown/Mermaid report rendering, catalog **upload** UI, machine/token
 **revoke**, and a typed per-report-type metrics diff.
@@ -332,6 +400,9 @@ label leaves the session's captured data completely untouched.
 
 Writing needs a `member`-rung key or better; reading, listing and exporting need only `viewer`.
 
+The surfaces above (the desktop **Sessions to label** panel and the dashboard **Labels** page) are
+the everyday way in; the API below is what they call, and what an automation would use.
+
 ```bash
 # Record a label (201). `status` is the ONLY always-required field. When it is "labeled",
 # `taskType`, `intent`, `outcome`, `qualityRating` and `primaryFriction` are required too;
@@ -351,6 +422,12 @@ curl.exe -s -X POST "$BASE/v1/sessions/<sessionId>/label" \
 curl.exe -s -X POST "$BASE/v1/sessions/<sessionId>/label" \
   -H "authorization: Bearer $ADMIN" -H "content-type: application/json" \
   --data-binary "@skip.json"
+
+# Which sessions still need judging? (M16 16.2 — what the desktop panel renders.)
+# Settled = last event more than 15 minutes ago; in-window = less than 14 days old; and no label
+# row of any kind, so a SKIPPED session never comes back. `limit` defaults to 25, max 200.
+# The two windows are NOT parameters — a caller cannot widen them.
+curl.exe -s "$BASE/v1/labels/queue?limit=10" -H "authorization: Bearer $ADMIN"
 
 # Read, edit (bumps the revision), and read the full edit history.
 # patch.json is: {"qualityRating":2,"primaryFriction":"context"}

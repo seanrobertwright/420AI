@@ -13,6 +13,7 @@ import {
   AUTH_FAILURE_ALERT,
   CONNECTOR_RATE_ALERT,
   MONITOR_VERSION,
+  ACTIVE_WINDOW_MS,
   SERVICE_ROLE,
   alertKey,
   type AlertFiring,
@@ -38,12 +39,9 @@ import {
 } from "@420ai/db";
 import { resolvePrincipal, authorized } from "../auth.js";
 
-/**
- * The "active now" window: a session whose last event is within this lookback is
- * shown as active. M9 stores only the LATEST heartbeat sample, so this is current
- * recency — NOT a rate-of-change ("backlog growing" / trend is M10, D4).
- */
-const ACTIVE_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
+// `ACTIVE_WINDOW_MS` was a local const here until M16 16.2. It moved to `@420ai/shared` because
+// `GET /v1/labels/queue` defines "settled" as the inverse of this same window (D-16.2-2) and the
+// two surfaces must not be able to disagree. Behaviour here is unchanged — same 15 minutes.
 
 /**
  * Compose the LiveMonitorSnapshot from the clock-free projections. The ONLY wall-clock

@@ -22,6 +22,7 @@ import {
 import { formatDate, formatTokens, formatUsd } from "@/lib/format";
 import { ProjectReportActions } from "@/components/projects/project-report-actions";
 import { SessionReportActions } from "@/components/projects/session-report-actions";
+import { SessionLabelActions } from "@/components/projects/session-label-actions";
 import { ProjectRename } from "@/components/projects/project-rename";
 
 /**
@@ -198,6 +199,8 @@ export function ProjectDetailView({
                     <TableHead>Cost</TableHead>
                     <TableHead>Started</TableHead>
                     <TableHead>Generate</TableHead>
+                    {/* M16 16.2 — §4.3's "always editable", where the evidence is on screen. */}
+                    <TableHead>Label</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -215,6 +218,9 @@ export function ProjectDetailView({
                       </TableCell>
                       <TableCell>
                         <SessionReportActions sessionId={s.sessionId} />
+                      </TableCell>
+                      <TableCell>
+                        <SessionLabelActions sessionId={s.sessionId} />
                       </TableCell>
                     </TableRow>
                   ))}

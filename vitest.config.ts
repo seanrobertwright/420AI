@@ -12,6 +12,24 @@ loadEnv({ path: fileURLToPath(new URL("./.env", import.meta.url)) });
 export default defineConfig({
   resolve: {
     alias: {
+      // ── SUBPATH ALIASES FIRST. Vite matches aliases IN ORDER and takes the first hit, so these
+      // must precede the bare `@420ai/shared` key or that key swallows them: `@420ai/shared/roles`
+      // would be rewritten to `packages/shared/src/index.ts/roles`, which does not exist.
+      //
+      // They exist for the reason the block below states — resolve to SOURCE, so the suite runs
+      // from a clean checkout with no prior `tsc -b`. The package's own `exports` map points at
+      // `dist/`, so without these a subpath import only works after a build. Browser bundles
+      // (`typecheck:dashboard` / `next build`) resolve through `exports` and are unaffected.
+      //
+      // The `/roles` entry has no importing test today (`team-view.tsx` is a component, and the
+      // dashboard has no component-test lane) — it is here so the next `src/lib/*.test.ts` that
+      // reaches for it does not have to rediscover this.
+      "@420ai/shared/outcome-labels": fileURLToPath(
+        new URL("./packages/shared/src/outcome-labels.ts", import.meta.url),
+      ),
+      "@420ai/shared/roles": fileURLToPath(
+        new URL("./packages/shared/src/roles.ts", import.meta.url),
+      ),
       "@420ai/shared": fileURLToPath(new URL("./packages/shared/src/index.ts", import.meta.url)),
       "@420ai/db": fileURLToPath(new URL("./packages/db/src/index.ts", import.meta.url)),
       // The dashboard uses the `@/*` → `apps/dashboard/src/*` path alias (its tsconfig

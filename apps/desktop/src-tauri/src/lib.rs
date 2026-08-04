@@ -32,6 +32,11 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             sidecar::send_command,
             proxy::get_monitor_snapshot,
+            // M16 16.2 — the label capture panel. A command that compiles but is NOT registered
+            // fails only at RUNTIME, with an opaque "command not found" in the webview that
+            // `cargo check` cannot see.
+            proxy::get_label_queue,
+            proxy::post_session_label,
             pairing::pair,
             pairing::get_pairing_status,
             autostart::get_autostart,

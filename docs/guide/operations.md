@@ -1084,8 +1084,16 @@ curl -s -X DELETE "$INGEST_URL/v1/auth/api-keys/<id>" -H "authorization: Bearer 
 re-minted, never recovered. Copy it straight into its client.
 
 **Grant the lowest rung that works.** `role` is optional; omitting it means "inherit my role", which
-is what `ADMIN_TOKEN` effectively did. The desktop app's monitor panel needs only `viewer`, and
-`reports:generate` needs only `member`. You may never mint above your own rung (403).
+is what `ADMIN_TOKEN` effectively did. You may never mint above your own rung (403).
+
+> **The desktop app now needs a `member` key, not a `viewer` one** (M16 16.2, D-16.2-4). This
+> changed: through M15 the app only ever _read_ `/v1/monitor`, so a `viewer` key was sufficient and
+> this guide said so. The app's **Sessions to label** panel _writes_ an outcome label, and writes
+> are `member`-gated (D-16.1-4).
+>
+> A `viewer` key still works for everything else, and the failure is handled rather than hidden: the
+> label queue loads, the **Save label** button returns a refusal naming the remedy, and capture is
+> unaffected. If you configured the app before M16, re-mint at `member` when you want to label.
 
 ### The effective role is re-derived on every request
 
@@ -1146,6 +1154,7 @@ thing to revoke.
 | The desktop panel says "API key not configured"                     | The keychain holds no `apiKey`. An upgraded install's old `adminToken` is dropped on load by design — paste a new key into Settings.                                                                                                                                                                                               |
 | All my keys were revoked and I did not do it                        | ANY of a user's keys can revoke that user's OTHER keys — list and revoke are gated at `viewer` and scoped by user, and revocation is never re-auth-gated by design (D-15.9-6). So a leaked key is a **denial of service on your other keys**, not only a read risk. Treat it accordingly: re-mint, and drop the leaked key's rung. |
 | Minting returns `409 at_capacity`                                   | You hold `MAX_API_KEYS_PER_USER` live keys. Revoke the ones whose `lastUsedAt` is old or null — that column exists precisely to make this decision answerable.                                                                                                                                                                     |
+| **Save label** says "This API key is read-only"                     | The key is a `viewer`. Labelling writes, and writes are `member`-gated (D-16.2-4) — re-mint at `member`. The label QUEUE still loads on a `viewer` key, which is why only the save fails.                                                                                                                                          |
 | Minting returns `409 duplicate_name`                                | A LIVE key of yours already has that name. Names are unique per user among live keys so the revoke list stays unambiguous; revoke the old one first, then re-mint under the same name.                                                                                                                                             |
 
 ### Rolling back migrations 0022 and 0021

@@ -13,6 +13,10 @@
     "./roles": {
       "types": "./dist/roles.d.ts",
       "default": "./dist/roles.js"
+    },
+    "./outcome-labels": {
+      "types": "./dist/outcome-labels.d.ts",
+      "default": "./dist/outcome-labels.js"
     }
   },
   "scripts": {

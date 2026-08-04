@@ -159,14 +159,14 @@ npm run build       # tsc -b across the backend workspaces → apps/ingest/dist/
 
 Open **Settings** in the app. Under **Server config**, fill:
 
-| Field                            | Value                                         |
-| -------------------------------- | --------------------------------------------- |
-| **Server directory (repo root)** | the absolute path to your cloned `420AI` repo |
-| **Ingest URL**                   | `http://localhost:8420`                       |
-| **Ingest port (optional)**       | `8420`                                        |
-| **API key**                      | a `k420_…` key you mint after first login     |
-| **Database URL**                 | `postgres://420ai:420ai@localhost:5433/420ai` |
-| **Archive encryption key**       | the `ARCHIVE_ENCRYPTION_KEY` you generated    |
+| Field                            | Value                                                                                                                                                                                                                   |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Server directory (repo root)** | the absolute path to your cloned `420AI` repo                                                                                                                                                                           |
+| **Ingest URL**                   | `http://localhost:8420`                                                                                                                                                                                                 |
+| **Ingest port (optional)**       | `8420`                                                                                                                                                                                                                  |
+| **API key**                      | a `k420_…` key you mint after first login — mint it at the **`member`** rung: labelling writes, and a `viewer` key is refused (see [operations §15.9](./operations.md#159--api-keys-and-the-retirement-of-admin_token)) |
+| **Database URL**                 | `postgres://420ai:420ai@localhost:5433/420ai`                                                                                                                                                                           |
+| **Archive encryption key**       | the `ARCHIVE_ENCRYPTION_KEY` you generated                                                                                                                                                                              |
 
 (Optional **Analysis provider** section for AI interpretation: provider/API key/model/base URL.)
 

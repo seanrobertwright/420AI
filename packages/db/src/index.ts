@@ -219,6 +219,9 @@ export type {
   CreateOutcomeLabelInput,
   PatchOutcomeLabelInput,
 } from "./repositories/outcome-labels.js";
+// M16 16.2 — the label QUEUE (settled + unlabeled). Its row type is `LabelQueueRow` in
+// `@420ai/shared`, alongside the closed value sets, since both UIs and 16.4 consume it.
+export { labelQueue } from "./repositories/label-queue.js";
 export { issueIngestToken, findMachineIdByToken } from "./repositories/tokens.js";
 export { ingestBatch } from "./repositories/ingest.js";
 export {
