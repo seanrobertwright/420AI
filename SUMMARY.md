@@ -907,7 +907,7 @@ enforced`, the sibling of `skipped ≠ passed`. Closes the Spike-6 hole: a cross
     `followUpCommitOrPr` and `projectPath` excluded **at the type level** (`never`), so pasting free
     human text into a public repository is a compile error rather than a thing to remember.
 
-  - **16.3** ✅ **DONE `2026-08-04` (PR #NN)** — Capture health scorecard. §7 P0.1's acceptance
+  - **16.3** ✅ **DONE `2026-08-04` (PR #77)** — Capture health scorecard. §7 P0.1's acceptance
     criterion is a DISTINCTION, not a number: _"a user can distinguish 'no work happened' from
     'capture is broken'."_ The archive could not make it, and the reason was structural — every
     capture-health signal it held was derived from **observed events**, so a connector that is
