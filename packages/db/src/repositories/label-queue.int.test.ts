@@ -274,6 +274,36 @@ describe.skipIf(!TEST_URL || !APP_URL)("M16 16.2 label queue (two-role integrati
     expect(row?.models).toEqual(["claude-opus-4"]);
   });
 
+  /**
+   * 10 ── `orderBy` AND `limit`, which nothing else exercises.
+   *
+   * These are not cosmetic. The ROUTE always applies `DEFAULT_QUEUE_LIMIT = 25`, so the cap is on
+   * in production for every caller — which means the ORDER decides which 25 settled sessions a
+   * human is ever offered. Before this test both the `.orderBy(...)` and the `if (opts.limit)`
+   * branch could have been deleted with every other test still green, and the failure mode is the
+   * silent one this file exists to guard against: the operator simply never sees some sessions, so
+   * they never get labelled, so 16.4's denominator is quietly wrong.
+   */
+  it("orders by most-recent activity and applies the limit to the newest rows", async () => {
+    const ordered = await labelQueue(owner.db, orgA, OPTS);
+    expect(ordered.length).toBeGreaterThan(1);
+
+    // Assert the PROPERTY (descending `lastEventAt`), not a fixed array. Three of the seeded
+    // sessions share a 60m-ago timestamp, so any total order over them is a tie the query does not
+    // promise to break — pinning one would be a test that fails for a reason unrelated to ordering.
+    const times = ordered.map((r) => Date.parse(r.lastEventAt!));
+    expect(times).toEqual([...times].sort((a, b) => b - a));
+
+    // SETTLED (50m ago) is the unambiguous newest, so it leads and survives a limit of 1. That is
+    // the assertion that matters: the ROUTE always caps at 25, so ORDER decides which sessions a
+    // human is ever offered.
+    expect(ordered[0]!.sessionId).toBe(SETTLED);
+
+    const capped = await labelQueue(owner.db, orgA, { ...OPTS, limit: 1 });
+    expect(capped).toHaveLength(1);
+    expect(capped[0]!.sessionId).toBe(SETTLED);
+  });
+
   // 9 ── The app role sees exactly what the owner does. If a policy ever filtered these rows the
   //      endpoint would return an empty queue with a 200 — the M15 `monitor.ts` failure shape.
   it("under the app role inside withOrg the queue matches the owner's", async () => {

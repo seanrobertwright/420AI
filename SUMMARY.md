@@ -282,7 +282,7 @@ through the deferral-audit + scope conversation that produced M12/M13/M14. Full 
   D-M16-1 (the observation set is **fixed and narrow** — Claude Code + Codex only, two repos, and the
   browser extension **off** during Phase 1 so the known `claude-live`↔`claude-export` dedup gap cannot
   contaminate the <1% duplicate-rate metric) and D-16.0-1…3. Slices: **16.0** ✅ Truth + research
-  scaffold · **16.1** ✅ Outcome label model + API · **16.2** ✅ Label capture (tray) + review (dashboard) ·
+  scaffold · **16.1** ✅ Outcome label model + API · **16.2** ✅ Label capture (desktop) + review (dashboard) ·
   **16.3** Capture health scorecard · **16.4** Data-quality audit report. The §7 P1.6 hero-workflow
   evidence panel is deliberately **not** a slice — the hero workflow is selected from evidence in
   research Phase 2 (weeks 5–8).

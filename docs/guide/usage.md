@@ -8,8 +8,8 @@ and API reference.
 
 ## 1. The desktop app, panel by panel
 
-The app window stacks five panels (top to bottom): **Pairing**, **Capture**, **Sync & Health**,
-**Connectors**, **Settings**.
+The app window stacks six panels (top to bottom): **Pairing**, **Capture**, **Sync & Health**,
+**Sessions to label**, **Connectors**, **Settings**.
 
 ### Pairing
 
@@ -34,8 +34,9 @@ opening the window.
 ### Sync & Health
 
 - **Local** backlog: `local state`, `pending`, `inflight`.
-- **Server fleet view** (needs the admin token, configured in Settings): `Collectors` with
-  `online`/`stale`/`offline` counts, `server backlog`, `connectors`, `active sessions`.
+- **Server fleet view** (needs an API key configured in Settings — `ADMIN_TOKEN` was retired in M15
+  15.9): `Collectors` with `online`/`stale`/`offline` counts, `server backlog`, `connectors`,
+  `active sessions`.
 - **Alerts** table (`Severity` / `Alert` / `Scope` / `Since`); `No active alerts.` when clear.
 - **Refresh** re-pulls the snapshot.
 
@@ -46,19 +47,22 @@ panel is where you say so — about 15 seconds per session.
 
 - It lists **settled, unlabeled** sessions: last event more than 15 minutes ago (so you are not
   asked about work you are still in the middle of) and less than 14 days old.
-- **Label** opens six fields — task type, what you were trying to do, outcome, usefulness (1–5),
-  what got in the way, and optionally a confidence and a commit/PR link.
+- **Label** opens seven fields — five required (task type, what you were trying to do, outcome,
+  usefulness 1–5, what got in the way) and two optional (a confidence and a commit/PR link).
 - **Skip** is one click and always available. A skip is recorded as a real row, so **the session
   leaves the queue permanently** — nothing will ask you about it again.
 - **Nothing to label. You are up to date.** when the queue is empty.
 
 **The app never interrupts you.** It does not raise a window, fire a notification, steal focus or
-poll while you work. The queue is only ever refreshed when you open the app, press **Refresh**, or
-choose **Label sessions…** in the tray. That is deliberate: a prompt during deep work would change
-the very thing this data exists to measure.
+poll while you work. That is deliberate: a prompt during deep work would change the very thing this
+data exists to measure.
+
+The queue is only ever refreshed when you open the app or press **Refresh**. **Label sessions…** in
+the tray brings the window forward and nothing more — it does not re-read the queue, so press
+**Refresh** if the app has been open a while.
 
 **Labelling needs a `member`-rung API key** (see
-[operations §15.9](./operations.md#the-effective-role-is-re-derived-on-every-request)). With a
+[operations §15.9](./operations.md#159--api-keys-and-the-retirement-of-admin_token)). With a
 `viewer` key the queue still loads and saving is refused with a message telling you to mint a
 `member` key. Capture is unaffected either way.
 
@@ -91,7 +95,7 @@ Right-click the tray icon (tooltip **420AI Collector**):
 | ---------------------------------- | ------------------------------------------------------- |
 | **Start** / **Pause** / **Resume** | drive the collector sidecar (same as the Capture panel) |
 | **Server: manage in Settings**     | display-only label (server controls live in Settings)   |
-| **Label sessions…**                | shows and focuses the app window on the label queue     |
+| **Label sessions…**                | brings the app window to the front (the panel is on it) |
 | **Quit**                           | exits the app (tears the sidecar down cleanly)          |
 
 There is deliberately **no unread count** on the label item. A caption that changed on its own would
@@ -259,9 +263,11 @@ from the persistent top nav:
 - **Machines** (`/machines`) — collector health, sync backlog, heartbeat, and the workspace→project
   mapping.
 - **Labels** (`/labels`) — every outcome label your org has recorded (M16 16.2). Filter by status,
-  outcome or task type; **Export CSV** downloads the same list **redacted** (`intent` and the
-  follow-up link are stripped — they are free text and may carry something you did not mean to
-  export).
+  outcome or task type; **Export CSV** downloads the same list **redacted**.
+  > **Redacted means masked, not removed.** The export scrubs _detected_ secrets — API keys, JWTs,
+  > bearer headers, connection strings, private-key blocks, emails, home paths — from every field.
+  > `intent` and the follow-up link are still exported **in full** apart from those matches, and no
+  > rule detects a customer or project name. Review a label export before sharing it.
 
 The browser never holds a machine credential: every page renders server-side and every browser→ingest call goes
 through a same-origin proxy Route Handler that adds the admin bearer on the server→ingest hop only.
@@ -293,7 +299,7 @@ Route Handler, checks the result, disables in-flight to avoid duplicate writes, 
   value). Editable settings arrive in a later M12 slice.
 
 - **Labels** (`/labels`, M16 16.2) — review and correct your judgements:
-  - **Edit** re-opens the six fields. Only the label's **author** may edit it; no rung overrides
+  - **Edit** re-opens the same seven fields. Only the label's **author** may edit it; no rung overrides
     that, because 16.4's audit reads these rows as evidence and rewriting someone else's answer is
     falsification rather than administration. An admin may **delete** one — retraction is not
     rewriting.
@@ -316,7 +322,8 @@ values you selected. Copy it, paste it into that file, fill in the blanks, and n
 
 > **It deliberately carries no free text.** `decisions.md` is committed to a **public repository**,
 > and its privacy rule is _links and IDs only_. Your `intent` line and any follow-up URL are
-> excluded by construction — they are the same two fields the CSV export redacts, and a public git
+> excluded by construction. The CSV export only MASKS detected secrets inside them and still emits
+> both fields; the stub omits them entirely. A public git
 > commit is permanent in a way a local download is not. The session id is the link; anyone with
 > archive access can follow it, and anyone without it learns nothing.
 

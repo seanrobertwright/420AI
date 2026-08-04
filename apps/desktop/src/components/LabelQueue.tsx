@@ -5,14 +5,23 @@ import type {
   LabelOutcome,
   LabelQueueRow,
   TaskType,
-} from "@420ai/shared";
+} from "@420ai/shared/outcome-labels";
+/*
+ * THE `/outcome-labels` SUBPATH, NEVER THE PACKAGE ROOT — and this is a VALUE import, which is what
+ * makes it matter. Every other `@420ai/shared` import in `apps/desktop/src` is `import type` and
+ * erases at compile time; this one does not. The root barrel `export *`s `fingerprint.ts` and
+ * `catalog-signing.ts`, both of which `import … from "node:crypto"`, plus eight parsers — all of it
+ * dragged into a Tauri WEBVIEW bundle that has no Node built-ins. `outcome-labels.ts` has no
+ * imports at all. Same rule the dashboard's `lib/label-display.ts` states for the same reason.
+ */
 import {
   TASK_TYPES,
   OUTCOMES,
   FRICTIONS,
   LABEL_CONFIDENCE,
   INTENT_MAX_LENGTH,
-} from "@420ai/shared";
+  FOLLOW_UP_MAX_LENGTH,
+} from "@420ai/shared/outcome-labels";
 import { getLabelQueue, postSessionLabel, skipSession } from "@/lib/bridge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
@@ -51,8 +60,19 @@ const inputCls = "border-border bg-background rounded-md border px-2 py-1.5 text
 const btnCls =
   "border-border hover:bg-muted rounded-md border px-3 py-1.5 text-sm font-medium transition-colors disabled:opacity-50";
 
-/** Human copy for the closed sets. Kept local — the desktop does not import the dashboard's lib. */
-const TASK_TYPE_COPY: Record<string, string> = {
+/*
+ * Human copy for the closed sets. Kept local — the desktop cannot import the dashboard's lib (they
+ * are separate bundles with no shared UI package).
+ *
+ * KEYED ON THE EXACT UNIONS, not `Record<string, string>`. Adding a member to a shared array is a
+ * research decision-log entry, i.e. a thing that WILL happen, and with a `string` key that addition
+ * would render an `<option>` with a BLANK visible label that is still submittable — a silently
+ * unlabeled choice in the one table 16.4 reads as ground truth. The dashboard's sibling has two
+ * nets (the exact key type AND an exhaustiveness test); the desktop has NO test lane at all
+ * (`vitest.config.ts` globs test files under `apps/`, and `apps/desktop/src` contains none), so
+ * the key type is the only thing standing between that change and a blank dropdown entry.
+ */
+const TASK_TYPE_COPY: Record<TaskType, string> = {
   feature: "Feature",
   bug_fix: "Bug fix",
   investigation: "Investigation",
@@ -62,7 +82,7 @@ const TASK_TYPE_COPY: Record<string, string> = {
   incident: "Incident",
   other: "Other",
 };
-const OUTCOME_COPY: Record<string, string> = {
+const OUTCOME_COPY: Record<LabelOutcome, string> = {
   shipped: "Shipped",
   useful_partial: "Useful but partial",
   blocked: "Blocked",
@@ -70,7 +90,7 @@ const OUTCOME_COPY: Record<string, string> = {
   // "Incorrect result", never "Failure" — §4.3 neutral wording: the statement is about the OUTPUT.
   incorrect: "Incorrect result",
 };
-const FRICTION_COPY: Record<string, string> = {
+const FRICTION_COPY: Record<Friction, string> = {
   none: "None",
   context: "Context",
   model_tool: "Model / tool",
@@ -79,7 +99,11 @@ const FRICTION_COPY: Record<string, string> = {
   verification: "Verification",
   non_ai: "Not AI-related",
 };
-const CONFIDENCE_COPY: Record<string, string> = { low: "Low", medium: "Medium", high: "High" };
+const CONFIDENCE_COPY: Record<LabelConfidence, string> = {
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+};
 
 /**
  * The in-progress label.
@@ -142,6 +166,14 @@ export function LabelQueue() {
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  /**
+   * A failed RELOAD after a successful write, kept separate from `error` on purpose.
+   *
+   * Both used to write to `error`, so a transient blip right after a save rendered "Thanks —
+   * labeled." AND a red error under a "mint a member key" hint — which reads as "the save failed"
+   * and invites a re-submit that then 409s. The write succeeded; only the list is stale.
+   */
+  const [staleList, setStaleList] = useState(false);
 
   const refresh = useCallback((): Promise<void> => {
     setLoading(true);
@@ -149,8 +181,9 @@ export function LabelQueue() {
       .then((res) => {
         setQueue(res.sessions ?? []);
         setError(null);
+        setStaleList(false);
       })
-      .catch((err: unknown) => setError(String(err)))
+      .catch(() => setStaleList(true))
       .finally(() => setLoading(false));
   }, []);
 
@@ -280,11 +313,22 @@ export function LabelQueue() {
         {error ? (
           <div className="text-sm">
             <p className="text-destructive">{error}</p>
-            <p className="text-muted-foreground mt-1 text-xs">
-              Labelling needs an API key with the <span className="font-mono">member</span> rung.
-              Capture keeps running either way.
-            </p>
+            {/* THE RUNG REMEDY IS FOR THE 403 ONLY. It used to render under every error, so
+                "ingest unreachable" and "already has a label" both came with advice to re-mint a
+                key — the same collapsing of distinct refusals that `label_write_error` goes out of
+                its way to avoid on the Rust side. Keyed on the phrase Rust emits for a 403. */}
+            {error.includes("read-only") ? (
+              <p className="text-muted-foreground mt-1 text-xs">
+                Labelling needs an API key with the <span className="font-mono">member</span> rung.
+                Capture keeps running either way.
+              </p>
+            ) : null}
           </div>
+        ) : null}
+        {staleList ? (
+          <p className="text-muted-foreground text-sm">
+            Saved — but the list could not be refreshed. Press Refresh to re-read the queue.
+          </p>
         ) : null}
         {notice ? <p className="text-muted-foreground text-sm">{notice}</p> : null}
 
@@ -443,6 +487,7 @@ export function LabelQueue() {
                 <input
                   className={cn(inputCls, "w-full font-mono text-xs")}
                   value={draft.followUpCommitOrPr}
+                  maxLength={FOLLOW_UP_MAX_LENGTH}
                   placeholder="Commit, PR or issue (optional)"
                   onChange={(e) => setDraft({ ...draft, followUpCommitOrPr: e.target.value })}
                   aria-label="Follow-up commit or PR (optional)"

@@ -805,7 +805,7 @@ describe.skipIf(!TEST_URL || !APP_URL)("M16 16.1 outcome labels (two-role HTTP)"
   });
 
   /**
-   * 13 ── THE POST/PATCH NULL ASYMMETRY, pinned because 16.2's code review found BOTH new capture
+   * 12 ── THE POST/PATCH NULL ASYMMETRY, pinned because 16.2's code review found BOTH new capture
    * surfaces broken by it.
    *
    * `createOutcomeLabelBodySchema` types `followUpCommitOrPr` and `confidence` as `type: "string"`
@@ -865,7 +865,7 @@ describe.skipIf(!TEST_URL || !APP_URL)("M16 16.1 outcome labels (two-role HTTP)"
   });
 
   /**
-   * 12 ── THE CLIENT CANNOT WIDEN THE WINDOW. `settledBeforeIso`/`sinceIso` are not caller input
+   * 13 ── THE CLIENT CANNOT WIDEN THE WINDOW. `settledBeforeIso`/`sinceIso` are not caller input
    * (D-16.2-2), and this pins the two different mechanisms that make that true.
    *
    * AN UNKNOWN KEY IS STRIPPED, NOT REJECTED — 200, not 400, and the distinction is worth a test
@@ -889,10 +889,26 @@ describe.skipIf(!TEST_URL || !APP_URL)("M16 16.1 outcome labels (two-role HTTP)"
       headers: asUser(tokenA),
     });
     expect(injected.statusCode).toBe(200);
-    // …and it changed nothing: the aged-out seed session (ts 2026-08-01, fixed) is governed by the
-    // SERVER's windows either way. What matters is that the handler never saw those keys.
-    const sessions = (injected.json() as { sessions: { sessionId: string }[] }).sessions;
-    expect(Array.isArray(sessions)).toBe(true);
+    /*
+     * …and it changed NOTHING: the response is byte-identical to the clean one.
+     *
+     * `toBe(200)` plus `Array.isArray(...)` was the original assertion and it was vacuous — it
+     * would have passed just as well if someone later threaded `request.query.sinceIso` into
+     * `labelQueue`, which is precisely the regression this test's title claims to prevent.
+     * Comparing the two responses is what actually pins it.
+     *
+     * (The shared fixtures are seeded at ts 2026-08-01. An earlier version of this comment called
+     * that "aged out"; it is not — it sits INSIDE the 14-day lookback until 2026-08-15. Nothing
+     * here depends on that either way, but the next person to build a queue assertion on these
+     * fixtures should not inherit a false premise.)
+     */
+    const clean = await app.inject({
+      method: "GET",
+      url: "/v1/labels/queue",
+      headers: asUser(tokenA),
+    });
+    expect(clean.statusCode).toBe(200);
+    expect(injected.json()).toEqual(clean.json());
 
     const tooBig = await app.inject({
       method: "GET",

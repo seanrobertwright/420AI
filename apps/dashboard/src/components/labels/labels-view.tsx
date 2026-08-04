@@ -41,9 +41,13 @@ import { LabelForm, EMPTY_LABEL_FORM, type LabelFormValues } from "./label-form"
  * the prop is a FIRST-PAINT SEED and `reload()` owns every subsequent update. Drop the client
  * re-fetch and the table silently stops updating after the first edit.
  *
- * THE THREE REFUSALS MEAN DIFFERENT THINGS AND MUST NOT BE COLLAPSED (D-16.1-4):
- *   - PATCH 403 — you are not the label's AUTHOR. No rung overrides it, so "ask an admin" is the
- *     wrong advice and the copy says so specifically.
+ * THE REFUSALS MEAN DIFFERENT THINGS AND MUST NOT BE COLLAPSED (D-16.1-4). There are FOUR, because
+ * a PATCH 403 has two distinct sources — an earlier version of this file treated it as one and told
+ * a `viewer` that only the author could edit, which was false and hid the real remedy:
+ *   - PATCH 403 with `reason: "not_author"` — you may edit labels, just not THIS one. No rung
+ *     overrides it, so "ask an admin" is the wrong advice and the copy says so specifically.
+ *   - PATCH 403 without it (the route's role gate) — the account is below `member`. Reachable,
+ *     because the READ is `viewer`-gated: a viewer can open this page and see an Edit button.
  *   - DELETE 404 — the row is not yours. Deliberately not 403, so a colleague's judgement is not
  *     disclosed by the refusal itself.
  *   - PATCH 400 — a partial patch against a SKIPPED row. The remedy is the upgrade path, and the
@@ -101,6 +105,8 @@ export function LabelsView({ labels }: { labels: LabelRow[] }) {
   const [notice, setNotice] = useState<string | null>(null);
   /** The generated `DEC-` stub, held in memory for copying. Never persisted (D-16.2-6). */
   const [stub, setStub] = useState<{ sessionId: string; text: string } | null>(null);
+  /** The list on screen could not be refreshed, so it may not reflect the filter or the last edit. */
+  const [stale, setStale] = useState(false);
 
   const query = new URLSearchParams();
   if (status) query.set("status", status);
@@ -108,6 +114,14 @@ export function LabelsView({ labels }: { labels: LabelRow[] }) {
   if (taskType) query.set("taskType", taskType);
   const search = query.toString();
 
+  /**
+   * `null` means THE READ FAILED — deliberately distinct from an empty array.
+   *
+   * Both used to be discarded by the callers, which produced two quiet lies: changing a filter
+   * while ingest was unreachable left the PREVIOUS filter's rows on screen (read as filtered), and
+   * a failed refresh after a successful PATCH left the stale row under a "Saved." notice (read as
+   * the edit not landing). `stale` below is what makes the difference visible.
+   */
   const reload = useCallback(async (qs: string): Promise<LabelRow[] | null> => {
     try {
       const res = await fetch(`/api/labels?limit=200${qs ? `&${qs}` : ""}`);
@@ -124,7 +138,14 @@ export function LabelsView({ labels }: { labels: LabelRow[] }) {
     // unmounted island (CLAUDE.md; `team-view.tsx` shows the same `let cancelled` form).
     let cancelled = false;
     void reload(search).then((next) => {
-      if (cancelled || next === null) return;
+      if (cancelled) return;
+      // A failed filter read is NOT an empty result — leaving the old rows up would present the
+      // previous filter's data as though the new filter had applied.
+      if (next === null) {
+        setStale(true);
+        return;
+      }
+      setStale(false);
       setRows(next);
     });
     return () => {
@@ -134,7 +155,12 @@ export function LabelsView({ labels }: { labels: LabelRow[] }) {
 
   async function refresh(): Promise<void> {
     const next = await reload(search);
-    if (next !== null) setRows(next);
+    if (next === null) {
+      setStale(true);
+    } else {
+      setStale(false);
+      setRows(next);
+    }
     router.refresh();
   }
 
@@ -157,11 +183,23 @@ export function LabelsView({ labels }: { labels: LabelRow[] }) {
         body: JSON.stringify(body),
       });
       if (!res.ok) {
+        /*
+         * A PATCH 403 HAS TWO SOURCES AND THEY NEED DIFFERENT ADVICE.
+         *   - the ROUTE's role gate → `{error: "insufficient role"}`: the account is below
+         *     `member`. A `viewer` can open this page (the read is viewer-gated) and sees an Edit
+         *     button, so this is reachable — and telling that person "only the author may edit"
+         *     would be flatly false and would hide the real remedy.
+         *   - the REPOSITORY's `not_author` → `{reason: "not_author"}` (mapped in app.ts): the
+         *     account may edit labels, just not this one. No rung overrides it (D-16.1-4), so
+         *     "ask an admin" is the wrong advice here and `FORBIDDEN_MESSAGE` must NOT be used.
+         * The `reason` discriminator is what tells them apart; without it both collapse.
+         */
+        const body = (await res.json().catch(() => null)) as { reason?: string } | null;
         setError(
           res.status === 403
-            ? // NOT `FORBIDDEN_MESSAGE`: "ask an admin" is wrong here, because no rung overrides
-              // author-only editing (D-16.1-4). Say what is actually true.
-              "Only the person who wrote this label can edit it. An admin can delete it, but nobody can rewrite it."
+            ? body?.reason === "not_author"
+              ? "Only the person who wrote this label can edit it. An admin can delete it, but nobody can rewrite it."
+              : FORBIDDEN_MESSAGE
             : res.status === 400
               ? "This label is a skip. Fill in the whole judgement to turn it into a label."
               : res.status === 404
@@ -327,6 +365,15 @@ export function LabelsView({ labels }: { labels: LabelRow[] }) {
         <CardContent>
           {error ? <p className="text-destructive mb-3 text-sm">{error}</p> : null}
           {notice ? <p className="text-muted-foreground mb-3 text-sm">{notice}</p> : null}
+          {/* Distinct from `error`: the MUTATION may well have succeeded — it is the list that is
+              stale. Saying "showing older data" is the honest version of silently leaving the
+              previous filter's rows on screen. */}
+          {stale ? (
+            <p className="text-muted-foreground mb-3 text-sm">
+              Could not reach the archive — showing older data, which may not match the filter
+              above. Refresh to try again.
+            </p>
+          ) : null}
 
           {rows.length === 0 ? (
             <p className="text-muted-foreground text-sm">

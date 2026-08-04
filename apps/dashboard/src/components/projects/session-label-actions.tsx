@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { buildDecisionStub } from "@/lib/decision-stub";
@@ -51,21 +51,46 @@ interface LabelRow {
   revision: number;
 }
 
-/** The single shared fetch. `null` = no cache; a promise = in flight or resolved. */
-let labelIndexPromise: Promise<Map<string, LabelRow> | null> | null = null;
-let labelIndexAt = 0;
+/**
+ * The batched read's result. `truncated` is the load-bearing field.
+ *
+ * `LABEL_INDEX_LIMIT` is the server MAXIMUM (`listOutcomeLabelsQuerySchema` caps it at 200), and the
+ * list is ordered by `updated_at DESC` — so once an org holds more than 200 labels, which is the
+ * explicit goal of a 24-week research period, a label can simply fall off the page. A MISS in the
+ * map then means one of two very different things, and they are indistinguishable from the map
+ * alone: "no label exists" or "its label is older than the newest 200".
+ *
+ * Treating a truncated miss as `null` rendered a "Label" button over a session a colleague had
+ * already judged, hid that judgement, and 409'd on submit — exactly the failure this file's
+ * fallback exists to prevent. So a miss is only authoritative when `truncated` is false; otherwise
+ * the caller falls through to the per-session read, whose 404 IS authoritative.
+ */
+const LABEL_INDEX_LIMIT = 200;
 const LABEL_INDEX_TTL_MS = 30_000;
 
-function loadLabelIndex(): Promise<Map<string, LabelRow> | null> {
+interface LabelIndex {
+  bySession: Map<string, LabelRow>;
+  truncated: boolean;
+}
+
+/** The single shared fetch. `null` = no cache; a promise = in flight or resolved. */
+let labelIndexPromise: Promise<LabelIndex | null> | null = null;
+let labelIndexAt = 0;
+
+function loadLabelIndex(): Promise<LabelIndex | null> {
   const fresh = labelIndexPromise && Date.now() - labelIndexAt < LABEL_INDEX_TTL_MS;
   if (!fresh) {
     labelIndexAt = Date.now();
     labelIndexPromise = (async () => {
       try {
-        const res = await fetch("/api/labels?limit=200");
+        const res = await fetch(`/api/labels?limit=${LABEL_INDEX_LIMIT}`);
         if (!res.ok) return null;
         const body = (await res.json()) as { labels: LabelRow[] };
-        return new Map((body.labels ?? []).map((l) => [l.sessionId, l]));
+        const labels = body.labels ?? [];
+        return {
+          bySession: new Map(labels.map((l) => [l.sessionId, l])),
+          truncated: labels.length >= LABEL_INDEX_LIMIT,
+        };
       } catch {
         return null;
       }
@@ -87,8 +112,30 @@ const btn = cn(
 
 export function SessionLabelActions({ sessionId }: { sessionId: string }) {
   const router = useRouter();
-  /** `undefined` = still loading · `null` = no label (the 404 case) · a row = labeled/skipped. */
-  const [label, setLabel] = useState<LabelRow | null | undefined>(undefined);
+  /**
+   * `undefined` = still loading · `null` = no label (the authoritative 404) · a row = labeled or
+   * skipped · `"error"` = the read FAILED and we do not know.
+   *
+   * The `"error"` state exists because the alternative was worse than it looked: a failed read used
+   * to leave this `undefined`, which renders "…" — so with ingest down, EVERY session row in a
+   * project showed a permanent silent spinner. That is the same "an unreachable archive is not zero
+   * labels" argument `/labels/page.tsx` makes, which this file was not applying.
+   */
+  const [label, setLabel] = useState<LabelRow | null | undefined | "error">(undefined);
+  /**
+   * Mounted flag as a REF, not a local, so the post-mutation reloads are covered by the same guard
+   * as the effect. Previously `create()`/`update()` called `load()` with the default
+   * `isCancelled = () => false` while this file's header claimed "one predicate now covers the
+   * batched read, the fallback fetch AND the post-mutation reload" — the comment was true of two
+   * paths out of three, which is the M15 15.5 defect class the rest of this file is careful about.
+   */
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -106,14 +153,23 @@ export function SessionLabelActions({ sessionId }: { sessionId: string }) {
    * predicate now covers the batched read, the fallback fetch and the post-mutation reload.
    */
   const load = useCallback(
-    async (isCancelled: () => boolean = () => false): Promise<void> => {
+    async (isCancelled: () => boolean = () => !mounted.current): Promise<void> => {
       const index = await loadLabelIndex();
       if (isCancelled()) return;
-      // A failed shared read is NOT "no label" — leaving it `undefined` would render a Label button
-      // that 409s on submit. Fall back to the single-session read, whose 404 is authoritative.
+      // A HIT is always authoritative. A MISS is only authoritative when the page was NOT truncated
+      // — otherwise the label may simply be older than the newest 200 (see `LabelIndex`). Setting
+      // it to `null` there would render a Label button that 409s on submit.
       if (index) {
-        setLabel(index.get(sessionId) ?? null);
-        return;
+        const hit = index.bySession.get(sessionId);
+        if (hit) {
+          setLabel(hit);
+          return;
+        }
+        if (!index.truncated) {
+          setLabel(null);
+          return;
+        }
+        // truncated miss → fall through to the per-session read, whose 404 IS authoritative.
       }
       try {
         const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/label`);
@@ -122,25 +178,24 @@ export function SessionLabelActions({ sessionId }: { sessionId: string }) {
           setLabel(null);
           return;
         }
-        if (!res.ok) return;
+        if (!res.ok) {
+          setLabel("error");
+          return;
+        }
         const body = (await res.json()) as { label: LabelRow };
         if (isCancelled()) return;
         setLabel(body.label);
       } catch {
-        /* leave `undefined`: unknown, so no affordance is offered rather than a wrong one */
+        if (!isCancelled()) setLabel("error");
       }
     },
     [sessionId],
   );
 
   useEffect(() => {
-    // Teardown armed BEFORE the first await resolves (CLAUDE.md long-lived-resource rule), and
-    // passed INTO `load` so the fallback path is covered by the same guard.
-    let cancelled = false;
-    void load(() => cancelled);
-    return () => {
-      cancelled = true;
-    };
+    // The guard is the `mounted` ref above, armed before this effect ever runs and read by `load`
+    // on every path — including the two post-mutation reloads.
+    void load();
   }, [load]);
 
   /** POST a new label, or a skip when `values === null`. */
@@ -214,21 +269,33 @@ export function SessionLabelActions({ sessionId }: { sessionId: string }) {
    * (D-16.2-5) — `decisions.md` is committed to a public repository.
    */
   function logDecision(): void {
+    // `"error"` and `null` both mean "no judgement to quote" — the stub still carries the session
+    // id, which is the part §3 calls the link into the archive.
+    const l = label && label !== "error" ? label : null;
     setStub(
       buildDecisionStub({
         sessionId,
         nowIso: new Date().toISOString(),
-        taskType: label?.taskType ?? null,
-        outcome: label?.outcome ?? null,
-        primaryFriction: label?.primaryFriction ?? null,
-        qualityRating: label?.qualityRating ?? null,
-        confidence: label?.confidence ?? null,
+        taskType: l?.taskType ?? null,
+        outcome: l?.outcome ?? null,
+        primaryFriction: l?.primaryFriction ?? null,
+        qualityRating: l?.qualityRating ?? null,
+        confidence: l?.confidence ?? null,
       }),
     );
   }
 
   if (label === undefined) {
     return <span className="text-muted-foreground text-xs">…</span>;
+  }
+
+  if (label === "error") {
+    // Say what happened and offer the retry, rather than a spinner that never resolves.
+    return (
+      <button type="button" className={btn} onClick={() => void load()}>
+        label unavailable — retry
+      </button>
+    );
   }
 
   return (
