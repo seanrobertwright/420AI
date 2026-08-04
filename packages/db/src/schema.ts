@@ -1155,3 +1155,142 @@ export const auditEvents = pgTable(
   // this org, in order" — so one composite index in exactly that shape.
   (t) => [index("audit_events_by_org_time").on(t.orgId, t.createdAt)],
 );
+
+/**
+ * M16 16.1 — the §4.3 OUTCOME LABEL: a human's own judgement of one captured session
+ * (research plan §4.3, §7 P0.2).
+ *
+ * THIS IS NOT A MUTATION OF A RAW RECORD OR AN EVENT, and that is §7 P0.2's central requirement
+ * rather than an implementation preference. Automatic capture answers what happened; it cannot
+ * answer whether the work was useful. Writing that answer onto a raw record would corrupt captured
+ * evidence with an opinion, so the label is a SEPARATE, SEPARATELY AUDITABLE row linked to a
+ * session by its connector-supplied id. Deleting a label touches nothing else (D-16.1-6), which
+ * `outcome-labels.int.test.ts` asserts rather than assumes.
+ *
+ * A THIRD CATEGORY OF DATA. This repo's invariant is "raw records sacred, events disposable": raw
+ * payloads are permanent because they are captured evidence nobody can recreate, and events are
+ * re-derivable projections of them. A label is neither — it is VOLUNTEERED HUMAN GROUND TRUTH,
+ * re-creatable only by the person who gave it, and therefore the one object in the archive they
+ * are entitled to retract. That is what earns it a real DELETE without weakening the invariant.
+ *
+ * STRICT TENANT TABLE (`STRICT_TABLES` in `rls.int.test.ts`): the same 0015 org policy and 0016
+ * RESTRICTIVE role-write backstop as the other thirteen. It is none of the other classifications —
+ * every writer reaches it from inside `withOrg` with a real principal, so nothing straddles the
+ * org-context boundary the way `audit_events` does, and it has a genuine per-tenant read path.
+ *
+ * D-16.1-2 — A SKIP IS A ROW. §4.3 requires "offer skip and do not nag repeatedly", and the second
+ * half is unimplementable without persisting the first: with no `skipped` row the 16.2 tray has no
+ * way to know it already asked. So `status` is `labeled | skipped` and the six §4.3 columns are ALL
+ * NULLABLE — a skip carries none of them. Their required-when-`labeled` shape is enforced by the
+ * repository's discriminated input type and the route's JSON schema, NOT by a CHECK constraint,
+ * exactly as `memberships.role`, `report_artifacts.report_type` and `alert_firings.status` are.
+ *
+ * D-16.1-8 — `author_user_id` is NOT NULL and there is NO service-role write path anywhere in this
+ * slice, which makes "a label no human authored" UNREPRESENTABLE rather than merely unset. That is
+ * the strongest available form of §5.3's "never infer a human outcome … without marking
+ * confidence": `confidence` is nullable and human-set, and NULL means NOT STATED.
+ */
+export const outcomeLabels = pgTable(
+  "outcome_labels",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organizations.id),
+    // CONNECTOR-SUPPLIED and GLOBALLY SCOPED (see `events.session_id` above) — two tenants can
+    // hold the same value. Hence the unique index below is (org_id, session_id) and NEVER
+    // (session_id) alone, which would let one org's label block another's: the 15.1
+    // `search_documents_entity` bug re-shipped. No FK, because there is no `sessions` table — a
+    // session is a projection over `events`, so the existence guard lives at the route
+    // (`sessionDetail`), not in the schema.
+    sessionId: text("session_id").notNull(),
+    authorUserId: uuid("author_user_id")
+      .notNull()
+      .references(() => users.id),
+    // `labeled` | `skipped` (D-16.1-2). TEXT, no CHECK — LABEL_STATUSES in @420ai/shared is the set.
+    status: text("status").notNull(),
+    // ── the six research-plan §4.3 fields. ALL NULLABLE; see D-16.1-2 in the header. ──
+    taskType: text("task_type"),
+    intent: text("intent"), // free human text, max 200 at the HTTP edge (§4.3)
+    outcome: text("outcome"),
+    qualityRating: integer("quality_rating"), // 1–5; a real integer column, so a JS number back
+    primaryFriction: text("primary_friction"),
+    followUpCommitOrPr: text("follow_up_commit_or_pr"), // git SHA / PR URL / issue id
+    // §7 P0.2 "optional confidence" — NULL means "not stated", distinct from `low` (D-16.1-8).
+    confidence: text("confidence"),
+    // 1 at creation, +1 per edit. The SNAPSHOTS live in `outcome_label_revisions` (D-16.1-1);
+    // this counter is the join key, not the history.
+    revision: integer("revision").notNull().default(1),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // D-16.1-3 — ONE label per (org, session). A second author is a 409, not a second row: a
+    // captured session belongs to one machine and one operator, and a second person's opinion of
+    // it is a different feature (and a research-design question, not a schema one).
+    uniqueIndex("outcome_labels_org_session").on(t.orgId, t.sessionId),
+    // Leading `org_id` means this index also serves every org-prefix scan, so there is
+    // deliberately no separate `outcome_labels_by_org`.
+    index("outcome_labels_by_org_updated").on(t.orgId, t.updatedAt),
+  ],
+);
+
+/**
+ * M16 16.1 — one IMMUTABLE snapshot per revision of an outcome label (D-16.1-1). v1 is written at
+ * creation, v_n at each edit.
+ *
+ * §7 P0.2 requires the label to "preserve author, timestamp, EDITS". A `revision` counter alone
+ * records THAT something changed, not WHAT — and the change itself is the research-relevant
+ * signal: a `quality_rating` revised from 2 to 5 a week later is HINDSIGHT, which is precisely the
+ * bias §4.3's "captures what success meant before hindsight" exists to guard against. 16.4 cannot
+ * detect that from a counter. With snapshots, reading "the original label" is a query rather than
+ * an archaeology exercise.
+ *
+ * STRICT, deliberately NOT the 15.10 APPEND_ONLY classification, for two reasons that are each
+ * independently sufficient: it has a real per-tenant READ path (16.2 renders the history to its
+ * author, where `audit_events` has no reader at all by D-15.10-4), and its rows must be DELETABLE
+ * when the label is deleted (D-16.1-6). APPEND_ONLY gives neither — its guarantee comes from an
+ * ABSENT SELECT policy and a `REVOKE UPDATE, DELETE`.
+ *
+ * THIS TABLE IS THIS FEATURE'S AUDIT TRAIL, and that is why labelling is NOT an `AUDIT_ACTIONS`
+ * entry (D-16.1-5): `audit.ts`'s boundary admits an act only when it changes another principal's
+ * standing or mints/destroys a long-lived credential, and labelling does neither.
+ */
+export const outcomeLabelRevisions = pgTable(
+  "outcome_label_revisions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organizations.id),
+    labelId: uuid("label_id")
+      .notNull()
+      .references(() => outcomeLabels.id),
+    // The label's `revision` value AT THE MOMENT THIS SNAPSHOT WAS TAKEN. Unique per label below.
+    revision: integer("revision").notNull(),
+    // Who wrote THIS revision — not necessarily the label's original author in principle, though
+    // D-16.1-4 makes edits author-only, so today it always is. Recorded per row anyway: the point
+    // of a history is that it stays true when the rule around it changes.
+    authorUserId: uuid("author_user_id")
+      .notNull()
+      .references(() => users.id),
+    // The full snapshot, INCLUDING `status` — a label can be edited from `skipped` into `labeled`,
+    // and a history that could not record that would be missing the most interesting transition.
+    status: text("status").notNull(),
+    taskType: text("task_type"),
+    intent: text("intent"),
+    outcome: text("outcome"),
+    qualityRating: integer("quality_rating"),
+    primaryFriction: text("primary_friction"),
+    followUpCommitOrPr: text("follow_up_commit_or_pr"),
+    confidence: text("confidence"),
+    recordedAt: timestamp("recorded_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // Contiguity is a real guarantee, not decoration: the repository takes a `FOR UPDATE` lock on
+    // the label row before bumping `revision`, and this index is what turns a lost race into a
+    // loud 23505 rather than two snapshots claiming to be v4.
+    uniqueIndex("outcome_label_revisions_label_revision").on(t.labelId, t.revision),
+    index("outcome_label_revisions_by_org").on(t.orgId),
+  ],
+);

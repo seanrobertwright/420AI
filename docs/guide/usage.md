@@ -323,6 +323,62 @@ Hits come from a **redacted projection** — every title and snippet was masked 
 search never exposes a secret and never touches the encrypted originals. Supports plain terms,
 `"quoted phrases"`, and `-negation` (`websearch_to_tsquery`). Advanced semantic/vector search is V2.
 
+### Outcome labels (ingest API)
+
+Capture answers _what happened_; it cannot answer whether the work was **useful**. An outcome label
+is your own short judgement of one session — six fields, under 15 seconds — stored as a separate,
+separately auditable record. It is **never** written onto the raw record or the event: deleting a
+label leaves the session's captured data completely untouched.
+
+Writing needs a `member`-rung key or better; reading, listing and exporting need only `viewer`.
+
+```bash
+# Record a label (201). `taskType`, `intent`, `outcome`, `qualityRating` and `primaryFriction` are
+# required; `followUpCommitOrPr` and `confidence` are optional.
+curl.exe -s -X POST "$BASE/v1/sessions/<sessionId>/label" \
+  -H "authorization: Bearer $ADMIN" -H "content-type: application/json" \
+  --data-binary "@label.json"
+
+# …where label.json is:
+# {"status":"labeled","taskType":"feature","intent":"ship the label API",
+#  "outcome":"shipped","qualityRating":4,"primaryFriction":"none","confidence":"high"}
+
+# Skip instead — a real row, so nothing asks you about this session again:
+curl.exe -s -X POST "$BASE/v1/sessions/<sessionId>/label" \
+  -H "authorization: Bearer $ADMIN" -H "content-type: application/json" \
+  --data-binary "{\"status\":\"skipped\"}"
+
+# Read, edit (bumps the revision), and read the full edit history:
+curl.exe -s "$BASE/v1/sessions/<sessionId>/label"            -H "authorization: Bearer $ADMIN"
+curl.exe -s -X PATCH "$BASE/v1/sessions/<sessionId>/label" \
+  -H "authorization: Bearer $ADMIN" -H "content-type: application/json" \
+  --data-binary "{\"qualityRating\":2,\"primaryFriction\":\"context\"}"
+curl.exe -s "$BASE/v1/sessions/<sessionId>/label/revisions" -H "authorization: Bearer $ADMIN"
+
+# List across the org, optionally filtered and paged:
+curl.exe -s "$BASE/v1/labels?status=labeled&outcome=shipped&limit=50" -H "authorization: Bearer $ADMIN"
+
+# Export (redacted) — json | jsonl | csv:
+curl.exe -s "$BASE/v1/labels/export?format=csv"             -H "authorization: Bearer $ADMIN"
+
+# Retract it entirely — the label and every revision, nothing else (204):
+curl.exe -s -X DELETE "$BASE/v1/sessions/<sessionId>/label" -H "authorization: Bearer $ADMIN"
+```
+
+Notes worth knowing before you start labelling:
+
+- **One label per session.** A second `POST` returns `409` rather than overwriting — a label is
+  somebody's judgement, not a mutable field.
+- **Edits are author-only**, at every rung including `owner`. Deletes are author-or-`admin`, because
+  retraction is not rewriting.
+- **The history is a record, not a counter.** Revision 1 keeps the values you first gave, so a rating
+  you revise upward a week later is visible _as_ a revision rather than silently replacing what you
+  originally thought.
+- **The export is redacted; the in-app reads are not.** `intent` is free text you typed, so anything
+  leaving the archive passes the same secret-masking every other export does.
+- The value sets (`taskType`, `outcome`, `primaryFriction`, `confidence`) are closed — see
+  `packages/shared/src/outcome-labels.ts`. An unrecognised value is a `400`.
+
 ---
 
 ## 6. Stopping & maintenance

@@ -9,6 +9,7 @@ import {
   PasswordResetError,
   SsoIdentityError,
   MfaError,
+  OutcomeLabelError,
 } from "@420ai/db";
 import { createMetrics, registerMetricsHook } from "./metrics.js";
 import authPlugin from "./plugins/auth.js";
@@ -37,6 +38,7 @@ import catalogRoutes from "./routes/catalog.js";
 import connectorCatalogRoutes from "./routes/connector-catalog.js";
 import replayRoutes from "./routes/replay.js";
 import searchRoutes from "./routes/search.js";
+import outcomeLabelRoutes from "./routes/outcome-labels.js";
 import { CATALOG_PUBLIC_KEY, CONNECTOR_CATALOG_PUBLIC_KEY } from "@420ai/shared";
 import { AnalysisProviderError, type AnalysisProvider } from "./analysis/provider.js";
 import { SsoProviderError, type SsoProviders } from "./sso/provider.js";
@@ -250,6 +252,7 @@ export function buildApp(opts: BuildAppOptions): FastifyInstance {
   app.register(connectorCatalogRoutes);
   app.register(replayRoutes);
   app.register(searchRoutes);
+  app.register(outcomeLabelRoutes);
 
   // Map known failures to clean status codes; never leak internals on a 500.
   app.setErrorHandler((err: FastifyError, request, reply) => {
@@ -287,6 +290,19 @@ export function buildApp(opts: BuildAppOptions): FastifyInstance {
     // unreachable code whose comment described behaviour the system could not produce.
     if (err instanceof MfaError) {
       return reply.code(409).send({ error: err.message, reason: err.reason });
+    }
+    // M16 16.1 — an outcome-label mutation refused by the repository. Mapped BY REASON rather than
+    // collapsed to one code, because the three answers are genuinely different questions:
+    // `not_found` is a missing subject (404); `already_labeled` is a CONFLICT with the org's current
+    // state — D-16.1-3 makes a second author a 409, never a silent overwrite of somebody's
+    // judgement; and `not_author` is an AUTHORIZATION refusal (403), because a label is an opinion
+    // with a name on it and no rung, including `owner`, may rewrite one it did not author
+    // (D-16.1-4). Note the deliberate asymmetry with DELETE, which answers 404 for a non-author:
+    // that path returns a boolean rather than throwing, precisely so it never confirms the row
+    // exists to someone with no claim on it.
+    if (err instanceof OutcomeLabelError) {
+      const code = err.reason === "not_found" ? 404 : err.reason === "not_author" ? 403 : 409;
+      return reply.code(code).send({ error: err.message, reason: err.reason });
     }
     // Provider failures (non-200/timeout/parse → 502; not-configured → 503). Placed
     // BEFORE the status>=500 masking branch, which would otherwise hide the message.

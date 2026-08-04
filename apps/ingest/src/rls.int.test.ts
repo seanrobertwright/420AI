@@ -164,7 +164,7 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.3 RLS through the HTTP surface", 
   beforeEach(async () => {
     // TRUNCATE + seed on the OWNER handle (TRUNCATE requires table ownership).
     await owner.db.execute(
-      sql`TRUNCATE search_documents, session_git_links, git_commit_files, git_commits, alert_firings, machine_heartbeats, report_artifacts, workspace_keys, workspaces, projects, raw_source_records, events, ingest_tokens, pairing_codes, machines, memberships, organizations, users RESTART IDENTITY CASCADE`,
+      sql`TRUNCATE outcome_label_revisions, outcome_labels, search_documents, session_git_links, git_commit_files, git_commits, alert_firings, machine_heartbeats, report_artifacts, workspace_keys, workspaces, projects, raw_source_records, events, ingest_tokens, pairing_codes, machines, memberships, organizations, users RESTART IDENTITY CASCADE`,
     );
     await setUserPassword(owner.db, ADMIN_EMAIL, hashPassword(PASSWORD));
     // M15 15.9 — mint the machine-tier bearer AFTER the truncate + identity seed, because

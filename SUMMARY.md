@@ -282,7 +282,7 @@ through the deferral-audit + scope conversation that produced M12/M13/M14. Full 
   D-M16-1 (the observation set is **fixed and narrow** — Claude Code + Codex only, two repos, and the
   browser extension **off** during Phase 1 so the known `claude-live`↔`claude-export` dedup gap cannot
   contaminate the <1% duplicate-rate metric) and D-16.0-1…3. Slices: **16.0** ✅ Truth + research
-  scaffold · **16.1** Outcome label model + API · **16.2** Label capture (tray) + review (dashboard) ·
+  scaffold · **16.1** ✅ Outcome label model + API · **16.2** Label capture (tray) + review (dashboard) ·
   **16.3** Capture health scorecard · **16.4** Data-quality audit report. The §7 P1.6 hero-workflow
   evidence panel is deliberately **not** a slice — the hero workflow is selected from evidence in
   research Phase 2 (weeks 5–8).
@@ -852,6 +852,24 @@ enforced`, the sibling of `skipped ≠ passed`. Closes the Spike-6 hole: a cross
     constant rather than the path actually written, so an operator verifying "did the clean room
     touch my real collector?" was told it had.
     **No schema change, no route change, no behavioural change** beyond those two lines.
+  - **16.1** ✅ **DONE `2026-08-03` (PR pending)** — Outcome label model + API (research plan §4.3 /
+    §7 P0.2). Two new STRICT tenant tables behind the 15.3/15.4 RLS pattern (migration **0024**, 8
+    policies): `outcome_labels` (at most one per `(org_id, session_id)` — `session_id` is
+    connector-supplied and globally scoped, so the unique index takes BOTH columns) and
+    `outcome_label_revisions`, an immutable snapshot per revision. The revisions table is what makes
+    §7 P0.2's "preserve … edits" a record rather than a claim: v1 keeps the values first given, so a
+    rating revised upward a week later is visible **as** hindsight (D-16.1-1). One repository, one
+    closed-set module in `@420ai/shared` built from §4.3's own value table, seven routes, and TWO
+    two-role integration suites (16 repository + 11 HTTP tests). A **skip is a row** (D-16.1-2) —
+    without one, §4.3's "do not nag repeatedly" is unimplementable. Edits are **author-only at every
+    rung including `owner`**, because 16.4 reads these rows as evidence; DELETE is author-or-`admin`,
+    because retraction is not rewriting (D-16.1-4). It also closes half of the gap 16.0 wrote down
+    rather than hid: labels are the **first deletable object** in the archive and now have a written
+    policy (D-16.1-6, `docs/guide/data-boundary.md` §6) — which does not weaken "raw records sacred",
+    since a label is neither raw nor derived but volunteered human ground truth. Both suites assert
+    the §7 P0.2 core claim directly (`events` and `raw_source_records` counts unchanged across the
+    full create/edit/delete lifecycle) rather than assuming it. **No UI** — the tray and dashboard
+    surfaces are 16.2.
 
 - [ ] **M17–M20 remain committed scope, unsequenced** (§3, PRD §25). Each still needs its own
       deferral-audit + scope conversation before it is executable. (**M20** is Cloud-hosted SaaS,
