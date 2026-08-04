@@ -487,6 +487,7 @@ describe.skipIf(!TEST_URL || !APP_URL)("M16 16.1 outcome labels (two-role HTTP)"
       `/v1/sessions/${SHARED_SESSION}/label/revisions`,
       "/v1/labels",
       "/v1/labels/export?format=json",
+      "/v1/labels/queue", // M16 16.2 — a read, so `viewer` is its floor too.
     ]) {
       const res = await app.inject({ method: "GET", url, headers: asUser(tokenViewer) });
       expect(res.statusCode, `viewer GET ${url}`).toBe(200);
@@ -695,7 +696,7 @@ describe.skipIf(!TEST_URL || !APP_URL)("M16 16.1 outcome labels (two-role HTTP)"
 
   // 9 ── Every handler refuses an anonymous caller. Cheap, and it is the check that would catch a
   //      handler pasted in without its `resolvePrincipal` guard.
-  it("all seven routes are 401 without a bearer", async () => {
+  it("all eight routes are 401 without a bearer", async () => {
     const calls: [string, string][] = [
       ["POST", `/v1/sessions/${SHARED_SESSION}/label`],
       ["GET", `/v1/sessions/${SHARED_SESSION}/label`],
@@ -704,6 +705,7 @@ describe.skipIf(!TEST_URL || !APP_URL)("M16 16.1 outcome labels (two-role HTTP)"
       ["GET", `/v1/sessions/${SHARED_SESSION}/label/revisions`],
       ["GET", "/v1/labels"],
       ["GET", "/v1/labels/export?format=json"],
+      ["GET", "/v1/labels/queue"], // M16 16.2 — the eighth.
     ];
     for (const [method, url] of calls) {
       // The content-type header goes ONLY on the two methods that carry a body. Sending it on a
@@ -719,6 +721,132 @@ describe.skipIf(!TEST_URL || !APP_URL)("M16 16.1 outcome labels (two-role HTTP)"
       });
       expect(res.statusCode, `${method} ${url}`).toBe(401);
     }
+  });
+
+  /**
+   * 11 ── M16 16.2, GET /v1/labels/queue. THE BEHAVIOURAL HALF OF CLAUDE.md's GREP RULE.
+   *
+   * `routes/org-scoping.test.ts` is FILE-granular — one `withOrg(` anywhere exempts the whole file —
+   * so `outcome-labels.ts` already passed it before this endpoint existed and would keep passing if
+   * the new handler forgot the wrapper entirely. Source text cannot tell a `Tx` from a `Db`.
+   *
+   * What it also cannot catch is the opposite failure, and that one is worse: a handler that DOES
+   * carry a context but reads a strict-policy table under the wrong role returns ZERO ROWS with a
+   * 200 — no error, no log, nothing for a `try/catch` to swallow. That is the M15 `monitor.ts`
+   * alert-delivery bug verbatim, and an empty label queue is exactly its shape here: the operator
+   * would see "Nothing to label", conclude they were up to date, and 16.4's denominator would be
+   * silently wrong. So this asserts the side effect ACTUALLY HAPPENED (`length > 0`) under the
+   * non-owner role, rather than merely that the call returned 200.
+   *
+   * The session is seeded with a ts relative to REAL now, because the ROUTE owns the clock here and
+   * cannot be injected — a hardcoded date would make this test a time bomb that passes until the
+   * 14-day lookback rolls past it.
+   */
+  it("the queue returns a settled unlabeled session under the app role, and a skip removes it", async () => {
+    const QUEUE_SESSION = "QUEUE-SETTLED-SESSION";
+    const [mQ] = await owner.db
+      .insert(machines)
+      .values({ orgId: orgA, userId: userA, name: "machine-queue" })
+      .returning({ id: machines.id });
+    // One hour ago: past the 15-minute settle window, far inside the 14-day lookback.
+    const settledTs = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    await ingestBatch(owner.db, mQ!.id, {
+      records: [
+        {
+          sourceConnector: "claude-code",
+          sessionId: QUEUE_SESSION,
+          sourceRecordId: "raw-queue",
+          payload: JSON.stringify({ from: "queue" }),
+        },
+      ],
+      events: [
+        {
+          fingerprint: "queue-fp-1",
+          sourceConnector: "claude-code",
+          parserVersion: "1.0.0",
+          rawRecordId: "raw-queue",
+          eventIndex: 0,
+          eventType: "message.user",
+          sessionId: QUEUE_SESSION,
+          ts: settledTs,
+        },
+      ],
+    });
+
+    const readQueue = async (token: string) => {
+      const res = await app.inject({
+        method: "GET",
+        url: "/v1/labels/queue",
+        headers: asUser(token),
+      });
+      expect(res.statusCode).toBe(200);
+      return (res.json() as { sessions: { sessionId: string; lastEventAt: string | null }[] })
+        .sessions;
+    };
+
+    const before = await readQueue(tokenA);
+    // NOT merely `toBe(200)`: a silently-filtered read is a 200 with an empty array.
+    expect(before.length).toBeGreaterThan(0);
+    const row = before.find((s) => s.sessionId === QUEUE_SESSION);
+    expect(row, "the settled session must be offered for labelling").toBeDefined();
+    // The aggregate timestamp is strict ISO, not Postgres text (the M5/M9 bug class).
+    expect(row!.lastEventAt).toBe(new Date(row!.lastEventAt!).toISOString());
+
+    // §4.3's "offer skip and do not nag repeatedly", end to end: a SKIP is a row (D-16.1-2), so the
+    // same `count(labels.id) = 0` predicate that hides a judged session hides a declined one.
+    const skipped = await postLabel(tokenA, QUEUE_SESSION, { status: "skipped" });
+    expect(skipped.statusCode).toBe(201);
+
+    const after = await readQueue(tokenA);
+    expect(after.map((s) => s.sessionId)).not.toContain(QUEUE_SESSION);
+
+    // Org B must never see org A's session, even though the queue is keyed on a connector string.
+    expect((await readQueue(tokenB)).map((s) => s.sessionId)).not.toContain(QUEUE_SESSION);
+  });
+
+  /**
+   * 12 ── THE CLIENT CANNOT WIDEN THE WINDOW. `settledBeforeIso`/`sinceIso` are not caller input
+   * (D-16.2-2), and this pins the two different mechanisms that make that true.
+   *
+   * AN UNKNOWN KEY IS STRIPPED, NOT REJECTED — 200, not 400, and the distinction is worth a test
+   * rather than a guess. This app registers no custom ajv instance, so Fastify's DEFAULT
+   * `removeAdditional: true` applies to querystrings: with `additionalProperties: false` ajv
+   * DELETES the unknown property instead of raising. Every querystring schema in `schemas.ts`
+   * behaves this way, so do not "fix" a sibling route to 400 on the strength of the schema alone.
+   * The security property still holds — a stripped key reaches no handler — but it holds by
+   * REMOVAL, which is a quieter mechanism than the schema's shape suggests.
+   *
+   * A BAD `limit` IS a 400, because that is a value constraint on a declared property, which ajv
+   * does raise. So the bound is enforced loudly and the window is enforced silently, and both are
+   * asserted here so a later reader does not have to infer which is which.
+   */
+  it("the queue ignores an injected window key and rejects an out-of-range limit", async () => {
+    const injected = await app.inject({
+      method: "GET",
+      // A caller trying to reach back past the 14-day lookback, or to shrink the settle window so a
+      // still-active session is offered for judgement.
+      url: "/v1/labels/queue?settledBeforeIso=2020-01-01T00:00:00.000Z&sinceIso=2000-01-01T00:00:00.000Z",
+      headers: asUser(tokenA),
+    });
+    expect(injected.statusCode).toBe(200);
+    // …and it changed nothing: the aged-out seed session (ts 2026-08-01, fixed) is governed by the
+    // SERVER's windows either way. What matters is that the handler never saw those keys.
+    const sessions = (injected.json() as { sessions: { sessionId: string }[] }).sessions;
+    expect(Array.isArray(sessions)).toBe(true);
+
+    const tooBig = await app.inject({
+      method: "GET",
+      url: "/v1/labels/queue?limit=500",
+      headers: asUser(tokenA),
+    });
+    expect(tooBig.statusCode).toBe(400);
+
+    const zero = await app.inject({
+      method: "GET",
+      url: "/v1/labels/queue?limit=0",
+      headers: asUser(tokenA),
+    });
+    expect(zero.statusCode).toBe(400);
   });
 
   // 10 ── §7 P0.2's CENTRAL CLAIM, at the HTTP layer: the whole label lifecycle is not a mutation

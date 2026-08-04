@@ -768,6 +768,23 @@ export const listOutcomeLabelsQuerySchema = {
 } as const;
 
 /**
+ * ?[limit=1..200] for GET /v1/labels/queue (M16 16.2).
+ *
+ * NO WINDOW PARAMETERS, deliberately. "Settled" and "in window" are `ACTIVE_WINDOW_MS` and
+ * `LABEL_QUEUE_LOOKBACK_MS` in `@420ai/shared` (D-16.2-2), not caller input: a client that could
+ * widen the settle window could ask a human to judge a session they are still working in, and one
+ * that could widen the lookback would re-offer sessions the operator has already aged past. The
+ * bound matches `listOutcomeLabelsQuerySchema`'s so the two label reads page alike.
+ */
+export const labelQueueQuerySchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    limit: { type: "integer", minimum: 1, maximum: 200 },
+  },
+} as const;
+
+/**
  * ?format=json|jsonl|csv (+ the same filters) for GET /v1/labels/export. `format` is REQUIRED so a
  * missing or invalid value is a 400 via app.ts's `err.validation` branch, matching the three M10
  * export querystrings. No `md` and no `parquet`: a label list is tabular, not a document, and

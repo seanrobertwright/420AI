@@ -18,6 +18,9 @@ const LINKS: { href: string; label: string }[] = [
   { href: "/monitor", label: "Monitor" },
   { href: "/projects", label: "Projects" },
   { href: "/reports", label: "Reports" },
+  // M16 16.2: the outcome-label review surface. `viewer`-gated upstream like /team, so every
+  // account can open it — a read-only account sees the table and gets a 403 on any edit.
+  { href: "/labels", label: "Labels" },
   { href: "/search", label: "Search" },
   { href: "/machines", label: "Machines" },
   // M15 15.10: the team surface. Gated at `viewer` upstream, so every account can reach it —

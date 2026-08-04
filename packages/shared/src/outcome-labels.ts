@@ -125,6 +125,31 @@ export interface OutcomeLabelFields {
   followUpCommitOrPr: string | null;
 }
 
+/**
+ * M16 16.2 — one row of `GET /v1/labels/queue`: a settled, in-window session carrying NO label row
+ * yet. The shape deliberately mirrors `ActiveSessionRow` (monitor.ts) because it is the same
+ * projection over `events` with an inverted window and a `count(labels.id) = 0` predicate.
+ *
+ * THE TIMESTAMPS ARE ISO **BECAUSE THE REPOSITORY NORMALIZES THEM**, not because they arrive that
+ * way. Inside a raw `sql` aggregate the `events.ts` `mode:"string"` parser does not apply, so
+ * `min(ts)`/`max(ts)` come back as Postgres text (`2026-08-01 00:00:00+00`) — measured, not
+ * assumed (16.2 planning spike S2: `raw === new Date(raw).toISOString()` was `false`).
+ * `label-queue.ts` runs them through `toIso`. Do NOT describe these as "already ISO"; that exact
+ * phrasing in an M5 plan is what shipped the `lastActivity` bug, and it recurred in M9.
+ */
+export interface LabelQueueRow {
+  sessionId: string;
+  sourceConnector: string;
+  /** `min(ts)`, ISO. NULL only if the session somehow has no timestamped event. */
+  startedAt: string | null;
+  /** `max(ts)`, ISO. The value the settle window is measured against. */
+  lastEventAt: string | null;
+  eventCount: number;
+  models: string[];
+  projectPath: string | null;
+  gitBranch: string | null;
+}
+
 /** Narrowing guard for a value arriving from the database as plain TEXT, or off the wire. */
 export function isTaskType(value: string): value is TaskType {
   return (TASK_TYPES as readonly string[]).includes(value);

@@ -1084,8 +1084,16 @@ curl -s -X DELETE "$INGEST_URL/v1/auth/api-keys/<id>" -H "authorization: Bearer 
 re-minted, never recovered. Copy it straight into its client.
 
 **Grant the lowest rung that works.** `role` is optional; omitting it means "inherit my role", which
-is what `ADMIN_TOKEN` effectively did. The desktop app's monitor panel needs only `viewer`, and
-`reports:generate` needs only `member`. You may never mint above your own rung (403).
+is what `ADMIN_TOKEN` effectively did. You may never mint above your own rung (403).
+
+> **The desktop app now needs a `member` key, not a `viewer` one** (M16 16.2, D-16.2-4). This
+> changed: through M15 the app only ever _read_ `/v1/monitor`, so a `viewer` key was sufficient and
+> this guide said so. The app's **Sessions to label** panel _writes_ an outcome label, and writes
+> are `member`-gated (D-16.1-4).
+>
+> A `viewer` key still works for everything else, and the failure is handled rather than hidden: the
+> label queue loads, the **Save label** button returns a refusal naming the remedy, and capture is
+> unaffected. If you configured the app before M16, re-mint at `member` when you want to label.
 
 ### The effective role is re-derived on every request
 

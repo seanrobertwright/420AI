@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { Pairing } from "@/components/Pairing";
 import { StatusBar } from "@/components/StatusBar";
 import { SyncHealth } from "@/components/SyncHealth";
+import { LabelQueue } from "@/components/LabelQueue";
 import { Connectors } from "@/components/Connectors";
 import { Settings } from "@/components/Settings";
 import { checkForUpdateOnLaunch } from "@/lib/updater";
@@ -34,6 +35,10 @@ export function App() {
         <Pairing />
         <StatusBar />
         <SyncHealth />
+        {/* M16 16.2 — the §4.3 label capture surface. Below SyncHealth on purpose: capture health
+            is the thing an operator opens this app to check, and the label queue is what they can
+            usefully do while they are here. It never asks to be looked at (D-16.2-3). */}
+        <LabelQueue />
         <Connectors />
         <Settings />
       </div>

@@ -1,6 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { ControlCommand, ControlEvent, LiveMonitorSnapshot } from "@420ai/shared";
+import type {
+  ControlCommand,
+  ControlEvent,
+  LabelQueueRow,
+  LiveMonitorSnapshot,
+  OutcomeLabelFields,
+} from "@420ai/shared";
 
 /**
  * The webview↔Rust bridge (M11). The webview NEVER spawns or talks to the sidecar
@@ -35,6 +41,49 @@ export function onControlEvent(cb: (ev: ControlEvent) => void): Promise<Unlisten
  */
 export function getMonitorSnapshot(): Promise<LiveMonitorSnapshot> {
   return invoke<LiveMonitorSnapshot>("get_monitor_snapshot");
+}
+
+/**
+ * M16 16.2 — the label capture bridge. Three wrappers over two Rust `#[command]`s.
+ *
+ * Same discipline as `getMonitorSnapshot` above: Rust holds the API key and makes the request,
+ * returns opaque JSON, and the webview casts to the shared type. Nothing here sees a bearer.
+ *
+ * D-16.2-4 — WRITING NEEDS A `member` KEY, unlike every other command in this file. A `viewer` key
+ * loads the queue fine and rejects the submit with an actionable message (Rust maps the 403), which
+ * is the failure an operator will actually hit after upgrading.
+ */
+
+/**
+ * Settled, in-window, UNLABELED sessions. `viewer`-gated, so this succeeds with any configured key.
+ *
+ * Rejects with "API key not configured" / "ingest unreachable: …" so the panel can degrade to a
+ * hint rather than an unhandled rejection.
+ */
+export function getLabelQueue(): Promise<{ sessions: LabelQueueRow[] }> {
+  return invoke<{ sessions: LabelQueueRow[] }>("get_label_queue");
+}
+
+/**
+ * Record a §4.3 label for one session. `sessionId` (camelCase) maps to the Rust `session_id`
+ * (snake) automatically, as `restoreArchive`'s `backupPath` already relies on.
+ */
+export function postSessionLabel(
+  sessionId: string,
+  body: Partial<OutcomeLabelFields> & { status: "labeled" | "skipped"; confidence?: string | null },
+): Promise<{ label: unknown }> {
+  return invoke<{ label: unknown }>("post_session_label", { sessionId, body });
+}
+
+/**
+ * §4.3's "offer skip" — a one-call convenience over the same endpoint.
+ *
+ * A SKIP IS A ROW (D-16.1-2), which is what makes "do not nag repeatedly" work: the server's queue
+ * excludes any session carrying a label row, so a skipped session leaves the queue permanently and
+ * nothing client-side has to remember that it asked.
+ */
+export function skipSession(sessionId: string): Promise<{ label: unknown }> {
+  return postSessionLabel(sessionId, { status: "skipped" });
 }
 
 /** Ask the sidecar to emit a `connectors` event (registry + persisted enablement). */

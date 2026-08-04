@@ -282,7 +282,7 @@ through the deferral-audit + scope conversation that produced M12/M13/M14. Full 
   D-M16-1 (the observation set is **fixed and narrow** — Claude Code + Codex only, two repos, and the
   browser extension **off** during Phase 1 so the known `claude-live`↔`claude-export` dedup gap cannot
   contaminate the <1% duplicate-rate metric) and D-16.0-1…3. Slices: **16.0** ✅ Truth + research
-  scaffold · **16.1** ✅ Outcome label model + API · **16.2** Label capture (tray) + review (dashboard) ·
+  scaffold · **16.1** ✅ Outcome label model + API · **16.2** ✅ Label capture (tray) + review (dashboard) ·
   **16.3** Capture health scorecard · **16.4** Data-quality audit report. The §7 P1.6 hero-workflow
   evidence panel is deliberately **not** a slice — the hero workflow is selected from evidence in
   research Phase 2 (weeks 5–8).
@@ -871,6 +871,41 @@ enforced`, the sibling of `skipped ≠ passed`. Closes the Spike-6 hole: a cross
     the §7 P0.2 core claim directly (`events` and `raw_source_records` counts unchanged across the
     full create/edit/delete lifecycle) rather than assuming it. **No UI** — the tray and dashboard
     surfaces are 16.2.
+
+  - **16.2** ✅ **DONE `2026-08-04` (PR #NN)** — Label capture (desktop) + review (dashboard). The
+    surfaces that make 16.1's model reachable by a human: before this, every label cost a terminal,
+    a session id looked up by hand and a JSON body, so completion over a 24-week research period
+    would have been zero and every 16.4 outcome metric would have been computed over an empty set
+    (§12 / M16 Risk 3). **One additive endpoint** — `GET /v1/labels/queue`, `viewer`-gated — and
+    **no schema change**.
+    **The queue IS the design (D-16.2-1).** §4.3 requires "offer skip and do not nag repeatedly",
+    and because D-16.1-2 made a skip a ROW, never-nag is not a feature but the query's
+    `count(labels.id) = 0` predicate: a skipped session leaves the queue permanently, and a
+    reinstall cannot reset it. "Settled" is `max(ts) < now − ACTIVE_WINDOW_MS`, the Live Monitor's
+    own active window **promoted into `@420ai/shared`** rather than duplicated (D-16.2-2), so a
+    session can never be simultaneously "active now" and "ready to label"; the 14-day lookback is
+    derived from §3's Friday cadence (one missed week of slack).
+    **The one-line bug this slice was built around.** The queue's `leftJoin` needs
+    `eq(outcomeLabels.orgId, orgId)` on the JOIN condition, not the `where` — a `where` on the
+    nullable side would turn it into an inner join and drop every unlabeled session. Planning
+    reproduced the missing-predicate case as a negative control (spike S5) and execution reproduced
+    it again by deleting the predicate: exactly one test failed, the cross-org one, run on the
+    **owner** handle so it measures the predicate rather than the RLS backstop. Its failure mode is
+    silence — the session simply never appears, so it is never labelled, so 16.4's denominator is
+    quietly wrong. Two-role suites at both layers (10 repository + 3 new HTTP), the HTTP one
+    asserting the queue is **non-empty** under the app role, since a policy-filtered read is a 200
+    with an empty array (the M15 `monitor.ts` shape).
+    **D-16.2-3 — pull-only.** The desktop panel never raises a window, notifies, polls or steals
+    focus; the tray item is static with no count, and a human presses it. An interruption during
+    the deep work being measured would change the thing it measures. **D-16.2-4** — the desktop API
+    key rung therefore rises `viewer` → `member`, and the `proxy.rs` comment claiming a viewer key
+    suffices was corrected with the code (the M15 15.5 defect class), with the `viewer` case handled
+    rather than hidden: the queue loads, the submit 403s, the panel names the remedy.
+    **D-16.2-5 / D-16.2-6 — §7 P1.5 gets no new table.** "Log a decision" renders a `DEC-YYYY-NN`
+    stub for the existing `.agents/research/decisions.md`; a second log would diverge from the
+    first. It carries IDs, timestamps, counts and closed-set values only, with `intent`,
+    `followUpCommitOrPr` and `projectPath` excluded **at the type level** (`never`), so pasting free
+    human text into a public repository is a compile error rather than a thing to remember.
 
 - [ ] **M17–M20 remain committed scope, unsequenced** (§3, PRD §25). Each still needs its own
       deferral-audit + scope conversation before it is executable. (**M20** is Cloud-hosted SaaS,

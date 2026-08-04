@@ -23,6 +23,35 @@ export type MonitorStatus = "online" | "stale" | "offline";
 /** Stamps the snapshot shape so a future dashboard can detect a derivation change (D11, PRD §23). */
 export const MONITOR_VERSION = "m10-monitor-v2";
 
+/**
+ * The "active now" window: a session whose last event is within this lookback is shown as active
+ * by `GET /v1/monitor`. M9 stores only the LATEST heartbeat sample, so this is current recency —
+ * NOT a rate-of-change ("backlog growing" / trend is M10, D4).
+ *
+ * TWO CONSUMERS, AND THAT IS THE REASON IT LIVES HERE (M16 16.2, D-16.2-2). It was a local const in
+ * `apps/ingest/src/routes/monitor.ts` until the label queue needed the same number: 16.2's
+ * `GET /v1/labels/queue` defines a session as SETTLED when `max(ts) < now − ACTIVE_WINDOW_MS`.
+ * The settle threshold IS the active window, on purpose and not by coincidence — a session must
+ * never be simultaneously "active now" in the Live Monitor and "ready to label" in the tray, and
+ * asking a human to judge a session they are still in the middle of is the fastest route to the
+ * milestone's Risk 3 (label burden kills the ground truth). Two copies of this number could drift;
+ * one cannot.
+ */
+export const ACTIVE_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
+
+/**
+ * How far back `GET /v1/labels/queue` looks for unlabeled sessions (M16 16.2, D-16.2-2).
+ *
+ * FOURTEEN DAYS IS DERIVED, NOT PICKED. The research plan's §3 review cadence is a Friday,
+ * 30-minute session, so a full week can elapse between visits to the queue; 14 days leaves exactly
+ * one missed week of slack before a session ages out unlabeled.
+ *
+ * A session older than this is DELIBERATELY unreachable from the queue rather than accidentally
+ * missing: 16.4 counts it in the denominator as never-asked-about (which is the honest reading —
+ * nobody was ever prompted), and the dashboard's `/labels` page is how one gets labelled late.
+ */
+export const LABEL_QUEUE_LOOKBACK_MS = 14 * 24 * 60 * 60 * 1000; // 14 days
+
 /** Tuned to the default 30 s heartbeat cadence (HEARTBEAT_INTERVAL_MS). */
 export const MONITOR_THRESHOLDS = {
   staleMs: 90_000, // > 3× cadence with no heartbeat -> stale (amber)

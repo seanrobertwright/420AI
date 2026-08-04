@@ -3,6 +3,7 @@ import {
   createOutcomeLabel,
   deleteOutcomeLabel,
   getOutcomeLabel,
+  labelQueue,
   listOutcomeLabelRevisions,
   listOutcomeLabels,
   sessionDetail,
@@ -16,6 +17,8 @@ import {
   redactJson,
   toCsv,
   toJsonl,
+  ACTIVE_WINDOW_MS,
+  LABEL_QUEUE_LOOKBACK_MS,
   REDACTION_VERSION,
   type ExportManifest,
   type Friction,
@@ -27,6 +30,7 @@ import {
 import {
   createOutcomeLabelBodySchema,
   exportOutcomeLabelsQuerySchema,
+  labelQueueQuerySchema,
   listOutcomeLabelsQuerySchema,
   patchOutcomeLabelBodySchema,
 } from "../schemas.js";
@@ -74,6 +78,13 @@ const LABEL_CSV_COLUMNS = [
   "createdAt",
   "updatedAt",
 ] as const;
+
+/**
+ * The queue's default page size (M16 16.2). Small on purpose: the panel is a 15-second surface, and
+ * a queue that renders 200 rows reads as a backlog to work through rather than a question to answer
+ * — which is the shape §12 names as the thing that kills label completion.
+ */
+const DEFAULT_QUEUE_LIMIT = 25;
 
 /** Keep a scope value safe for a `Content-Disposition` filename (mirrors `routes/exports.ts`). */
 function safeScopeKey(value: string | undefined): string {
@@ -329,6 +340,52 @@ export default async function outcomeLabelRoutes(app: FastifyInstance): Promise<
         listOutcomeLabels(tx, principal.orgId, request.query),
       );
       return reply.code(200).send({ labels: rows.map(serializeLabel) });
+    },
+  );
+
+  /**
+   * GET /v1/labels/queue — settled, in-window, UNLABELED sessions (M16 16.2, research plan §4.3).
+   *
+   * THE ONE ENDPOINT 16.2 ADDS. It answers "which of my sessions are finished, recent, and carry no
+   * label row yet?", which is the question the desktop capture panel is built around; every other
+   * surface in that slice consumes 16.1's existing routes unchanged.
+   *
+   * WHY A SKIPPED SESSION NEVER COMES BACK. D-16.1-2 made a skip a ROW, so it is excluded by the
+   * same `count(labels.id) = 0` predicate that excludes a judged one. §4.3's "offer skip and do not
+   * nag repeatedly" is therefore a property of the QUERY, not a feature layered over it — there is
+   * no "already asked" state anywhere, and a reinstall cannot reset it.
+   *
+   * THE CLOCK IS THE ROUTE'S (the repo-wide injection rule — `labelQueue` is clock-free), and the
+   * two windows come from `@420ai/shared` rather than from the caller, so the tray, the dashboard
+   * and 16.4 cannot disagree about what "settled" means. `ACTIVE_WINDOW_MS` is the Live Monitor's
+   * OWN active window: a session is offered for labelling exactly when it stops being shown as
+   * active, with neither an overlap nor a gap (D-16.2-2).
+   *
+   * `viewer`-gated like every other read in this file, and `withOrg` with `principal.role` rather
+   * than `SERVICE_ROLE` — the 15.4 "whose action is this?" test answers "the person opening the
+   * panel". Path precedence was checked: `/v1/labels`, `/v1/labels/queue` and `/v1/labels/export`
+   * are all STATIC literals, so Fastify's radix tree separates them with no ordering dependency.
+   */
+  app.get<{ Querystring: { limit?: number } }>(
+    "/v1/labels/queue",
+    { schema: { querystring: labelQueueQuerySchema } },
+    async (request, reply) => {
+      const principal = await resolvePrincipal(app, request);
+      if (!principal) {
+        return reply.code(401).send({ error: "admin authorization required" });
+      }
+      if (!authorized(principal, "viewer")) {
+        return reply.code(403).send({ error: "insufficient role" });
+      }
+      const nowMs = Date.now();
+      const sessions = await withOrg(app.db, principal.orgId, principal.role, (tx) =>
+        labelQueue(tx, principal.orgId, {
+          settledBeforeIso: new Date(nowMs - ACTIVE_WINDOW_MS).toISOString(),
+          sinceIso: new Date(nowMs - LABEL_QUEUE_LOOKBACK_MS).toISOString(),
+          limit: request.query.limit ?? DEFAULT_QUEUE_LIMIT,
+        }),
+      );
+      return reply.code(200).send({ sessions });
     },
   );
 
