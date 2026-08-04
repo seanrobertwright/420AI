@@ -36,6 +36,7 @@ export {
   gitCommitFiles,
   sessionGitLinks,
   machineHeartbeats,
+  machineConnectors,
   alertFirings,
   ingestAuthFailures,
   pricingCatalogs,
@@ -222,6 +223,14 @@ export type {
 // M16 16.2 — the label QUEUE (settled + unlabeled). Its row type is `LabelQueueRow` in
 // `@420ai/shared`, alongside the closed value sets, since both UIs and 16.4 consume it.
 export { labelQueue } from "./repositories/label-queue.js";
+// M16 16.3 — capture health. The row types (`DeclaredConnectorRow`, `ObservedConnectorRow`) and the
+// pure `deriveCaptureHealth` that composes them live in `@420ai/shared`, so the classification is
+// testable with no database and 16.4 reuses it rather than deriving a second, disagreeing verdict.
+export {
+  replaceMachineConnectors,
+  declaredConnectorHealth,
+  observedConnectorAggregates,
+} from "./repositories/capture-health.js";
 export { issueIngestToken, findMachineIdByToken } from "./repositories/tokens.js";
 export { ingestBatch } from "./repositories/ingest.js";
 export {

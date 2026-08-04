@@ -6,7 +6,7 @@ import { isSea } from "node:sea";
 import { runCaptureEngine, type CaptureEngineOptions } from "./capture-engine.js";
 import { loadCredentials, QUEUE_PATH, type Credentials } from "./identity.js";
 import { QueueStore, type QueueStats } from "./queue/queue-store.js";
-import { connectors as defaultConnectors, type Connector } from "./connectors/connector.js";
+import type { Connector } from "./connectors/connector.js";
 import { loadRegistry } from "./connectors/registry.js";
 import {
   fetchActiveConnectorCatalog,
@@ -29,10 +29,8 @@ import {
   filterByApproval,
   type ConnectorApprovals,
 } from "./connectors/connector-approvals.js";
-import type { ControlCommand, ControlEvent, ConnectorInfo } from "@420ai/shared";
-
-/** Built-in connector ids, computed once — `mapConnectorInfo` flags anything else as `custom`. */
-const BUILTIN_IDS = new Set(defaultConnectors.map((c) => c.id));
+import { mapConnectorInfo } from "./connectors/connector-info.js";
+import type { ControlCommand, ControlEvent } from "@420ai/shared";
 
 /**
  * The `serve` entrypoint (M11): the long-running stdio protocol server the Tauri
@@ -89,36 +87,6 @@ export interface ServeDeps {
   loadCachedConnectorCatalog?: () => SignedConnectorCatalog | undefined;
   /** Slice 2: home dir used to resolve a connector's `watchGlobs` (permission scope). */
   home?: string;
-}
-
-/**
- * Map a `Connector` (+ its resolved enablement + home) to the serializable
- * `ConnectorInfo` wire shape. The SINGLE conversion point (`@420ai/shared` can't
- * import `Connector`, so the fidelity fields are mirrored on the wire) — a serve
- * test asserts this mapping stays 1:1 with `ConnectorFidelity`.
- */
-function mapConnectorInfo(
-  c: Connector,
-  enabled: boolean,
-  home: string,
-  approval: "approved" | "needs-approval",
-): ConnectorInfo {
-  return {
-    id: c.id,
-    enabled,
-    status: c.fidelity.status,
-    captureMethod: c.fidelity.captureMethod,
-    liveness: c.fidelity.liveness,
-    tokens: c.fidelity.tokens,
-    cost: c.fidelity.cost,
-    knownGaps: c.fidelity.knownGaps,
-    watchGlobs: c.watchGlobs(home),
-    // Slice 12.7b: the declared §10.3 scope + the §10.4 approval state.
-    requiredPermissions: c.fidelity.requiredPermissions,
-    approval,
-    // A connector whose id is not a built-in is a user-defined custom connector (M10-S2).
-    custom: !BUILTIN_IDS.has(c.id),
-  };
 }
 
 /** Default queue-stats reader: a short-lived WAL read, mirroring cli.ts `runQueueStatus`. */
@@ -248,6 +216,13 @@ export function runServe(deps: ServeDeps = {}): Promise<void> {
       collectorVersion,
       heartbeatIntervalMs: deps.heartbeatIntervalMs,
       connectors: enabledConnectors,
+      // M16 16.3: REPORT the full registry, CAPTURE the filtered subset — the same split `cli.ts`
+      // makes, so the desktop and service paths produce the same scorecard.
+      registry: connectorRegistry,
+      connectorState: (c) => ({
+        enabled: loadConnectorCfg().connectors[c.id]?.enabled !== false,
+        approval: approvalStatus(c, loadApprovals(), home),
+      }),
       onSyncSuccess: (at) => {
         lastSyncAt = at;
       },

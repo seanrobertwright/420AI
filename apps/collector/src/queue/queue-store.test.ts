@@ -228,3 +228,70 @@ describe("QueueStore — pollChanged/pollCommit (M13 13.7 poll change memory)", 
     }
   });
 });
+
+describe("QueueStore — connector_errors (M16 16.3, the collector-owned health signal)", () => {
+  it("upserts: the latest message wins and count increments", () => {
+    const q = new QueueStore(tmpDbPath());
+    try {
+      expect(q.connectorErrors().size).toBe(0);
+
+      q.recordConnectorError("codex-cli", "EACCES first", "2026-08-04T10:00:00.000Z");
+      expect(q.connectorErrors().get("codex-cli")).toEqual({
+        message: "EACCES first",
+        at: "2026-08-04T10:00:00.000Z",
+        count: 1,
+      });
+
+      q.recordConnectorError("codex-cli", "EACCES second", "2026-08-04T11:00:00.000Z");
+      expect(q.connectorErrors().get("codex-cli")).toEqual({
+        message: "EACCES second",
+        at: "2026-08-04T11:00:00.000Z",
+        count: 2,
+      });
+      // ONE row, not an append log — this is a health signal, not history.
+      expect(q.connectorErrors().size).toBe(1);
+    } finally {
+      q.close();
+    }
+  });
+
+  it("scopes per connector and survives reopen", () => {
+    const path = tmpDbPath();
+    const q1 = new QueueStore(path);
+    q1.recordConnectorError("codex-cli", "boom", "2026-08-04T10:00:00.000Z");
+    q1.recordConnectorError("claude-code", "bang", "2026-08-04T10:00:01.000Z");
+    q1.close();
+
+    const q2 = new QueueStore(path);
+    try {
+      const errs = q2.connectorErrors();
+      expect(errs.size).toBe(2);
+      expect(errs.get("codex-cli")!.message).toBe("boom");
+      expect(errs.get("claude-code")!.count).toBe(1);
+    } finally {
+      q2.close();
+    }
+  });
+
+  it("truncates an oversized message to the ingest schema's bound", () => {
+    const q = new QueueStore(tmpDbPath());
+    try {
+      q.recordConnectorError("codex-cli", "x".repeat(5000), "2026-08-04T10:00:00.000Z");
+      // 500 is `maxLength` on `lastErrorMessage` in apps/ingest/src/schemas.ts — a longer message
+      // would be stripped by ajv on arrival, silently losing the whole error.
+      expect(q.connectorErrors().get("codex-cli")!.message).toHaveLength(500);
+    } finally {
+      q.close();
+    }
+  });
+
+  it("uses the injected clock when no timestamp is given", () => {
+    const q = new QueueStore(tmpDbPath(), () => new Date("2026-08-04T12:00:00.000Z"));
+    try {
+      q.recordConnectorError("codex-cli", "boom");
+      expect(q.connectorErrors().get("codex-cli")!.at).toBe("2026-08-04T12:00:00.000Z");
+    } finally {
+      q.close();
+    }
+  });
+});

@@ -13,6 +13,7 @@ import {
 import { cn } from "@/lib/utils";
 import { formatAgo } from "@/lib/format";
 import { AlertsPanel } from "@/components/monitor/alerts-panel";
+import { CaptureHealthPanel } from "@/components/monitor/capture-health-panel";
 
 const STATUS_BADGE: Record<MonitorStatus, string> = {
   online: "border-transparent bg-emerald-500/15 text-emerald-400",
@@ -120,48 +121,12 @@ export function MonitorView({ snapshot, nowMs }: { snapshot: LiveMonitorSnapshot
         </CardContent>
       </Card>
 
-      {/* Connectors */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Connectors</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {connectors.length === 0 ? (
-            <p className="text-muted-foreground text-sm">No connector activity yet.</p>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Connector</TableHead>
-                  <TableHead>Last event</TableHead>
-                  <TableHead>Events</TableHead>
-                  <TableHead>Failures</TableHead>
-                  <TableHead>Models</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {connectors.map((c) => (
-                  <TableRow key={c.sourceConnector}>
-                    <TableCell className="font-medium">{c.sourceConnector}</TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {formatAgo(c.lastEventAt, nowMs)}
-                    </TableCell>
-                    <TableCell>{c.eventCount}</TableCell>
-                    <TableCell>
-                      <span className={cn(c.toolsFailed > 0 && "text-destructive font-semibold")}>
-                        {c.toolsFailed}
-                      </span>
-                    </TableCell>
-                    <TableCell className="text-muted-foreground text-xs">
-                      {c.models.length ? c.models.join(", ") : "—"}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
+      {/* M16 16.3 — replaces the old Connectors card, which was a projection over OBSERVED events
+          and so could only list connectors that had already produced something. A connector that was
+          enabled but BROKEN emitted nothing and had no row at all — indistinguishable from disabled,
+          and from healthy-on-a-quiet-day. This panel joins the collector's DECLARED inventory
+          against the observation, so every connector appears with an explicit state. */}
+      <CaptureHealthPanel nowMs={nowMs} />
 
       {/* Active sessions */}
       <Card>

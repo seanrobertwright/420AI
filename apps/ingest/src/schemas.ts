@@ -125,6 +125,68 @@ export const heartbeatBodySchema = {
     // M12 12.6 archive.unreachable signal — optional (NOT in required) so an older collector
     // omits it; additionalProperties:false means it MUST be declared or a sender 400s.
     consecutiveSyncFailures: { type: "integer", minimum: 0 },
+    // M16 16.3 — the DECLARED connector inventory (D-16.3-2). Optional for the same reason and
+    // with the same hazard as `consecutiveSyncFailures` above: `additionalProperties:false` means a
+    // NEWER collector posting this to an OLDER server 400s the ENTIRE heartbeat, and
+    // `maybeSendHeartbeat` swallows the failure — the machine then goes `offline` in the Live
+    // Monitor with no error anywhere. Deploy the archive BEFORE the collector (D-16.3-6); the
+    // collector's `onError` seam is what stops that failure being silent when the order slips.
+    //
+    // EVERYTHING IS BOUNDED. This body is written to the database by a machine-authed caller every
+    // 30 s, so an unbounded array or string is an unbounded write.
+    connectors: {
+      type: "array",
+      maxItems: 64,
+      items: {
+        type: "object",
+        required: [
+          "id",
+          "enabled",
+          "approval",
+          "status",
+          "captureMethod",
+          "liveness",
+          "tokens",
+          "cost",
+          "knownGaps",
+          "requiredPermissions",
+          "errorCount",
+        ],
+        // NO `watchGlobs` PROPERTY, DELIBERATELY (D-16.3-3): they are absolute paths under the
+        // operator's home. With `additionalProperties:false` its absence is enforced, not merely
+        // documented — a collector that sent them would 400 rather than leak them.
+        additionalProperties: false,
+        properties: {
+          id: { type: "string", minLength: 1, maxLength: 100 },
+          enabled: { type: "boolean" },
+          approval: { type: "string", enum: ["approved", "needs-approval"] },
+          status: { type: "string", enum: ["stable", "experimental", "planned"] },
+          captureMethod: { type: "string", maxLength: 200 },
+          liveness: {
+            type: "string",
+            enum: ["streaming", "near-real-time", "snapshot", "batch"],
+          },
+          tokens: { type: "string", enum: ["exact", "estimated", "none"] },
+          cost: { type: "string", enum: ["reported", "computed", "none"] },
+          knownGaps: {
+            type: "array",
+            maxItems: 32,
+            items: { type: "string", maxLength: 300 },
+          },
+          requiredPermissions: {
+            type: "array",
+            maxItems: 32,
+            items: { type: "string", maxLength: 300 },
+          },
+          custom: { type: "boolean" },
+          // May contain a FILE PATH — that is the diagnostic, and it is recorded as part of what a
+          // heartbeat carries in docs/guide/data-boundary.md.
+          lastErrorMessage: { type: ["string", "null"], maxLength: 500 },
+          lastErrorAt: { type: ["string", "null"], maxLength: 40 },
+          errorCount: { type: "integer", minimum: 0 },
+        },
+      },
+    },
   },
 } as const;
 

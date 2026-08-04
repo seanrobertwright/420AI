@@ -99,3 +99,102 @@ describe("maybeSendHeartbeat", () => {
     expect(post).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("maybeSendHeartbeat — the M16 16.3 connector inventory", () => {
+  const report = {
+    id: "claude-code",
+    enabled: true,
+    approval: "approved" as const,
+    status: "stable" as const,
+    captureMethod: "jsonl tail",
+    liveness: "streaming" as const,
+    tokens: "exact" as const,
+    cost: "computed" as const,
+    knownGaps: [],
+    requiredPermissions: [],
+    custom: false,
+    lastErrorMessage: null,
+    lastErrorAt: null,
+    errorCount: 0,
+  };
+
+  it("omits `connectors` ENTIRELY when no thunk is wired", async () => {
+    const post = vi.fn().mockResolvedValue({ ok: true });
+    await maybeSendHeartbeat(makeDeps({ nowRef: { ms: T0 }, post }), newHeartbeatState());
+    const body = post.mock.calls[0]![2] as Record<string, unknown>;
+    // `undefined` and `[]` are different facts to the server (D-16.3-2) — the KEY must be absent,
+    // not present-and-undefined, since `JSON.stringify` would drop it either way but a future
+    // structured client would not.
+    expect("connectors" in body).toBe(false);
+  });
+
+  it("includes the inventory when the thunk is wired", async () => {
+    const post = vi.fn().mockResolvedValue({ ok: true });
+    const deps: HeartbeatDeps = {
+      ...makeDeps({ nowRef: { ms: T0 }, post }),
+      connectorReports: () => [report],
+    };
+    await maybeSendHeartbeat(deps, newHeartbeatState());
+    expect((post.mock.calls[0]![2] as { connectors: unknown[] }).connectors).toEqual([report]);
+  });
+
+  it("sends an EMPTY array as an empty array — it means 'prune', not 'nothing to say'", async () => {
+    const post = vi.fn().mockResolvedValue({ ok: true });
+    const deps: HeartbeatDeps = {
+      ...makeDeps({ nowRef: { ms: T0 }, post }),
+      connectorReports: () => [],
+    };
+    await maybeSendHeartbeat(deps, newHeartbeatState());
+    const body = post.mock.calls[0]![2] as Record<string, unknown>;
+    expect("connectors" in body).toBe(true);
+    expect(body.connectors).toEqual([]);
+  });
+
+  it("reads the thunk at SEND time, not at construction time", async () => {
+    const post = vi.fn().mockResolvedValue({ ok: true });
+    let errorCount = 0;
+    const nowRef = { ms: T0 };
+    const deps: HeartbeatDeps = {
+      ...makeDeps({ nowRef, post }),
+      connectorReports: () => [{ ...report, errorCount }],
+    };
+    const state = newHeartbeatState();
+
+    await maybeSendHeartbeat(deps, state);
+    errorCount = 5; // capture fails between heartbeats
+    nowRef.ms = T0 + INTERVAL;
+    await maybeSendHeartbeat(deps, state);
+
+    expect(
+      (post.mock.calls[0]![2] as { connectors: [{ errorCount: number }] }).connectors[0]!
+        .errorCount,
+    ).toBe(0);
+    expect(
+      (post.mock.calls[1]![2] as { connectors: [{ errorCount: number }] }).connectors[0]!
+        .errorCount,
+    ).toBe(5);
+  });
+
+  it("calls onError on a rejection and STILL does not throw (D-16.3-6)", async () => {
+    const post = vi.fn().mockRejectedValue(new Error("400 Bad Request"));
+    const onError = vi.fn();
+    const deps: HeartbeatDeps = { ...makeDeps({ nowRef: { ms: T0 }, post }), onError };
+
+    await expect(maybeSendHeartbeat(deps, newHeartbeatState())).resolves.toBeUndefined();
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(String(onError.mock.calls[0]![0])).toContain("400 Bad Request");
+  });
+
+  it("an onError that itself throws does not become the failure it was reporting", async () => {
+    const post = vi.fn().mockRejectedValue(new Error("boom"));
+    const deps: HeartbeatDeps = {
+      ...makeDeps({ nowRef: { ms: T0 }, post }),
+      onError: () => {
+        throw new Error("the observer exploded");
+      },
+    };
+    // The swallow is what keeps the sync loop alive (residual risk e); an observer must not
+    // reintroduce the stall it exists to report.
+    await expect(maybeSendHeartbeat(deps, newHeartbeatState())).resolves.toBeUndefined();
+  });
+});

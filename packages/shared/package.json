@@ -17,6 +17,10 @@
     "./outcome-labels": {
       "types": "./dist/outcome-labels.d.ts",
       "default": "./dist/outcome-labels.js"
+    },
+    "./capture-health": {
+      "types": "./dist/capture-health.d.ts",
+      "default": "./dist/capture-health.js"
     }
   },
   "scripts": {

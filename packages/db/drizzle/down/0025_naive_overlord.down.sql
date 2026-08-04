@@ -1,0 +1,23 @@
+-- Down-migration for 0025 (M16 16.3, the DECLARED half of capture health). One bare DROP TABLE: the
+-- four policies, both indexes and both FKs drop with the table, and nothing references
+-- `machine_connectors`, so there is no ordering hazard of the kind 0024's two-table down had.
+--
+-- D-M15-13 rollback-drill note: THE DATA LOSS HERE IS UNUSUALLY MILD, and saying so precisely
+-- matters as much as warning loudly does elsewhere — a down-migration comment that cries wolf on
+-- every table teaches the reader to skip all of them.
+--
+-- Unlike 0024's outcome labels (volunteered human ground truth, derived from nothing), this table is
+-- a PROJECTION OF A LIVE SIGNAL. Every collector re-reports its entire connector inventory on every
+-- heartbeat (≤30 s, D-16.3-2), so the rows rebuild themselves on the next tick after rolling
+-- forward. The only value that does NOT rebuild from the archive's own data is the historical
+-- `error_count` — and the collector holds that in its `queue.sqlite` `connector_errors` table, which
+-- is its source of truth by design (D-16.3-7), so even that survives a rollback on the machine side
+-- and re-populates with the next report. No `pg_dump` is required before rolling back.
+--
+-- THE APPLICATION SIDE IS NOT SILENT, and that is the real cost. A post-16.3 server against a
+-- pre-16.3 schema 500s on `GET /v1/capture-health` AND on `POST /v1/heartbeat` for any collector
+-- that reports `connectors` — the heartbeat write is inside the same transaction as
+-- `recordHeartbeat` on purpose (a heartbeat that records liveness but loses the inventory is a split
+-- state the scorecard would then misreport), so the failure takes machine liveness down with it and
+-- every machine goes `offline` in the Live Monitor. Roll the code back with the schema.
+DROP TABLE IF EXISTS "machine_connectors";

@@ -64,6 +64,35 @@ confine capture at all.**
 
 **If you are evaluating whether to pair a machine, act on the paragraph above, not on the table.**
 
+> **M16 16.3 (F-16.3-1) — disabling a connector now actually works on `collector watch`.** Until that
+> fix `watch` ignored `connectors.json` **and** capture-surface approvals entirely, passing the whole
+> registry through to the capture engine; only the desktop `serve` path applied them. Since the
+> Windows service runs `watch --home <you>`, turning a connector off could leave it capturing. Both
+> filters are now applied on both paths. **This does not change default-on** — an absent id still
+> means enabled, so the warning above stands unaltered; it only means the off switch is real.
+
+### What a heartbeat carries (M16 16.3)
+
+Every ~30 s the collector posts machine liveness (queue depth, collector version) and, since 16.3,
+its **declared connector inventory**, so the archive can distinguish "no work happened" from "capture
+is broken". Per connector that is: the connector id, whether it is enabled, its approval state,
+capture method, liveness, token/cost fidelity, known gaps, its human-readable
+`requiredPermissions` statements, and its **latest capture error message with a count**.
+
+- **An error message may contain a FILE PATH.** That is deliberate — the path is usually the whole
+  diagnostic (`EACCES … open '…/session.jsonl'`) — and it is bounded to 500 characters.
+- **`watchGlobs` are NOT sent, and cannot be** (D-16.3-3). They are absolute paths under your home
+  directory, so shipping them would write your username and directory layout into the archive. The
+  exclusion is enforced at the type level (`Omit<ConnectorInfo, "watchGlobs">` in
+  `packages/shared/src/capture-health.ts`), pinned by a collector test, and enforced again at the
+  HTTP edge, where the heartbeat schema does not declare the property and ajv strips it. The
+  human-readable `requiredPermissions` — written for exactly this review — carry the same
+  information at the granularity a person actually needs.
+- **No session content, no transcript text, no tokens or credentials** travel on a heartbeat.
+
+These rows live in `machine_connectors`, one per (machine, connector), overwritten wholesale on every
+report. It is a projection of a live signal, not a history.
+
 Per captured session the archive derives: connector and parser version, machine, workspace,
 repository, project path, git branch, timestamp, tool-native session id, a durable event
 fingerprint, model, token fields, cost with a confidence label, event/tool-call type and status, and

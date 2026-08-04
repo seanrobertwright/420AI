@@ -52,6 +52,16 @@ export interface FileCursor {
   size: number;
 }
 
+/** M16 16.3 — the latest capture failure for one connector (collector-owned, D-16.3-7). */
+export interface ConnectorErrorRecord {
+  message: string;
+  at: string; // ISO
+  count: number;
+}
+
+/** Mirrors the ingest heartbeat schema's `lastErrorMessage` bound, so nothing is dropped in transit. */
+const CONNECTOR_ERROR_MAX_LENGTH = 500;
+
 export class QueueStore {
   private db: DatabaseSync;
 
@@ -99,6 +109,19 @@ export class QueueStore {
         content_hash TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         PRIMARY KEY (connector_id, key)
+      );
+    `);
+    // M16 16.3: the LATEST capture error per connector, and a monotonic count. The collector is the
+    // SOLE source of truth for these (D-16.3-7) — it rides the heartbeat to the archive, which
+    // overwrites its copy wholesale and never accumulates its own, because two counters would
+    // diverge across re-pairs and restarts and the operator would not know which to believe.
+    // Latest-only, not a log: this is a health signal, and the durable evidence is the queue itself.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS connector_errors (
+        connector_id TEXT PRIMARY KEY,
+        message      TEXT NOT NULL,
+        at           TEXT NOT NULL,
+        count        INTEGER NOT NULL DEFAULT 1
       );
     `);
   }
@@ -240,6 +263,43 @@ export class QueueStore {
            updated_at = excluded.updated_at`,
       )
       .run(connectorId, key, hash, this.now().toISOString());
+  }
+
+  /**
+   * Record a connector's capture failure (M16 16.3, F-16.3-2's reporting half). Upsert: the newest
+   * message and timestamp win, `count` increments.
+   *
+   * THE MESSAGE IS TRUNCATED, and it may legitimately contain a FILE PATH — that path is usually
+   * the whole diagnostic ("EACCES … open 'C:\\…\\session.jsonl'"), so it is kept deliberately. It
+   * therefore travels to the archive on the heartbeat, which is recorded in
+   * `docs/guide/data-boundary.md` as part of what a heartbeat carries. The bound mirrors the ingest
+   * body schema's `maxLength: 500`, so a message that fits here is never silently dropped there.
+   */
+  recordConnectorError(connectorId: string, message: string, atIso?: string): void {
+    const bounded =
+      message.length > CONNECTOR_ERROR_MAX_LENGTH
+        ? `${message.slice(0, CONNECTOR_ERROR_MAX_LENGTH - 1)}…`
+        : message;
+    this.db
+      .prepare(
+        `INSERT INTO connector_errors (connector_id, message, at, count)
+         VALUES (?, ?, ?, 1)
+         ON CONFLICT(connector_id) DO UPDATE SET
+           message = excluded.message,
+           at = excluded.at,
+           count = connector_errors.count + 1`,
+      )
+      .run(connectorId, bounded, atIso ?? this.now().toISOString());
+  }
+
+  /** The latest error per connector, keyed by connector id. Empty when nothing has ever failed. */
+  connectorErrors(): Map<string, ConnectorErrorRecord> {
+    const rows = this.db
+      .prepare(`SELECT connector_id, message, at, count FROM connector_errors`)
+      .all() as { connector_id: string; message: string; at: string; count: number }[];
+    return new Map(
+      rows.map((r) => [r.connector_id, { message: r.message, at: r.at, count: r.count }]),
+    );
   }
 
   stats(): QueueStats {

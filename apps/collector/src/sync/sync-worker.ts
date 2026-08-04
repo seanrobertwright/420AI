@@ -121,6 +121,13 @@ export interface SyncLoopDeps extends SyncDeps {
   now?: () => Date;
   /** Injectable heartbeat client (tests); defaults to the real fetch-based client. */
   postHeartbeat?: typeof import("../ingest-client.js").postHeartbeat;
+  /**
+   * M16 16.3: the DECLARED connector inventory, read at each send (a thunk — see `HeartbeatDeps`).
+   * Threaded straight through; the loop makes no decision about it.
+   */
+  connectorReports?: () => import("@420ai/shared").MachineConnectorReport[];
+  /** M16 16.3: observe a swallowed heartbeat failure (D-16.3-6). The swallow itself stays. */
+  onHeartbeatError?: (e: unknown) => void;
 }
 
 /**
@@ -149,6 +156,8 @@ export async function runSyncLoop(
         intervalMs: deps.heartbeatIntervalMs ?? 30000,
         now: deps.now ?? (() => new Date()),
         consecutiveSyncFailures: count,
+        connectorReports: deps.connectorReports,
+        onError: deps.onHeartbeatError,
         post: deps.postHeartbeat,
       },
       heartbeatState,

@@ -16,11 +16,22 @@ import type { DbClient } from "../client.js";
 import { events, machines, workspaceKeys, workspaces } from "../schema.js";
 
 /**
+ * Postgres timestamp text → strict ISO. Mirrors `repositories/monitor.ts`'s `toIso`; both exist
+ * because the `mode:"string"` column parser does not reach inside a raw `sql` aggregate.
+ */
+const toIso = (v: string | null): string | null => (v ? new Date(v).toISOString() : null);
+
+/**
  * Deterministic projection repository (M6, PRD §16.1). Read-only aggregation over
  * the event log, extending the proven M5 attribution join (`projectEventSummary`,
  * workspaces.ts) with token/cost/shape aggregates. Reads ONLY the plaintext
  * columns — never decrypts a payload (PRD §18.1, D3). On-demand, no materialized
  * rollups (D2). Silent library (CLAUDE.md): throws, never logs.
+ *
+ * TIMESTAMP COERCION (CLAUDE.md "Drizzle / SQL gotchas"): inside a raw `sql` template the
+ * `events.ts` `mode:"string"` parser does NOT apply, so `max(ts)`/`min(ts)` come back as Postgres
+ * TEXT (`2026-08-01 00:00:00+00`), not ISO. Normalize every aggregate timestamp through `toIso`.
+ * A bare `events.ts` column selection IS already ISO — the two are different mechanisms.
  *
  * M15 15.2 ORG-SCOPING RULE (applies repo-wide): a read keyed by a CONNECTOR-SUPPLIED
  * string — `session_id`, `project_path`, `fingerprint` — MUST take `orgId` and apply
@@ -341,7 +352,10 @@ export async function connectorHealth(db: DbClient, orgId: string): Promise<Conn
     .orderBy(events.sourceConnector);
   return rows.map((r) => ({
     sourceConnector: r.sourceConnector,
-    lastEventAt: r.lastEventAt ?? null,
+    // `max(ts)` inside a raw `sql` aggregate bypasses the `mode:"string"` parser and returns
+    // Postgres TEXT — `ConnectorHealthRow.lastEventAt` is documented as ISO, so normalize (M16
+    // 16.3 spike S2 measured `"2026-08-01 00:00:00+00"` going out on the wire from here).
+    lastEventAt: toIso(r.lastEventAt),
     eventCount: r.eventCount,
     toolCalls: r.toolCalls,
     toolsFailed: r.toolsFailed,
@@ -387,7 +401,10 @@ export async function connectorHealthWindowed(
     .orderBy(events.sourceConnector);
   return rows.map((r) => ({
     sourceConnector: r.sourceConnector,
-    lastEventAt: r.lastEventAt ?? null,
+    // `max(ts)` inside a raw `sql` aggregate bypasses the `mode:"string"` parser and returns
+    // Postgres TEXT — `ConnectorHealthRow.lastEventAt` is documented as ISO, so normalize (M16
+    // 16.3 spike S2 measured `"2026-08-01 00:00:00+00"` going out on the wire from here).
+    lastEventAt: toIso(r.lastEventAt),
     eventCount: r.eventCount,
     toolCalls: r.toolCalls,
     toolsFailed: r.toolsFailed,
