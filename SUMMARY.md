@@ -852,7 +852,7 @@ enforced`, the sibling of `skipped ≠ passed`. Closes the Spike-6 hole: a cross
     constant rather than the path actually written, so an operator verifying "did the clean room
     touch my real collector?" was told it had.
     **No schema change, no route change, no behavioural change** beyond those two lines.
-  - **16.1** ✅ **DONE `2026-08-03` (PR pending)** — Outcome label model + API (research plan §4.3 /
+  - **16.1** ✅ **DONE `2026-08-03` (PR #74)** — Outcome label model + API (research plan §4.3 /
     §7 P0.2). Two new STRICT tenant tables behind the 15.3/15.4 RLS pattern (migration **0024**, 8
     policies): `outcome_labels` (at most one per `(org_id, session_id)` — `session_id` is
     connector-supplied and globally scoped, so the unique index takes BOTH columns) and
