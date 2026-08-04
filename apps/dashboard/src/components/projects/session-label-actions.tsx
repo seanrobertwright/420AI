@@ -5,7 +5,12 @@ import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { buildDecisionStub } from "@/lib/decision-stub";
 import { outcomeLabel, qualityStars } from "@/lib/label-display";
-import { LabelForm, EMPTY_LABEL_FORM, type LabelFormValues } from "@/components/labels/label-form";
+import {
+  LabelForm,
+  EMPTY_LABEL_FORM,
+  toCreateLabelBody,
+  type LabelFormValues,
+} from "@/components/labels/label-form";
 
 /**
  * M16 16.2 — the per-session label affordance in a project's Sessions table. §4.3's "always
@@ -89,49 +94,64 @@ export function SessionLabelActions({ sessionId }: { sessionId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [stub, setStub] = useState<string | null>(null);
 
-  const load = useCallback(async (): Promise<void> => {
-    const index = await loadLabelIndex();
-    // A failed shared read is NOT "no label" — leaving it `undefined` would render a Label button
-    // that 409s on submit. Fall back to the single-session read, whose 404 is authoritative.
-    if (index) {
-      setLabel(index.get(sessionId) ?? null);
-      return;
-    }
-    try {
-      const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/label`);
-      if (res.status === 404) {
-        setLabel(null);
-        return;
-      }
-      if (!res.ok) return;
-      setLabel(((await res.json()) as { label: LabelRow }).label);
-    } catch {
-      /* leave `undefined`: unknown, so no affordance is offered rather than a wrong one */
-    }
-  }, [sessionId]);
-
-  useEffect(() => {
-    // Teardown armed BEFORE the first await resolves (CLAUDE.md long-lived-resource rule).
-    let cancelled = false;
-    void loadLabelIndex().then((index) => {
-      if (cancelled) return;
+  /**
+   * Resolve this row's label, batched read first.
+   *
+   * `isCancelled` IS THREADED THROUGH BOTH PATHS ON PURPOSE. An earlier version armed
+   * `let cancelled = false` in the effect but then called an unguarded `load()` on the fallback
+   * branch, so navigating away from a project page while a per-row fetch was in flight set state on
+   * an unmounted island. React 18 no longer warns about that, which makes it quieter rather than
+   * less real — and the file's header already CLAIMED the guard was in place, which is the worse
+   * half (a comment asserting a mechanism it does not have is the M15 15.5 defect class). One
+   * predicate now covers the batched read, the fallback fetch and the post-mutation reload.
+   */
+  const load = useCallback(
+    async (isCancelled: () => boolean = () => false): Promise<void> => {
+      const index = await loadLabelIndex();
+      if (isCancelled()) return;
+      // A failed shared read is NOT "no label" — leaving it `undefined` would render a Label button
+      // that 409s on submit. Fall back to the single-session read, whose 404 is authoritative.
       if (index) {
         setLabel(index.get(sessionId) ?? null);
         return;
       }
-      void load();
-    });
+      try {
+        const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/label`);
+        if (isCancelled()) return;
+        if (res.status === 404) {
+          setLabel(null);
+          return;
+        }
+        if (!res.ok) return;
+        const body = (await res.json()) as { label: LabelRow };
+        if (isCancelled()) return;
+        setLabel(body.label);
+      } catch {
+        /* leave `undefined`: unknown, so no affordance is offered rather than a wrong one */
+      }
+    },
+    [sessionId],
+  );
+
+  useEffect(() => {
+    // Teardown armed BEFORE the first await resolves (CLAUDE.md long-lived-resource rule), and
+    // passed INTO `load` so the fallback path is covered by the same guard.
+    let cancelled = false;
+    void load(() => cancelled);
     return () => {
       cancelled = true;
     };
-  }, [sessionId, load]);
+  }, [load]);
 
   /** POST a new label, or a skip when `values === null`. */
   async function create(values: LabelFormValues | null): Promise<void> {
     setBusy(true);
     setError(null);
     try {
-      const body = values === null ? { status: "skipped" } : { status: "labeled", ...values };
+      // NOT `{ status: "labeled", ...values }` — a spread carries `null` optionals, which this
+      // endpoint rejects with a 400. `toCreateLabelBody` omits them; see its header for the
+      // measurement and for why the POST/PATCH asymmetry is deliberate.
+      const body = values === null ? { status: "skipped" } : toCreateLabelBody(values);
       const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/label`, {
         method: "POST",
         headers: { "content-type": "application/json" },

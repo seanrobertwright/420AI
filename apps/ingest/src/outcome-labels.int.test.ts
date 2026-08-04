@@ -805,6 +805,66 @@ describe.skipIf(!TEST_URL || !APP_URL)("M16 16.1 outcome labels (two-role HTTP)"
   });
 
   /**
+   * 13 ── THE POST/PATCH NULL ASYMMETRY, pinned because 16.2's code review found BOTH new capture
+   * surfaces broken by it.
+   *
+   * `createOutcomeLabelBodySchema` types `followUpCommitOrPr` and `confidence` as `type: "string"`
+   * with no null member; `patchOutcomeLabelBodySchema` allows `["string", "null"]`. Fastify's
+   * default ajv COERCES `null` to `""`, which then fails `minLength: 1` and the `enum` — so the
+   * rejection arrives as a length/enum complaint rather than a type one, which is exactly why
+   * reading the schema does not predict it.
+   *
+   * Both 16.2 surfaces sent `null` for an unset optional and therefore 400'd on their DEFAULT path
+   * (a 15-second label usually leaves both blank). It hid because the EDIT path is a PATCH, where
+   * null is legal: editing worked and only creating failed.
+   *
+   * THE ASYMMETRY IS DELIBERATE, so this pins it rather than arguing to widen the POST schema: a
+   * POST has no prior value to CLEAR, so `null` and absent would mean the same thing, and one
+   * spelling for one meaning is the better contract. What was missing was a test saying so.
+   */
+  it("POST omits unset optionals (201) and rejects null for them (400); PATCH accepts null", async () => {
+    const REQUIRED_ONLY = {
+      status: "labeled",
+      taskType: "feature",
+      intent: "the fifteen-second path",
+      outcome: "shipped",
+      qualityRating: 4,
+      primaryFriction: "none",
+    } as const;
+
+    // OMITTED → 201. This is the default path both 16.2 surfaces take.
+    const created = await postLabel(tokenA, SHARED_SESSION, REQUIRED_ONLY);
+    expect(created.statusCode).toBe(201);
+    const label = (created.json() as LabelResponse).label;
+    expect(label.followUpCommitOrPr).toBeNull();
+    expect(label.confidence).toBeNull();
+
+    // NULL → 400, and the message is about LENGTH, not type — the coercion showing through.
+    const withNulls = await postLabel(tokenA, SESSION_A2, {
+      ...REQUIRED_ONLY,
+      followUpCommitOrPr: null,
+    });
+    expect(withNulls.statusCode).toBe(400);
+    expect((withNulls.json() as { error: string }).error).toMatch(/followUpCommitOrPr/);
+
+    const nullConfidence = await postLabel(tokenA, SESSION_A2, {
+      ...REQUIRED_ONLY,
+      confidence: null,
+    });
+    expect(nullConfidence.statusCode).toBe(400);
+    expect((nullConfidence.json() as { error: string }).error).toMatch(/confidence/);
+
+    // …while PATCH accepts null, because there it means CLEAR an existing value.
+    const patched = await app.inject({
+      method: "PATCH",
+      url: `/v1/sessions/${SHARED_SESSION}/label`,
+      headers: asJson(tokenA),
+      payload: { followUpCommitOrPr: null, confidence: null },
+    });
+    expect(patched.statusCode).toBe(200);
+  });
+
+  /**
    * 12 ── THE CLIENT CANNOT WIDEN THE WINDOW. `settledBeforeIso`/`sinceIso` are not caller input
    * (D-16.2-2), and this pins the two different mechanisms that make that true.
    *

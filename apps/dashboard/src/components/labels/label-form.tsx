@@ -61,6 +61,45 @@ export interface LabelFormValues {
   confidence: string | null;
 }
 
+/**
+ * Build a `POST /v1/sessions/:id/label` body from the form's values.
+ *
+ * ── AN UNSET OPTIONAL IS AN ABSENT KEY, NOT `null`. THIS IS A MEASURED CONTRACT. ──
+ *
+ * `createOutcomeLabelBodySchema` types `followUpCommitOrPr` and `confidence` as `type: "string"`
+ * with NO null member, while `patchOutcomeLabelBodySchema` allows `["string", "null"]`. Fastify's
+ * default ajv COERCES `null` to `""`, which then fails `minLength: 1` and the `enum` respectively.
+ *
+ * Measured against the live test DB, because reading the schema does not predict the mechanism:
+ *   both null       → 400 "body/followUpCommitOrPr must NOT have fewer than 1 characters"
+ *   confidence null → 400 "body/confidence must be equal to one of the allowed values"
+ *   both omitted    → 201
+ *
+ * Spreading `LabelFormValues` straight into a POST therefore made the DEFAULT path a 400 — the form
+ * marks both fields optional and a 15-second label usually leaves them blank. It hid because the
+ * EDIT path uses PATCH, where null is legal: editing worked, only creating failed.
+ *
+ * The asymmetry is correct and deliberate — a POST has no prior value to CLEAR, so `null` and
+ * absent would mean the same thing, and one spelling is better than two. So the conversion lives
+ * here, once, rather than being re-remembered at each call site. Pinned by
+ * `apps/ingest/src/outcome-labels.int.test.ts`.
+ *
+ * PATCH callers must NOT use this: there, `null` is the only way to clear a field.
+ */
+export function toCreateLabelBody(values: LabelFormValues): Record<string, unknown> {
+  const body: Record<string, unknown> = { status: "labeled" };
+  // The five required-when-`labeled` fields. `LabelForm` will not submit until all are set.
+  if (values.taskType) body.taskType = values.taskType;
+  if (values.intent) body.intent = values.intent;
+  if (values.outcome) body.outcome = values.outcome;
+  if (values.qualityRating !== null) body.qualityRating = values.qualityRating;
+  if (values.primaryFriction) body.primaryFriction = values.primaryFriction;
+  // …and the two genuinely optional ones, omitted entirely when unset.
+  if (values.followUpCommitOrPr) body.followUpCommitOrPr = values.followUpCommitOrPr;
+  if (values.confidence) body.confidence = values.confidence;
+  return body;
+}
+
 export const EMPTY_LABEL_FORM: LabelFormValues = {
   taskType: null,
   intent: null,

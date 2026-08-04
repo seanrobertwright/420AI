@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
-import type { LabelQueueRow } from "@420ai/shared";
+import type {
+  Friction,
+  LabelConfidence,
+  LabelOutcome,
+  LabelQueueRow,
+  TaskType,
+} from "@420ai/shared";
 import {
   TASK_TYPES,
   OUTCOMES,
@@ -75,14 +81,24 @@ const FRICTION_COPY: Record<string, string> = {
 };
 const CONFIDENCE_COPY: Record<string, string> = { low: "Low", medium: "Medium", high: "High" };
 
+/**
+ * The in-progress label.
+ *
+ * TYPED WITH THE SHARED UNIONS, not `string`, and `""` is the not-yet-chosen state. The earlier
+ * version used `string` everywhere and reached the bridge through `as never` casts, which silenced
+ * the mismatch instead of resolving it — in a slice whose whole design is "build the dropdowns from
+ * the shared arrays, never re-type the strings". With `string` a typo here compiled fine and became
+ * a 400 at runtime; now it is a compile error. The only remaining cast is at the `<select>`
+ * boundary, where the DOM genuinely hands back a `string`.
+ */
 interface Draft {
-  taskType: string;
+  taskType: TaskType | "";
   intent: string;
-  outcome: string;
+  outcome: LabelOutcome | "";
   qualityRating: number | null;
-  primaryFriction: string;
+  primaryFriction: Friction | "";
   followUpCommitOrPr: string;
-  confidence: string;
+  confidence: LabelConfidence | "";
 }
 
 const EMPTY_DRAFT: Draft = {
@@ -94,6 +110,16 @@ const EMPTY_DRAFT: Draft = {
   followUpCommitOrPr: "",
   confidence: "",
 };
+
+/**
+ * The server's `DEFAULT_QUEUE_LIMIT` (routes/outcome-labels.ts). Mirrored here ONLY so the count
+ * can admit when it is capped — see the header render.
+ *
+ * NO SILENT CAPS (CLAUDE.md): with 60 settled sessions this panel receives 25 and would otherwise
+ * render "Sessions to label (25)", a number an operator reads as the total. Labeling all 25 would
+ * then reveal more, which reads as a bug rather than as paging.
+ */
+const QUEUE_PAGE_SIZE = 25;
 
 /** Compact "2h ago" for the settle time, so the operator can tell which session this was. */
 function ago(iso: string | null, nowMs: number): string {
@@ -158,22 +184,50 @@ export function LabelQueue() {
     draft.primaryFriction !== "";
 
   async function submit(sessionId: string): Promise<void> {
-    if (!complete) return;
+    // The same predicate as `complete`, written so the COMPILER can see it: these four narrow
+    // `Draft`'s `T | ""` fields to `T`, which is what removes the old `as never` casts.
+    if (
+      !draft.taskType ||
+      !draft.outcome ||
+      !draft.primaryFriction ||
+      draft.qualityRating === null
+    ) {
+      return;
+    }
     setBusy(sessionId);
     setError(null);
     setNotice(null);
     try {
-      await postSessionLabel(sessionId, {
+      /*
+       * ── AN UNSET OPTIONAL IS AN ABSENT KEY, NOT `null`. THIS IS A MEASURED CONTRACT. ──
+       *
+       * `createOutcomeLabelBodySchema` types `followUpCommitOrPr` and `confidence` as
+       * `type: "string"` with NO null member, unlike its PATCH sibling which allows
+       * `["string", "null"]`. Fastify's default ajv COERCES `null` to `""`, which then fails
+       * `minLength: 1` and the `enum` respectively.
+       *
+       * Measured, because reading the schema does not predict the mechanism:
+       *   both null      → 400 "body/followUpCommitOrPr must NOT have fewer than 1 characters"
+       *   confidence null→ 400 "body/confidence must be equal to one of the allowed values"
+       *   both omitted   → 201
+       *
+       * That made the panel's DEFAULT path a 400 — most 15-second labels leave both blank. The
+       * asymmetry with PATCH is correct and deliberate (a POST has no prior value to clear, so
+       * `null` and absent would mean the same thing), so the fix belongs here, not in the schema.
+       * Pinned by `outcome-labels.int.test.ts`.
+       */
+      const body: Parameters<typeof postSessionLabel>[1] = {
         status: "labeled",
-        taskType: draft.taskType as never,
+        taskType: draft.taskType,
         intent: draft.intent,
-        outcome: draft.outcome as never,
+        outcome: draft.outcome,
         qualityRating: draft.qualityRating,
-        primaryFriction: draft.primaryFriction as never,
-        // Optional fields: an empty box is NOT STATED, which is null — never an empty string.
-        followUpCommitOrPr: draft.followUpCommitOrPr.trim() || null,
-        confidence: draft.confidence || null,
-      });
+        primaryFriction: draft.primaryFriction,
+      };
+      const followUp = draft.followUpCommitOrPr.trim();
+      if (followUp) body.followUpCommitOrPr = followUp;
+      if (draft.confidence) body.confidence = draft.confidence;
+      await postSessionLabel(sessionId, body);
       setOpen(null);
       setDraft(EMPTY_DRAFT);
       setNotice("Thanks — labeled.");
@@ -211,7 +265,10 @@ export function LabelQueue() {
         <CardTitle>
           Sessions to label{" "}
           {queue && queue.length > 0 ? (
-            <span className="text-muted-foreground text-sm font-normal">({queue.length})</span>
+            <span className="text-muted-foreground text-sm font-normal">
+              ({queue.length}
+              {queue.length === QUEUE_PAGE_SIZE ? "+" : ""})
+            </span>
           ) : null}
         </CardTitle>
         <CardDescription>
@@ -288,7 +345,9 @@ export function LabelQueue() {
                   <select
                     className={selectCls}
                     value={draft.taskType}
-                    onChange={(e) => setDraft({ ...draft, taskType: e.target.value })}
+                    onChange={(e) =>
+                      setDraft({ ...draft, taskType: e.target.value as TaskType | "" })
+                    }
                     aria-label="Task type"
                   >
                     {/* Empty and first — NO field is pre-filled with a guess (§4.3, D-16.1-8). */}
@@ -302,7 +361,9 @@ export function LabelQueue() {
                   <select
                     className={selectCls}
                     value={draft.outcome}
-                    onChange={(e) => setDraft({ ...draft, outcome: e.target.value })}
+                    onChange={(e) =>
+                      setDraft({ ...draft, outcome: e.target.value as LabelOutcome | "" })
+                    }
                     aria-label="Outcome"
                   >
                     <option value="">Outcome…</option>
@@ -349,7 +410,9 @@ export function LabelQueue() {
                   <select
                     className={selectCls}
                     value={draft.primaryFriction}
-                    onChange={(e) => setDraft({ ...draft, primaryFriction: e.target.value })}
+                    onChange={(e) =>
+                      setDraft({ ...draft, primaryFriction: e.target.value as Friction | "" })
+                    }
                     aria-label="Primary friction"
                   >
                     <option value="">What got in the way?…</option>
@@ -362,7 +425,9 @@ export function LabelQueue() {
                   <select
                     className={selectCls}
                     value={draft.confidence}
-                    onChange={(e) => setDraft({ ...draft, confidence: e.target.value })}
+                    onChange={(e) =>
+                      setDraft({ ...draft, confidence: e.target.value as LabelConfidence | "" })
+                    }
                     aria-label="Confidence (optional)"
                   >
                     {/* NULL is "not stated", deliberately distinct from `low` (D-16.1-8). */}
