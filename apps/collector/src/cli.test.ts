@@ -143,10 +143,13 @@ describe("runWatch connector filtering (F-16.3-1)", () => {
       { version: "test", approved: { "gemini-cli": { surfaceFingerprint: "stale-fingerprint" } } },
     );
 
-    const state = (id: string) => opts.connectorState!(opts.registry!.find((c) => c.id === id)!);
-    expect(state("codex-cli")).toEqual({ enabled: false, approval: "approved" });
-    expect(state("gemini-cli")).toEqual({ enabled: true, approval: "needs-approval" });
-    expect(state("claude-code")).toEqual({ enabled: true, approval: "approved" });
+    const states = opts.connectorStates!(opts.registry!);
+    expect(states.get("codex-cli")).toEqual({ enabled: false, approval: "approved" });
+    expect(states.get("gemini-cli")).toEqual({ enabled: true, approval: "needs-approval" });
+    expect(states.get("claude-code")).toEqual({ enabled: true, approval: "approved" });
+    // Every registry connector is resolved — an absence would be reported as not-capturing, so a
+    // gap here would silently understate capture rather than error.
+    expect(states.size).toBe(opts.registry!.length);
 
     // A withheld connector is withheld from CAPTURE too — both filters compose.
     expect(opts.connectors!.map((c) => c.id)).not.toContain("gemini-cli");

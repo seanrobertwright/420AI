@@ -123,14 +123,23 @@ export const heartbeatBodySchema = {
     queueInflight: { type: "integer", minimum: 0 },
     collectorVersion: { type: "string", minLength: 1 },
     // M12 12.6 archive.unreachable signal — optional (NOT in required) so an older collector
-    // omits it; additionalProperties:false means it MUST be declared or a sender 400s.
+    // omits it, and declared here so a NEWER sender's value is not stripped (see below).
     consecutiveSyncFailures: { type: "integer", minimum: 0 },
-    // M16 16.3 — the DECLARED connector inventory (D-16.3-2). Optional for the same reason and
-    // with the same hazard as `consecutiveSyncFailures` above: `additionalProperties:false` means a
-    // NEWER collector posting this to an OLDER server 400s the ENTIRE heartbeat, and
-    // `maybeSendHeartbeat` swallows the failure — the machine then goes `offline` in the Live
-    // Monitor with no error anywhere. Deploy the archive BEFORE the collector (D-16.3-6); the
-    // collector's `onError` seam is what stops that failure being silent when the order slips.
+    // M16 16.3 — the DECLARED connector inventory (D-16.3-2). Optional, for the same back-compat
+    // reason as `consecutiveSyncFailures` above.
+    //
+    // `additionalProperties: false` DOES NOT REJECT HERE, AND THE DIFFERENCE IS THE WHOLE HAZARD.
+    // Fastify configures ajv with `removeAdditional: true`, so an undeclared property is STRIPPED
+    // and the request succeeds with 200 — measured, not assumed (D-16.3-6, corrected under
+    // measurement; pinned by two tests in `capture-health.int.test.ts`). An earlier version of this
+    // comment claimed a 400, which is the CLAUDE.md 15.5 failure of a comment naming the wrong
+    // mechanism.
+    //
+    // So a NEWER collector against an OLDER archive does not get a loud rejection: it gets a
+    // cheerful 200 with its whole inventory silently discarded. That is MILDER than a 400 (the
+    // machine's liveness still lands, so it does not go `offline`) but strictly LESS visible, and
+    // the collector's `onError` seam never fires because nothing failed. Deploy the archive BEFORE
+    // the collector — the deploy order, not the schema, is what protects this.
     //
     // EVERYTHING IS BOUNDED. This body is written to the database by a machine-authed caller every
     // 30 s, so an unbounded array or string is an unbounded write.
@@ -139,6 +148,12 @@ export const heartbeatBodySchema = {
       maxItems: 64,
       items: {
         type: "object",
+        // EVERY non-optional field of `MachineConnectorReport` is required here, including
+        // `custom` and the two `lastError*` fields. They were omitted originally, which let the
+        // handler's static type (`MachineConnectorReport[]`) promise `string | null` where the wire
+        // could deliver `undefined` — harmless today only because every consumer happens to guard
+        // it. A required list that mirrors the type turns a malformed client into a loud 400
+        // instead of a silently-null row.
         required: [
           "id",
           "enabled",
@@ -150,11 +165,18 @@ export const heartbeatBodySchema = {
           "cost",
           "knownGaps",
           "requiredPermissions",
+          "custom",
+          "lastErrorMessage",
+          "lastErrorAt",
           "errorCount",
         ],
         // NO `watchGlobs` PROPERTY, DELIBERATELY (D-16.3-3): they are absolute paths under the
-        // operator's home. With `additionalProperties:false` its absence is enforced, not merely
-        // documented — a collector that sent them would 400 rather than leak them.
+        // operator's home. `additionalProperties: false` + Fastify's `removeAdditional: true` means
+        // a collector that sent them has them STRIPPED at the edge — the paths never reach Postgres
+        // — and the request still succeeds. It is a silent scrub, NOT a 400; do not "harden" this
+        // by turning off `removeAdditional`, which would convert a working scrub into a rejected
+        // heartbeat. This is the outermost of four independent enforcements; the type-level
+        // `Omit<ConnectorInfo, "watchGlobs">` is the one that makes it structural.
         additionalProperties: false,
         properties: {
           id: { type: "string", minLength: 1, maxLength: 100 },

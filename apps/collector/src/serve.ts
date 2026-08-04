@@ -219,10 +219,21 @@ export function runServe(deps: ServeDeps = {}): Promise<void> {
       // M16 16.3: REPORT the full registry, CAPTURE the filtered subset — the same split `cli.ts`
       // makes, so the desktop and service paths produce the same scorecard.
       registry: connectorRegistry,
-      connectorState: (c) => ({
-        enabled: loadConnectorCfg().connectors[c.id]?.enabled !== false,
-        approval: approvalStatus(c, loadApprovals(), home),
-      }),
+      // Config + approvals are read ONCE per report, not once per connector per report — the same
+      // hoist `emitConnectors` above already does, and the same shape `cli.ts` uses.
+      connectorStates: (reg) => {
+        const cfg = loadConnectorCfg();
+        const approvals = loadApprovals();
+        return new Map(
+          reg.map((c) => [
+            c.id,
+            {
+              enabled: cfg.connectors[c.id]?.enabled !== false,
+              approval: approvalStatus(c, approvals, home),
+            },
+          ]),
+        );
+      },
       onSyncSuccess: (at) => {
         lastSyncAt = at;
       },

@@ -126,16 +126,24 @@ export async function replaceMachineConnectors(
   // PRUNE — machine-scoped, so machine B's rows survive machine A's replace. Drizzle emits invalid
   // SQL for `not in ()`, so an empty report branches to a plain delete rather than being guarded
   // by a `length > 0` check that would make "reports zero connectors" a silent no-op.
+  //
+  // THE `orgId` PREDICATE IS EXPLICIT, matching the INSERT above rather than relying on the caller.
+  // It is belt-and-braces — `machine_id` is a uuid whose org is fixed by `machines.org_id`
+  // (D-M15-1), and the route wraps this in `withOrg` against a FORCE-RLS table — but a DELETE is
+  // the one operation Postgres cannot make loud (15.4: no `WITH CHECK` for DELETE, so a blocked one
+  // is an unavoidable silent `DELETE 0`). Scoping both halves of a "replace" by the same predicate
+  // keeps the function correct standalone instead of correct-because-the-caller-wrapped-it.
   const ids = reports.map((r) => r.id);
+  const machineScope = and(
+    eq(machineConnectors.orgId, orgId),
+    eq(machineConnectors.machineId, machineId),
+  );
   await db
     .delete(machineConnectors)
     .where(
       ids.length > 0
-        ? and(
-            eq(machineConnectors.machineId, machineId),
-            notInArray(machineConnectors.connectorId, ids),
-          )
-        : eq(machineConnectors.machineId, machineId),
+        ? and(machineScope, notInArray(machineConnectors.connectorId, ids))
+        : machineScope,
     );
 }
 

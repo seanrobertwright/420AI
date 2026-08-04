@@ -267,10 +267,20 @@ export async function runWatch(opts: {
     // What to REPORT — the FULL registry, so a disabled or withheld connector renders as such on
     // the capture health scorecard instead of vanishing (which reads identically to broken).
     registry: connectors,
-    connectorState: (c) => ({
-      enabled: loadCfg().connectors[c.id]?.enabled !== false,
-      approval: approvalStatus(c, loadApprovals(), home),
-    }),
+    // Config + approvals are read ONCE per report, not once per connector per report.
+    connectorStates: (reg) => {
+      const cfg = loadCfg();
+      const approvals = loadApprovals();
+      return new Map(
+        reg.map((c) => [
+          c.id,
+          {
+            enabled: cfg.connectors[c.id]?.enabled !== false,
+            approval: approvalStatus(c, approvals, home),
+          },
+        ]),
+      );
+    },
   });
 }
 

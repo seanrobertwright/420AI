@@ -84,7 +84,7 @@ export interface CaptureEngineOptions {
   /** M14 14.7: push-receiver port override (default `DEFAULT_PUSH_PORT`). Tests pass 0 for ephemeral. */
   pushPort?: number;
   /**
-   * M16 16.3: resolve a registry connector's DECLARED state for the report.
+   * M16 16.3: resolve the DECLARED state of every registry connector for one report.
    *
    * The engine cannot derive this itself. It receives the already-FILTERED capture set, and
    * "absent from that set" is ambiguous — the connector might be disabled OR withheld pending
@@ -92,11 +92,23 @@ export interface CaptureEngineOptions {
    * fabricate a fact, which is the Risk 2 failure this whole slice exists to avoid. So the caller,
    * which holds the config and approvals, supplies it.
    *
+   * BATCHED (registry → Map) RATHER THAN PER CONNECTOR, so the caller reads `connectors.json` and
+   * `approvals.json` ONCE per report instead of once per connector per report — with 8 built-ins
+   * and a 30 s heartbeat the per-connector shape was 16 synchronous file reads every 30 s, forever.
+   * It is still re-read on every report, deliberately: a connector disabled mid-session must show
+   * as `disabled` on the next heartbeat rather than at the next restart.
+   *
    * The DEFAULT is honest precisely because `registry` defaults to `connectors`: when nothing was
    * filtered, every registry connector IS in the capture set, so `enabled: true` is a fact rather
    * than an assumption. A caller that passes a WIDER `registry` must pass this too.
    */
-  connectorState?: (c: Connector) => { enabled: boolean; approval: "approved" | "needs-approval" };
+  connectorStates?: (registry: Connector[]) => Map<string, ConnectorDeclaredState>;
+}
+
+/** The declaration half of one connector's capture health, as the caller resolves it. */
+export interface ConnectorDeclaredState {
+  enabled: boolean;
+  approval: "approved" | "needs-approval";
 }
 
 /**
@@ -202,7 +214,17 @@ export async function pollLoop(
       // Best-effort by contract: never let a poll/store error stop session capture. M16 16.3 —
       // but it is no longer INVISIBLE: a best-effort/swallow path is the worst place to lose a
       // signal, precisely because it is designed not to complain (the M15 15.3 lesson).
-      opts.onError?.(opts.connector, err);
+      //
+      // The REPORTER is guarded too, for the same reason `FileWatcher.report` is: `onError` writes
+      // to `queue.sqlite`, and a throw here would reject this loop. That is quieter than the
+      // watcher's equivalent — `pollLoops` are absorbed by `Promise.allSettled`, so the engine
+      // survives — which makes it WORSE to diagnose: this connector's polling stops forever while
+      // the machine still reports `online` and the connector renders `idle` rather than `erroring`.
+      try {
+        opts.onError?.(opts.connector, err);
+      } catch {
+        /* an error reporter that throws must not become the outage it was reporting */
+      }
     }
     await abortableDelay(poll.intervalMs, signal);
   }
@@ -216,9 +238,12 @@ export async function runCaptureEngine(opts: CaptureEngineOptions): Promise<void
   // What to REPORT vs what to CAPTURE — see `registry` in the options. Defaults to `connectors`.
   const registry = opts.registry ?? connectors;
   const captureIds = new Set(connectors.map((c) => c.id));
-  const connectorState =
-    opts.connectorState ??
-    ((c: Connector) => ({ enabled: captureIds.has(c.id), approval: "approved" as const }));
+  const connectorStates =
+    opts.connectorStates ??
+    ((reg: Connector[]) =>
+      new Map(
+        reg.map((c) => [c.id, { enabled: captureIds.has(c.id), approval: "approved" as const }]),
+      ));
 
   // Boot recovery: re-send anything a crash left mid-flight.
   queue.recoverInflight();
@@ -230,8 +255,13 @@ export async function runCaptureEngine(opts: CaptureEngineOptions): Promise<void
    */
   const connectorReports = () => {
     const errors = queue.connectorErrors();
+    // Resolved ONCE for the whole registry — see `connectorStates`. A connector missing from the
+    // map is reported as not-capturing rather than silently defaulted to enabled: the map comes
+    // from the same registry it is keyed on, so an absence is a caller bug, and guessing "enabled"
+    // would put a healthy-looking row on the scorecard (Risk 2).
+    const states = connectorStates(registry);
     return registry.map((c) => {
-      const state = connectorState(c);
+      const state = states.get(c.id) ?? { enabled: false, approval: "approved" as const };
       return toMachineConnectorReport(
         mapConnectorInfo(c, state.enabled, home, state.approval),
         errors.get(c.id),

@@ -65,7 +65,14 @@ export function MonitorView({ snapshot, nowMs }: { snapshot: LiveMonitorSnapshot
           title={`${activeSessions.length}`}
           subtitle="Active sessions"
           status={activeSessions.length > 0 ? "active" : "inactive"}
-          fields={[{ label: "Connectors", value: String(connectors.length) }]}
+          // M16 16.3: labelled "Connectors seen", NOT "Connectors". This count comes from
+          // `connectorHealth`, a GROUP BY over OBSERVED events, so it can only ever include
+          // connectors that already produced something — a broken or disabled one is absent. The
+          // Capture health panel below reports the DECLARED inventory and will legitimately show a
+          // different, larger number. Two connector counts on one screen is the "which number do I
+          // believe?" problem D-16.3-1 refuses to create, so the label names which question this
+          // one answers rather than leaving the reader to reconcile them.
+          fields={[{ label: "Connectors seen", value: String(connectors.length) }]}
         />
       </div>
 

@@ -235,6 +235,47 @@ describe("FileWatcher.tickOnce (poll-based discovery + capture)", () => {
     queue.close();
   });
 
+  /**
+   * F-16.3-2, the error path of the fix itself. `onError` is wired to a `queue.sqlite` write, which
+   * can throw (locked/full database, handle closed during shutdown). An unguarded reporter would
+   * reject `tickOnce` → `runLoop` → `Promise.race([watcherLoop, syncLoop])`, restoring the exact
+   * engine-wide unwind this slice removed — and reachable only when a connector is ALREADY failing,
+   * i.e. precisely when the scorecard is supposed to start working.
+   *
+   * The SIBLING assertion is what makes this a real pin rather than a "does not reject" tautology.
+   */
+  it("survives an onError that throws, and still captures the sibling connector", async () => {
+    const { home, queue, projectsDir } = setup();
+    const captured: string[] = [];
+    const exploding = {
+      ...geminiCliConnector,
+      id: "exploding",
+      watchGlobs: () => {
+        throw new Error("unreadable directory");
+      },
+    };
+    const watcher = new FileWatcher({
+      connectors: [exploding, claudeCodeConnector],
+      home,
+      queue,
+      onChange: (_c, text) => {
+        captured.push(text);
+      },
+      onError: () => {
+        throw new Error("queue.sqlite is locked");
+      },
+    });
+
+    const file = join(projectsDir, "cccccccc-0000-0000-0000-000000000000.jsonl");
+    writeFileSync(file, REC1 + "\n", "utf8");
+
+    await expect(watcher.tickOnce()).resolves.toBeUndefined();
+    // The healthy connector captured despite the reporter blowing up on its neighbour.
+    expect(captured).toHaveLength(1);
+
+    queue.close();
+  });
+
   it("discovers a second session file created mid-run", async () => {
     const { home, queue, projectsDir } = setup();
     const captured: string[] = [];

@@ -25,7 +25,8 @@ import { readSnapshot } from "./snapshot.js";
  * around the loop or `tickOnce`: a loop-level catch skips every remaining file in that tick, which
  * is the same outage one file smaller. `discover()` is wrapped per CONNECTOR for the same reason
  * (a glob over an unreadable directory throws), attributing the failure to the connector whose
- * pattern was being globbed.
+ * pattern was being globbed. Both routes through `report()`, which guards the REPORTER — an
+ * `onError` that throws would otherwise re-arm the exact unwind this fix removes.
  *
  * THE TRADE, STATED HONESTLY: a permanently failing file now retries forever instead of crashing
  * loudly. That is the right trade only BECAUSE the error is now reported — it reaches
@@ -74,10 +75,28 @@ export class FileWatcher {
           }
         }
       } catch (err) {
-        this.deps.onError?.(connector, err);
+        this.report(connector, err);
       }
     }
     return found;
+  }
+
+  /**
+   * Report a capture failure WITHOUT letting the reporter become one.
+   *
+   * `onError` is wired to a `queue.sqlite` write (`recordConnectorError` in capture-engine.ts), and
+   * a sqlite write is not infallible — a locked or full database, or a handle closed during
+   * shutdown, throws. An unguarded call here would reject `tickOnce`, reject `runLoop`, and reject
+   * `Promise.race([watcherLoop, syncLoop])`: F-16.3-2 restored, reachable exactly when a connector
+   * is ALREADY failing, i.e. the moment the scorecard is supposed to start working. `heartbeat.ts`
+   * carries this same guard for the same reason.
+   */
+  private report(connector: Connector, err: unknown): void {
+    try {
+      this.deps.onError?.(connector, err);
+    } catch {
+      /* an error reporter that throws must not become the outage it was reporting */
+    }
   }
 
   /** One discovery + growth-detect + capture pass. */
@@ -88,7 +107,7 @@ export class FileWatcher {
       try {
         await this.captureFile(connector, path);
       } catch (err) {
-        this.deps.onError?.(connector, err);
+        this.report(connector, err);
         // The cursor was NOT committed (it is written only after `onChange` resolves), so these
         // lines genuinely retry on the next tick — and there now IS a next tick.
       }
