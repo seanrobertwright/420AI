@@ -109,6 +109,14 @@ const STRICT_TABLES = [
   "search_documents",
   // M15 15.4: a new tenant table with the same strict org policy as the other twelve.
   "project_grants",
+  // M16 16.1: the §4.3 outcome label and its immutable revision snapshots (migration 0024). Both
+  // take the same strict org policy as the other thirteen. `outcome_label_revisions` is a history
+  // and the instinct is to reach for 15.10's APPEND_ONLY shape — it belongs HERE instead, for two
+  // independently sufficient reasons: it has a real per-tenant READ path (16.2 renders the history
+  // to its author, where `audit_events` has no reader at all), and its rows must be DELETABLE when
+  // the label is (D-16.1-6), which an APPEND_ONLY `REVOKE DELETE` would forbid.
+  "outcome_labels",
+  "outcome_label_revisions",
 ] as const;
 
 /** BOOTSTRAP-PERMISSIVE policy (D-15.3-3): enforced with a context, open without one. */
@@ -222,7 +230,7 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.3 RLS enforcement (two-role integ
     // TRUNCATE requires table OWNERSHIP — on the app handle this fails with a permissions
     // error, not an RLS error, which is a confusing way to discover the rule. Owner only.
     await owner.db.execute(
-      sql`TRUNCATE invites, password_reset_tokens, project_grants, search_documents, session_git_links, git_commit_files, git_commits, alert_firings, machine_heartbeats, report_artifacts, workspace_keys, workspaces, projects, raw_source_records, events, ingest_tokens, pairing_codes, machines, memberships, organizations, users RESTART IDENTITY CASCADE`,
+      sql`TRUNCATE invites, password_reset_tokens, project_grants, search_documents, session_git_links, git_commit_files, git_commits, alert_firings, machine_heartbeats, outcome_label_revisions, outcome_labels, report_artifacts, workspace_keys, workspaces, projects, raw_source_records, events, ingest_tokens, pairing_codes, machines, memberships, organizations, users RESTART IDENTITY CASCADE`,
     );
     const seeded = await owner.db
       .insert(users)
@@ -611,9 +619,12 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.3 RLS enforcement (two-role integ
 
   // 9 ── FORCE, not merely ENABLE. Two distinct exemptions, two distinct switches: ENABLE
   //      turns the policy on, FORCE removes the TABLE-OWNER exemption (15.0 Finding 1).
-  it("all 17 tenant tables have relrowsecurity AND relforcerowsecurity", async () => {
-    // The count in the title is 17 as of 15.5 (`invites`). A number in a title that disagrees with
-    // the arrays is precisely the drift this file exists to prevent — keep them in step.
+  it("all 19 tenant tables have relrowsecurity AND relforcerowsecurity", async () => {
+    // The count in the title is 19 as of M16 16.1 (`outcome_labels`, `outcome_label_revisions`; it
+    // was 17 from 15.5's `invites`). A number in a title that disagrees with the arrays is
+    // precisely the drift this file exists to prevent — keep them in step. These two are the ONLY
+    // hand-written integers in this file; every other count is derived from list lengths, which is
+    // why adding two STRICT entries moves nothing else.
     //
     // M15 15.10 does NOT move it. `audit_events` has a policy but is not a TENANT table in this
     // file's sense — nothing reads it per-tenant — and it deliberately does not FORCE, so it is

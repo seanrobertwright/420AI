@@ -20,6 +20,10 @@ export {
   apiKeys,
   // M15 15.10: the append-only audit trail (D-15.10-2). Org-owned, but write-only to the app role.
   auditEvents,
+  // M16 16.1: the §4.3 outcome label + its immutable revision snapshots (D-16.1-1). STRICT tenant
+  // tables — org-owned, read and written per-tenant, unlike `auditEvents` above.
+  outcomeLabels,
+  outcomeLabelRevisions,
   ingestTokens,
   rawSourceRecords,
   events,
@@ -192,6 +196,29 @@ export type { MemberRow } from "./repositories/members.js";
 // written for the break-glass reader's benefit, not for a predicate.
 export { recordAuditEvent } from "./repositories/audit.js";
 export type { AuditEventInput } from "./repositories/audit.js";
+// M16 16.1 the §4.3 outcome labels (research plan §7 P0.2). Two STRICT tenant tables with the
+// ordinary 0015/0016 RLS backstop behind the explicit `orgId` predicate every function here
+// carries as its SECOND parameter — which matters more than usual because these reads are keyed by
+// `session_id`, a connector-supplied globally-scoped string two tenants can share (the 15.2 rule).
+//
+// Unlike `recordAuditEvent` above there is a real per-tenant READ path here, and a real DELETE
+// (D-16.1-6): a label is volunteered human ground truth rather than captured evidence, so it is the
+// one object in this archive its author may retract.
+export {
+  createOutcomeLabel,
+  getOutcomeLabel,
+  updateOutcomeLabel,
+  deleteOutcomeLabel,
+  listOutcomeLabels,
+  listOutcomeLabelRevisions,
+  OutcomeLabelError,
+} from "./repositories/outcome-labels.js";
+export type {
+  OutcomeLabelRow,
+  OutcomeLabelRevisionRow,
+  CreateOutcomeLabelInput,
+  PatchOutcomeLabelInput,
+} from "./repositories/outcome-labels.js";
 export { issueIngestToken, findMachineIdByToken } from "./repositories/tokens.js";
 export { ingestBatch } from "./repositories/ingest.js";
 export {

@@ -103,9 +103,15 @@ const TENANT_TABLES = [
   // It is deliberately NOT in `rls.int.test.ts`'s tenant lists, and the two are not in conflict —
   // they ask different questions. That file classifies tables by POLICY SHAPE, and `audit_events` is
   // its own fifth classification (APPEND_ONLY_TABLES, D-15.10-2): nothing reads it per-tenant, so its
-  // "all 17 tenant tables have ENABLE + FORCE" assertion must stay at 17 and must not pick this
-  // table up — it deliberately does not FORCE, to preserve the owner's break-glass read.
+  // "all 19 tenant tables have ENABLE + FORCE" assertion must not pick this table up — it
+  // deliberately does not FORCE, to preserve the owner's break-glass read.
   "audit_events",
+  // M16 16.1 — the §4.3 outcome label and its revision snapshots. Both answer this file's narrow
+  // structural question the ordinary way (`org_id` NOT NULL, FK to `organizations`), and unlike
+  // `audit_events` above they are ALSO in `rls.int.test.ts`'s STRICT list — the two files agree
+  // about them because they are tenant tables on BOTH questions: read per-tenant AND org-owned.
+  "outcome_labels",
+  "outcome_label_revisions",
 ] as const;
 
 /** Tables that must NOT gain org_id — identities and deployment-global data (D-M15-9). */

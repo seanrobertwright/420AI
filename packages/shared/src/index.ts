@@ -12,6 +12,7 @@ export * from "./report-metrics.js";
 export * from "./monitor.js";
 export * from "./roles.js";
 export * from "./audit.js";
+export * from "./outcome-labels.js";
 export * from "./alerts.js";
 export * from "./alert-firings.js";
 export * from "./control-protocol.js";

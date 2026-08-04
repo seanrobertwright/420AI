@@ -172,14 +172,23 @@ but "redacted" here means "these 14 classes were masked", not "no secret can sur
 
 ## 5. What can be exported
 
-Three export surfaces, all authenticated, all redacted before the bytes leave the archive
-(`apps/ingest/src/routes/exports.ts:33`):
+Four export surfaces, all authenticated, all redacted before the bytes leave the archive — three in
+`exports.ts` (whose header at `apps/ingest/src/routes/exports.ts:33` states the §18 gate for them)
+plus the M16 label export in `apps/ingest/src/routes/outcome-labels.ts:331-343`:
 
-| Endpoint                                                           | Content                              | Redaction                                     |
-| ------------------------------------------------------------------ | ------------------------------------ | --------------------------------------------- |
-| `GET /v1/exports/events` (`exports.ts:150`)                        | Event stream, plaintext columns only | `redactJson(rows)` (`exports.ts:193`)         |
-| `GET /v1/reports/:id/export` (`exports.ts:232`)                    | A rendered report artifact (md/json) | `redactJson(…)` (`exports.ts:252`)            |
-| `GET /v1/sessions/:sessionId/transcript/export` (`exports.ts:299`) | Session transcript (md/json/jsonl)   | `redact(e.text)` per entry (`exports.ts:320`) |
+| Endpoint                                                           | Content                              | Redaction                                                        |
+| ------------------------------------------------------------------ | ------------------------------------ | ---------------------------------------------------------------- |
+| `GET /v1/exports/events` (`exports.ts:150`)                        | Event stream, plaintext columns only | `redactJson(rows)` (`exports.ts:193`)                            |
+| `GET /v1/reports/:id/export` (`exports.ts:232`)                    | A rendered report artifact (md/json) | `redactJson(…)` (`exports.ts:252`)                               |
+| `GET /v1/sessions/:sessionId/transcript/export` (`exports.ts:299`) | Session transcript (md/json/jsonl)   | `redact(e.text)` per entry (`exports.ts:320`)                    |
+| `GET /v1/labels/export` (`outcome-labels.ts:358`)                  | Outcome labels (json/jsonl/csv)      | `redactJson(rows.map(serializeLabel))` (`outcome-labels.ts:375`) |
+
+The label export is the only one whose content is **human-authored free text** rather than captured
+or derived data, and that is precisely why it redacts: `intent` is 200 characters somebody typed, and
+may name a customer or carry a pasted credentialed URL that nothing else in the archive would have
+recorded. The in-app reads (`GET /v1/sessions/:id/label`, `GET /v1/labels`) deliberately do **not**
+redact — they are authenticated reads by the label's own organization, exactly like
+`GET /v1/reports/:id`, whose `/export` sibling redacts while it does not.
 
 The event export read **never decrypts** — it selects only the plaintext columns and does not touch
 `payload_ciphertext`/`iv`/`tag` at all (`packages/db/src/repositories/exports.ts:5-9`). Decrypt-for-
@@ -219,16 +228,45 @@ organizations and deleting it would cascade into every row referencing it
 (`packages/db/src/repositories/members.ts:178-181`). Their captured sessions, events and commits
 remain in the archive.
 
-**So how do you actually delete something?** Directly, against your own database, with the `db:*`
+**So how do you actually delete CAPTURED data?** Directly, against your own database, with the `db:*`
 scripts that authenticate via `DATABASE_URL` — the same break-glass path the operations guide
-documents for administrative reads. There is **no delete-my-data button, and no per-session delete
-API.** For a design partner this is the single most important sentence on this page: deletion is an
-operator action on a database you control, and it must be agreed before enrolment, not after.
+documents for administrative reads. For captured data there is **no delete-my-data button, and no
+per-session delete API.** For a design partner this is the single most important sentence on this
+page: deleting captured data is an operator action on a database you control, and it must be agreed
+before enrolment, not after.
+
+### Outcome labels are the one exception, and they have a written policy
+
+M16 16.1 added the §4.3 **outcome label** — a voluntary human judgement of a session — and with it
+the first delete API for **archive content** (D-16.1-6). Be precise about that scope: identity and
+access objects have always been deletable (an invite, an API key, a session, a membership, an SSO
+link), and none of them is captured data. What was never deletable through the API, and still is
+not, is anything the collector captured:
+
+> **A `DELETE` of an outcome label is a HARD delete of the label row and all of its revision rows,
+> in one transaction. Nothing is retained, and nothing else is touched — the session's raw records,
+> events, reports and search documents are unaffected.**
+
+`DELETE /v1/sessions/:sessionId/label` (`apps/ingest/src/routes/outcome-labels.ts:262`) is that API;
+the cascade is deliberately visible in code rather than hidden in DDL
+(`packages/db/src/repositories/outcome-labels.ts:569-577`). Anyone at `member` or above may delete their
+own label; `admin` and above may delete any label in the organization, as a data-hygiene lever.
+Editing is stricter than deleting on purpose — no rung, including `owner`, may **rewrite** a label
+it did not author, because retraction is not falsification.
+
+**This does not weaken the "raw records sacred" invariant**, and the reason is the whole argument: a
+label is neither raw nor derived. Raw records are permanent because they are captured evidence
+nobody can recreate; events are disposable because they are re-derivable. A label is a third thing —
+volunteered human ground truth — re-creatable only by the person who gave it, and therefore the one
+object in the archive they are entitled to take back. Both new tables and the delete path are
+asserted by two-role integration suites, including an explicit check that the session's `events` and
+`raw_source_records` counts are unchanged across the whole label lifecycle.
 
 > **Gap, stated rather than hidden.** Research plan §6 Phase 6 step 5 ("make data export, retention,
-> and removal understandable and tested") and §7 P0.2's acceptance criterion (a label can be
-> "deleted according to archive policy") both assume an archive **policy** that does not exist yet.
-> Writing one is future work; this page describes what is true today.
+> and removal understandable and tested") still assumes a broader archive **policy** — retention and
+> removal for _captured_ data — that does not exist yet. §7 P0.2's half of this gap is now closed:
+> labels have a policy, stated above and implemented. Writing the captured-data policy is future
+> work; this page describes what is true today.
 
 ---
 

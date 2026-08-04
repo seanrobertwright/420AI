@@ -24,7 +24,13 @@ export type ExportFormat = "md" | "json" | "jsonl" | "csv" | "parquet";
 export interface ExportManifest {
   /** ISO timestamp the route stamped (route owns the clock). */
   exportedAt: string;
-  subject: "events" | "report" | "transcript";
+  /**
+   * M16 16.1 adds `labels` — the §4.3 outcome labels. It is the first subject whose content is
+   * HUMAN-AUTHORED free text rather than captured or derived data, which is precisely why its route
+   * redacts (D-16.1-7): `intent` is 200 characters somebody typed, and may name a customer or carry
+   * a pasted credentialed URL that nothing else in the archive would have recorded.
+   */
+  subject: "events" | "report" | "transcript" | "labels";
   format: ExportFormat;
   /** The filters/identifiers that scoped this export (undefined entries omitted at the route). */
   scope: Record<string, string | undefined>;

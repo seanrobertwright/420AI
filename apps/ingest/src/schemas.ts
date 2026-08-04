@@ -1,3 +1,13 @@
+import {
+  FRICTIONS,
+  FOLLOW_UP_MAX_LENGTH,
+  INTENT_MAX_LENGTH,
+  LABEL_CONFIDENCE,
+  LABEL_STATUSES,
+  OUTCOMES,
+  TASK_TYPES,
+} from "@420ai/shared";
+
 /**
  * JSON schemas for request bodies. Fastify validates + coerces natively from
  * these (no zod) — a malformed body is rejected with 400 before the handler
@@ -662,5 +672,116 @@ export const createApiKeyBodySchema = {
     role: { type: "string", enum: ["viewer", "member", "admin", "owner"] },
     expiresInDays: { type: "integer", minimum: 1, maximum: 3650 },
     currentPassword: { type: "string", minLength: 1, maxLength: 256 },
+  },
+} as const;
+
+// --- M16 16.1 the §4.3 OUTCOME LABEL surface (research plan §4.3 / §7 P0.2). ---
+//
+// THESE ENUMS ARE BUILT FROM THE SHARED ARRAYS, unlike the `role` enums above which this file keeps
+// in sync by hand. The difference is deliberate and worth stating, because the next person adding a
+// closed set here has to pick one: `ROLES` has FOUR members that have not changed since 15.4 and
+// are unlikely to, whereas the §4.3 sets are owned by a research document expected to evolve during
+// the 24-week period. A hand-copied enum there would reject a value the rest of the system
+// considers legal, and the symptom would be a 400 on a tray the operator had just used — diagnosed
+// at the HTTP edge, far from the array somebody edited. Spreading (`[...TASK_TYPES]`) is what makes
+// `@420ai/shared` the single source it claims to be.
+//
+// EVERY FREE-TEXT FIELD IS BOUNDED AT THE EDGE, per this file's habit: the columns are unbounded
+// `text`, and a 10 KB `intent` would land in 16.2's dashboard table, in every export, and in 16.4's
+// audit report. `intent`'s 200 is §4.3's own limit; `followUpCommitOrPr`'s 500 is this repo's.
+
+/**
+ * POST /v1/sessions/:sessionId/label body.
+ *
+ * ONLY `status` is required, because A SKIP IS A ROW (D-16.1-2) and carries none of the six §4.3
+ * fields. The required-when-`labeled` shape is deliberately NOT expressed here: ajv could do it with
+ * `if/then`, but the REPOSITORY's `assertLabelShape` checks the merged row, so the 400 names the
+ * missing fields instead of emitting an opaque if/then validation error — and, decisively, it
+ * covers PATCH too, which an `if/then` here could not: a partial edit of an already-complete label
+ * legitimately sends one field, so only the merged state can be judged.
+ */
+export const createOutcomeLabelBodySchema = {
+  type: "object",
+  required: ["status"],
+  additionalProperties: false,
+  properties: {
+    status: { type: "string", enum: [...LABEL_STATUSES] },
+    taskType: { type: "string", enum: [...TASK_TYPES] },
+    intent: { type: "string", minLength: 1, maxLength: INTENT_MAX_LENGTH },
+    outcome: { type: "string", enum: [...OUTCOMES] },
+    qualityRating: { type: "integer", minimum: 1, maximum: 5 },
+    primaryFriction: { type: "string", enum: [...FRICTIONS] },
+    followUpCommitOrPr: { type: "string", minLength: 1, maxLength: FOLLOW_UP_MAX_LENGTH },
+    confidence: { type: "string", enum: [...LABEL_CONFIDENCE] },
+  },
+} as const;
+
+/**
+ * PATCH /v1/sessions/:sessionId/label body — the same properties with NOTHING required, plus
+ * `minProperties: 1`.
+ *
+ * That last constraint is the point: an empty PATCH would otherwise be a no-op that still bumped
+ * `revision` and appended a snapshot identical to its predecessor, quietly polluting the one record
+ * 16.4 reads as evidence of what changed. A 400 is the honest answer.
+ */
+export const patchOutcomeLabelBodySchema = {
+  type: "object",
+  minProperties: 1,
+  additionalProperties: false,
+  properties: {
+    status: { type: "string", enum: [...LABEL_STATUSES] },
+    taskType: { type: "string", enum: [...TASK_TYPES] },
+    intent: { type: "string", minLength: 1, maxLength: INTENT_MAX_LENGTH },
+    outcome: { type: "string", enum: [...OUTCOMES] },
+    qualityRating: { type: "integer", minimum: 1, maximum: 5 },
+    primaryFriction: { type: "string", enum: [...FRICTIONS] },
+    // THE TWO OPTIONAL §4.3 FIELDS ACCEPT `null`, and only these two. The repository has always
+    // implemented null-means-CLEAR, but every field here was typed `string`, so the capability was
+    // documented in `PatchOutcomeLabelInput` and unreachable from the only caller — a contract
+    // describing behaviour the system would 400 on. `enum` must list `null` alongside the members,
+    // because ajv checks `enum` membership independently of `type`.
+    //
+    // The five REQUIRED-when-`labeled` fields deliberately stay non-nullable: clearing `outcome` on
+    // a row that still says `labeled` is the incoherent state `assertLabelShape` exists to refuse.
+    // Retract a judgement by patching `status` to `skipped`, which clears all seven at once.
+    followUpCommitOrPr: {
+      type: ["string", "null"],
+      minLength: 1,
+      maxLength: FOLLOW_UP_MAX_LENGTH,
+    },
+    confidence: { type: ["string", "null"], enum: [...LABEL_CONFIDENCE, null] },
+  },
+} as const;
+
+/** ?status=&outcome=&taskType=&sessionId=[&limit=1..200][&offset=0..] for GET /v1/labels. */
+export const listOutcomeLabelsQuerySchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    status: { type: "string", enum: [...LABEL_STATUSES] },
+    outcome: { type: "string", enum: [...OUTCOMES] },
+    taskType: { type: "string", enum: [...TASK_TYPES] },
+    sessionId: { type: "string", minLength: 1, maxLength: 512 },
+    limit: { type: "integer", minimum: 1, maximum: 200 },
+    offset: { type: "integer", minimum: 0 },
+  },
+} as const;
+
+/**
+ * ?format=json|jsonl|csv (+ the same filters) for GET /v1/labels/export. `format` is REQUIRED so a
+ * missing or invalid value is a 400 via app.ts's `err.validation` branch, matching the three M10
+ * export querystrings. No `md` and no `parquet`: a label list is tabular, not a document, and
+ * Parquet is deliberately events-only (12.8).
+ */
+export const exportOutcomeLabelsQuerySchema = {
+  type: "object",
+  required: ["format"],
+  additionalProperties: false,
+  properties: {
+    format: { type: "string", enum: ["json", "jsonl", "csv"] },
+    status: { type: "string", enum: [...LABEL_STATUSES] },
+    outcome: { type: "string", enum: [...OUTCOMES] },
+    taskType: { type: "string", enum: [...TASK_TYPES] },
+    sessionId: { type: "string", minLength: 1, maxLength: 512 },
   },
 } as const;
