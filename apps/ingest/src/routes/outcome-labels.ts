@@ -132,21 +132,15 @@ export default async function outcomeLabelRoutes(app: FastifyInstance): Promise<
       const { sessionId } = request.params;
       const body = request.body;
 
-      // The required-when-`labeled` shape, checked HERE rather than with an ajv `if/then` so the
-      // 400 names the missing field. `followUpCommitOrPr` and `confidence` stay optional (§4.3
-      // marks the first optional; §7 P0.2 marks the second).
-      if (body.status === "labeled") {
-        const missing = (
-          ["taskType", "intent", "outcome", "qualityRating", "primaryFriction"] as const
-        ).filter((k) => body[k] === undefined);
-        if (missing.length > 0) {
-          return reply
-            .code(400)
-            .send({ error: `a labeled outcome requires: ${missing.join(", ")}` });
-        }
-      }
-
-      const outcome = await withOrg(app.db, principal.orgId, principal.role, async (tx) => {
+      // The required-when-`labeled` shape is NOT checked here. It lives in the repository's
+      // `assertLabelShape`, which throws `incomplete_label` → 400 with the missing field names.
+      //
+      // That is a deliberate move rather than an omission: 16.1 originally checked it here, and the
+      // review found the PATCH path had no equivalent — so a `PATCH {"status":"labeled"}` produced a
+      // labeled row carrying no judgement at all. The invariant is a property of the merged ROW, and
+      // the route only ever sees one caller's input, so duplicating the check per entry point is how
+      // the second one gets forgotten. One owner, at the layer that knows the whole row.
+      const created = await withOrg(app.db, principal.orgId, principal.role, async (tx) => {
         const session = await sessionDetail(tx, principal.orgId, sessionId);
         if (session.eventCount === 0) return "no_such_session" as const;
         // The discriminated union is reconstructed rather than spread, so the repository's
@@ -156,9 +150,11 @@ export default async function outcomeLabelRoutes(app: FastifyInstance): Promise<
             ? { status: "skipped" }
             : {
                 status: "labeled",
-                // The non-null assertions are earned by the `missing` check above, which is why
-                // that check is a 400 rather than a silent default — a defaulted `outcome` would
-                // put a value no human chose into the one table 16.4 reads as ground truth.
+                // The non-null assertions satisfy the compiler; `assertLabelShape` in the
+                // repository is what actually enforces them, and it treats `undefined` exactly like
+                // `null`. Deliberately NOT defaulted to anything: a defaulted `outcome` would put a
+                // value no human chose into the one table 16.4 reads as ground truth, which is a
+                // worse failure than the 400.
                 taskType: body.taskType!,
                 intent: body.intent!,
                 outcome: body.outcome!,
@@ -177,12 +173,12 @@ export default async function outcomeLabelRoutes(app: FastifyInstance): Promise<
         });
       });
 
-      if (outcome === "no_such_session") {
+      if (created === "no_such_session") {
         return reply.code(404).send({ error: "no such session" });
       }
       // `already_labeled` throws `OutcomeLabelError` and is mapped to 409 in app.ts (D-16.1-3:
-      // a second author is a conflict, not a second row).
-      return reply.code(201).send({ label: serializeLabel(outcome) });
+      // a second author is a conflict, not a second row); `incomplete_label` maps to 400.
+      return reply.code(201).send({ label: serializeLabel(created) });
     },
   );
 

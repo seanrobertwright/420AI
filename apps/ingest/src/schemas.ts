@@ -734,8 +734,21 @@ export const patchOutcomeLabelBodySchema = {
     outcome: { type: "string", enum: [...OUTCOMES] },
     qualityRating: { type: "integer", minimum: 1, maximum: 5 },
     primaryFriction: { type: "string", enum: [...FRICTIONS] },
-    followUpCommitOrPr: { type: "string", minLength: 1, maxLength: FOLLOW_UP_MAX_LENGTH },
-    confidence: { type: "string", enum: [...LABEL_CONFIDENCE] },
+    // THE TWO OPTIONAL §4.3 FIELDS ACCEPT `null`, and only these two. The repository has always
+    // implemented null-means-CLEAR, but every field here was typed `string`, so the capability was
+    // documented in `PatchOutcomeLabelInput` and unreachable from the only caller — a contract
+    // describing behaviour the system would 400 on. `enum` must list `null` alongside the members,
+    // because ajv checks `enum` membership independently of `type`.
+    //
+    // The five REQUIRED-when-`labeled` fields deliberately stay non-nullable: clearing `outcome` on
+    // a row that still says `labeled` is the incoherent state `assertLabelShape` exists to refuse.
+    // Retract a judgement by patching `status` to `skipped`, which clears all seven at once.
+    followUpCommitOrPr: {
+      type: ["string", "null"],
+      minLength: 1,
+      maxLength: FOLLOW_UP_MAX_LENGTH,
+    },
+    confidence: { type: ["string", "null"], enum: [...LABEL_CONFIDENCE, null] },
   },
 } as const;
 

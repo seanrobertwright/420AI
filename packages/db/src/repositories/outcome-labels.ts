@@ -31,7 +31,7 @@ import type { TaskType, LabelOutcome, Friction, LabelConfidence } from "@420ai/s
 export class OutcomeLabelError extends Error {
   constructor(
     message: string,
-    readonly reason: "already_labeled" | "not_found" | "not_author",
+    readonly reason: "already_labeled" | "not_found" | "not_author" | "incomplete_label",
   ) {
     super(message);
     this.name = "OutcomeLabelError";
@@ -118,9 +118,14 @@ const outcomeLabelRevisionRowColumns = {
 
 /**
  * The six §4.3 fields plus `confidence`, as stored. Every one is nullable because a `skipped` row
- * carries none of them (D-16.1-2) — the required-when-`labeled` shape lives in
- * `CreateOutcomeLabelInput`'s discriminated union and in the route's JSON schema, never in a CHECK
- * constraint (no closed set in this repo has one).
+ * carries none of them (D-16.1-2).
+ *
+ * The required-when-`labeled` shape is therefore NOT a column constraint — no closed set in this
+ * repo carries a CHECK — and it is enforced in exactly one place, `assertLabelShape`, which runs on
+ * the MERGED row in both the create and the edit path. `CreateOutcomeLabelInput`'s discriminated
+ * union and the route's JSON schema are the earlier, cheaper layers that catch most of it at
+ * compile time and at the edge; neither can see a merged PATCH, which is why they are not the
+ * enforcement.
  */
 interface LabelFieldValues {
   taskType: TaskType | null;
@@ -153,9 +158,19 @@ export type CreateOutcomeLabelInput =
     };
 
 /**
- * What a caller may change on an existing label. Every field optional and `undefined` means LEAVE
- * ALONE — distinct from `null`, which means CLEAR. The route's schema rejects an empty patch
- * (`minProperties: 1`) so an edit always produces a real revision rather than a no-op bump.
+ * What a caller may change on an existing label. Every field optional; `undefined` means LEAVE
+ * ALONE and `null` means CLEAR. The route's schema rejects an empty patch (`minProperties: 1`) so
+ * an edit always produces a real revision rather than a no-op bump.
+ *
+ * BE PRECISE ABOUT WHICH FIELDS ARE ACTUALLY CLEARABLE, because an earlier version of this comment
+ * was not and the review caught it: only `followUpCommitOrPr` and `confidence` accept `null` over
+ * HTTP (`patchOutcomeLabelBodySchema` types them `["string","null"]`), and they are the two §4.3
+ * marks OPTIONAL. The five required-when-`labeled` fields are `{type:"string"}` at the edge, so a
+ * `null` for them is a 400 — and even if one got through, `assertLabelShape` would refuse it. That
+ * is the intended shape rather than a limitation: clearing `outcome` on a row that still says
+ * `labeled` would produce exactly the incoherent evidence this guard exists to prevent. To retract
+ * a judgement, patch `status` to `skipped`, which clears all seven at once and keeps the prior
+ * revision readable.
  *
  * `status` is patchable on purpose: a `skipped` label edited into a `labeled` one is the single
  * most interesting transition in this data ("I did go back and judge it"), and refusing it would
@@ -187,18 +202,75 @@ function isAlreadyLabeled(e: unknown): boolean {
   return c?.code === "23505" && c?.constraint === "outcome_labels_org_session";
 }
 
+/**
+ * The field set a `skipped` row carries: nothing (D-16.1-2).
+ *
+ * A NAMED CONSTANT rather than an inline literal in `fieldsFromCreate`, because the CREATE path is
+ * no longer the only writer that has to produce it — `updateOutcomeLabel` blanks a row the same way
+ * when an edit turns a judgement back into a skip. Two hand-written copies of "all seven are null"
+ * is exactly how one of them ends up with six.
+ */
+const EMPTY_LABEL_FIELDS: LabelFieldValues = {
+  taskType: null,
+  intent: null,
+  outcome: null,
+  qualityRating: null,
+  primaryFriction: null,
+  followUpCommitOrPr: null,
+  confidence: null,
+};
+
+/**
+ * The five §4.3 fields a `labeled` row MUST carry. `followUpCommitOrPr` and `confidence` are
+ * deliberately absent: §4.3 marks the first optional and §7 P0.2 marks the second.
+ */
+const REQUIRED_WHEN_LABELED = [
+  "taskType",
+  "intent",
+  "outcome",
+  "qualityRating",
+  "primaryFriction",
+] as const;
+
+/**
+ * THE `labeled`/`skipped` INVARIANT, enforced on the MERGED ROW rather than on any one caller's
+ * input. Throws `incomplete_label` when a row claiming to be `labeled` is missing a §4.3 field.
+ *
+ * IT LIVES HERE, AND THE REVIEW THAT FOUND IT MISSING IS THE REASON. 16.1 originally enforced this
+ * only on the create path — the route checked the POST body and the discriminated
+ * `CreateOutcomeLabelInput` made an incomplete create a compile error — while `updateOutcomeLabel`
+ * merged `status` like any other field. Both directions were measured against a live database:
+ *
+ *   * `PATCH {"status":"skipped"}` on a judged session returned 200 with `outcome: "shipped"` and
+ *     `qualityRating: 4` still set — a skip carrying a full judgement, which every per-outcome
+ *     histogram in 16.4 would then count as an opinion the operator explicitly declined to give;
+ *   * `PATCH {"status":"labeled"}` on a skipped session returned 200 with all five fields NULL — a
+ *     row in the NUMERATOR of "sessions I judged" containing nothing a human decided. That one is
+ *     worse, because the completion metric then reports a judgement that does not exist.
+ *
+ * Checking the PATCH BODY would not have fixed it: a partial edit of an already-complete label
+ * legitimately sends one field. The invariant is a property of the ROW, so the merged state is the
+ * only thing worth checking — and the repository is the only layer that knows it, which is also why
+ * this guard is not in the route (the same argument `repositories/members.ts` makes for the
+ * last-owner guard: it must hold for any future caller, including a script).
+ */
+function assertLabelShape(fields: LabelFieldValues, status: string): void {
+  if (status !== "labeled") return;
+  const missing = REQUIRED_WHEN_LABELED.filter(
+    (k) => fields[k] === null || fields[k] === undefined,
+  );
+  if (missing.length > 0) {
+    throw new OutcomeLabelError(
+      `a labeled outcome requires: ${missing.join(", ")}`,
+      "incomplete_label",
+    );
+  }
+}
+
 /** Normalize a create input into the full nullable field set a row (and its snapshot) carries. */
 function fieldsFromCreate(input: CreateOutcomeLabelInput): LabelFieldValues {
   if (input.status === "skipped") {
-    return {
-      taskType: null,
-      intent: null,
-      outcome: null,
-      qualityRating: null,
-      primaryFriction: null,
-      followUpCommitOrPr: null,
-      confidence: null,
-    };
+    return { ...EMPTY_LABEL_FIELDS };
   }
   return {
     taskType: input.taskType,
@@ -227,6 +299,12 @@ export async function createOutcomeLabel(
   input: { sessionId: string; authorUserId: string } & CreateOutcomeLabelInput,
 ): Promise<OutcomeLabelRow> {
   const fields = fieldsFromCreate(input);
+  // The SAME guard the edit path runs, against the same merged shape. `CreateOutcomeLabelInput`'s
+  // discriminated union already makes an incomplete `labeled` create a compile error at every
+  // INTERNAL call site, so this fires only for a caller that reached here across an untyped
+  // boundary — which is precisely the route, whose body arrives as JSON. Cheap, and it means the
+  // invariant has exactly one owner rather than one per entry point.
+  assertLabelShape(fields, input.status);
   let row: OutcomeLabelRow;
   try {
     const [created] = await tx
@@ -321,8 +399,8 @@ export async function updateOutcomeLabel(
   // in drizzle's `set()` — an explicit `undefined` key is dropped there, which happens to be the
   // behaviour we want, but the MERGED value is also what the snapshot must record, so the merge is
   // done here once and used for both.
-  const merged = {
-    status: patch.status ?? existing.status,
+  const status = patch.status ?? existing.status;
+  const mergedFields: LabelFieldValues = {
     taskType:
       patch.taskType === undefined ? (existing.taskType as TaskType | null) : patch.taskType,
     intent: patch.intent === undefined ? existing.intent : patch.intent,
@@ -342,6 +420,18 @@ export async function updateOutcomeLabel(
         ? (existing.confidence as LabelConfidence | null)
         : patch.confidence,
   };
+
+  // TURNING A JUDGEMENT BACK INTO A SKIP CLEARS IT, rather than leaving the old answers attached to
+  // a row that says nobody answered. A skip means "I declined to judge this session"; a skipped row
+  // still carrying `outcome: shipped` is not a weaker statement, it is a contradictory one, and
+  // 16.4 reads these as evidence. The blanking is deliberate DATA LOSS on the current row and it is
+  // safe precisely because of D-16.1-1: every prior revision keeps its own snapshot, so the
+  // judgement is still readable at `GET …/label/revisions` — it has been retracted, not erased.
+  const merged =
+    status === "skipped" ? { status, ...EMPTY_LABEL_FIELDS } : { status, ...mergedFields };
+  // …and the other direction: a row claiming to be `labeled` must actually carry a judgement.
+  assertLabelShape(merged, status);
+
   const nextRevision = existing.revision + 1;
 
   const [updated] = await tx

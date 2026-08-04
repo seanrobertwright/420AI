@@ -525,6 +525,78 @@ describe.skipIf(!TEST_URL || !APP_URL)("M16 16.1 outcome labels (two-role HTTP)"
     expect((incomplete.json() as { error: string }).error).toContain("outcome");
   });
 
+  /**
+   * 8b ── THE `labeled`/`skipped` INVARIANT, THROUGH HTTP (regression, 16.1 code review).
+   *
+   * The repository suite pins the guard itself; this pins that the ROUTE surfaces it as a 400 with
+   * the field names, rather than as a 500 or a silent 200.
+   */
+  it("PATCH status transitions are coherent: skip clears, and an empty upgrade is 400", async () => {
+    await postLabel(tokenA, SHARED_SESSION, LABELED_BODY);
+
+    // Downgrade to a skip CLEARS the judgement (it stays readable in the revision history).
+    const skipped = await app.inject({
+      method: "PATCH",
+      url: `/v1/sessions/${SHARED_SESSION}/label`,
+      headers: asJson(tokenA),
+      payload: { status: "skipped" },
+    });
+    expect(skipped.statusCode).toBe(200);
+    const row = (skipped.json() as LabelResponse).label;
+    expect(row.status).toBe("skipped");
+    expect(row.outcome).toBeNull();
+    expect(row.qualityRating).toBeNull();
+
+    const history = await app.inject({
+      method: "GET",
+      url: `/v1/sessions/${SHARED_SESSION}/label/revisions`,
+      headers: asUser(tokenA),
+    });
+    expect(
+      (history.json() as { revisions: { outcome: string | null }[] }).revisions[0]!.outcome,
+    ).toBe("shipped");
+
+    // Upgrading back to `labeled` with no judgement is a 400 that NAMES the missing fields.
+    const empty = await app.inject({
+      method: "PATCH",
+      url: `/v1/sessions/${SHARED_SESSION}/label`,
+      headers: asJson(tokenA),
+      payload: { status: "labeled" },
+    });
+    expect(empty.statusCode).toBe(400);
+    const err = empty.json() as { error: string; reason: string };
+    expect(err.reason).toBe("incomplete_label");
+    expect(err.error).toContain("outcome");
+  });
+
+  // 8c ── The two §4.3 OPTIONAL fields accept an explicit `null` over the wire; the required ones
+  //       do not. Before the fix the repository documented null-means-clear and the schema 400'd it.
+  it("null clears followUpCommitOrPr/confidence but is rejected for a required field", async () => {
+    await postLabel(tokenA, SHARED_SESSION, {
+      ...LABELED_BODY,
+      followUpCommitOrPr: "https://github.com/x/y/pull/1",
+    });
+
+    const cleared = await app.inject({
+      method: "PATCH",
+      url: `/v1/sessions/${SHARED_SESSION}/label`,
+      headers: asJson(tokenA),
+      payload: { followUpCommitOrPr: null, confidence: null },
+    });
+    expect(cleared.statusCode).toBe(200);
+    expect((cleared.json() as LabelResponse).label.followUpCommitOrPr).toBeNull();
+    expect((cleared.json() as LabelResponse).label.confidence).toBeNull();
+
+    // A required field stays non-nullable at the edge — ajv refuses before the handler runs.
+    const bad = await app.inject({
+      method: "PATCH",
+      url: `/v1/sessions/${SHARED_SESSION}/label`,
+      headers: asJson(tokenA),
+      payload: { outcome: null },
+    });
+    expect(bad.statusCode).toBe(400);
+  });
+
   // 9 ── Every handler refuses an anonymous caller. Cheap, and it is the check that would catch a
   //      handler pasted in without its `resolvePrincipal` guard.
   it("all seven routes are 401 without a bearer", async () => {

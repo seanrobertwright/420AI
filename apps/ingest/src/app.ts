@@ -300,8 +300,19 @@ export function buildApp(opts: BuildAppOptions): FastifyInstance {
     // (D-16.1-4). Note the deliberate asymmetry with DELETE, which answers 404 for a non-author:
     // that path returns a boolean rather than throwing, precisely so it never confirms the row
     // exists to someone with no claim on it.
+    // `incomplete_label` is a 400: the request is malformed rather than conflicting with state. It
+    // is raised by the repository and not by ajv because the invariant is a property of the MERGED
+    // row — a partial PATCH of an already-complete label legitimately sends one field, so the body
+    // alone cannot decide it.
     if (err instanceof OutcomeLabelError) {
-      const code = err.reason === "not_found" ? 404 : err.reason === "not_author" ? 403 : 409;
+      const code =
+        err.reason === "not_found"
+          ? 404
+          : err.reason === "not_author"
+            ? 403
+            : err.reason === "incomplete_label"
+              ? 400
+              : 409;
       return reply.code(code).send({ error: err.message, reason: err.reason });
     }
     // Provider failures (non-200/timeout/parse → 502; not-configured → 503). Placed
