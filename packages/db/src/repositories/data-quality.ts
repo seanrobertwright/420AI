@@ -1,4 +1,4 @@
-import { and, eq, gte, inArray, sql } from "drizzle-orm";
+import { and, eq, gte, or, sql } from "drizzle-orm";
 import type {
   ConnectorDeclarationRow,
   GitLinkageRow,
@@ -384,6 +384,14 @@ export async function reconciliationSample(
     select
       e.session_id,
       e.source_connector,
+      -- INDICATIVE, and nothing depends on it. An aggregate over a grouping that does not include
+      -- machine_id picks whichever uuid sorts first as text, so a session captured by two machines
+      -- reports one of them arbitrarily. That is the shape CLAUDE.md flags as a smell, and it is
+      -- deliberately tolerated HERE and nowhere else: machine_id is not a tenancy key (org_id is,
+      -- and it is in the WHERE clause), this column is display-only on the worksheet, and the dry
+      -- run does NOT read it -- recoverabilityTargets re-derives the full machine set from
+      -- raw_source_records independently, precisely so no re-parse subject can be lost to this
+      -- aggregate. Treat it as "one of the machines that captured this", never as "the machine".
       min(e.machine_id::text) as machine_id,
       (select count(*)::int from ${rawSourceRecords} r
         where r.org_id = ${orgId}
@@ -444,17 +452,40 @@ export async function reconciliationSample(
  * Keyed off `raw_source_records` rather than `events`, because the dry run reads raw records and
  * raw is PER-MACHINE — a session captured by two machines has two independent re-parse subjects,
  * and collapsing them would silently test only one.
+ *
+ * IT TAKES (session, connector) PAIRS, NOT BARE SESSION IDS, and the reason is a bound rather than
+ * a tidiness preference. Filtering on `session_id` alone would pull in every connector that ever
+ * captured that session — including connectors the deterministic sample did not select — so the
+ * report's recoverability row would describe a different set of subjects than its worksheet lists,
+ * while the function's own header claimed they were the same. It would also make the real decrypt
+ * fan-out `sampleSize × connectors × machines`, silently widening the ceiling `schemas.ts` states.
+ *
+ * The per-MACHINE expansion is the one multiplier that remains, and it is deliberate (raw is
+ * per-machine; see above). So the honest bound is `sampleSize × machines-per-session`, which is what
+ * `schemas.ts` now says.
  */
 export async function recoverabilityTargets(
   db: DbClient,
   orgId: string,
-  sessionIds: string[],
+  sampled: { sessionId: string; sourceConnector: string }[],
 ): Promise<{ sessionId: string; sourceConnector: string; machineId: string }[]> {
-  // `inArray` rather than a raw `= any(${ids}::text[])`: inside a raw `sql` template drizzle binds
-  // a JS array as ONE scalar parameter, which Postgres rejects with `22P02 malformed array literal`
-  // (measured — it reached the driver as the bare string `s1`). The query builder expands the list
-  // into individual bound parameters, which is also what bounds the param count honestly.
-  if (sessionIds.length === 0) return [];
+  if (sampled.length === 0) return [];
+  // An OR of (session, connector) equality pairs rather than `inArray` on either column alone: the
+  // pair is the unit, and two separate `inArray`s would form a CROSS PRODUCT that re-admits exactly
+  // the unsampled (session, connector) combinations this signature exists to exclude.
+  //
+  // Bound parameters, never interpolation: inside a raw `sql` template drizzle binds a JS array as
+  // ONE scalar parameter, which Postgres rejects with `22P02 malformed array literal` (measured — it
+  // reached the driver as the bare string `s1`). The query builder expands each pair into its own
+  // bound params, which is also what keeps the param count honest and bounded by `sampleSize`.
+  const pairPredicate = or(
+    ...sampled.map((s) =>
+      and(
+        eq(rawSourceRecords.sessionId, s.sessionId),
+        eq(rawSourceRecords.sourceConnector, s.sourceConnector),
+      ),
+    ),
+  );
   const rows = await db
     .selectDistinct({
       sessionId: rawSourceRecords.sessionId,
@@ -462,7 +493,7 @@ export async function recoverabilityTargets(
       machineId: rawSourceRecords.machineId,
     })
     .from(rawSourceRecords)
-    .where(and(eq(rawSourceRecords.orgId, orgId), inArray(rawSourceRecords.sessionId, sessionIds)))
+    .where(and(eq(rawSourceRecords.orgId, orgId), pairPredicate))
     .orderBy(
       rawSourceRecords.sessionId,
       rawSourceRecords.sourceConnector,

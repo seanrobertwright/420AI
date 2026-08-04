@@ -19,5 +19,11 @@ export async function POST(req: NextRequest) {
     method: "POST",
     body,
     contentType: "application/json",
+    // 15.10's optional signal, threaded here where every pre-15.10 sibling omits it: this is the
+    // most expensive JSON hop in the dashboard (it decrypts and re-parses a sample), so a client
+    // that navigates away should not leave it running to completion. Safe because the artifact
+    // commits only at the very END of generation — an aborted hop cannot leave a half-written
+    // report, only an unwritten one.
+    signal: req.signal,
   });
 }

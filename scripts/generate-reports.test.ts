@@ -35,6 +35,33 @@ describe("parseArgs", () => {
     expect(() => parseArgs(["--audit", "--window-days"])).toThrow(/positive integer/);
   });
 
+  /**
+   * `--audit` is a MODE, so a flag belonging to the other mode is an ERROR rather than a no-op.
+   * This file already throws on an unknown flag so a cron typo fails loudly instead of silently
+   * generating the default sweep — a flag that is KNOWN but inert would defeat that same intent by
+   * a different route (`--sample-size 20` alone silently ran the project sweep; `--audit --types x`
+   * silently ignored the types).
+   */
+  it("rejects a project-sweep flag passed WITH --audit", () => {
+    expect(() => parseArgs(["--audit", "--types", "project.efficiency"])).toThrow(
+      /--types is not valid with --audit/,
+    );
+    expect(() => parseArgs(["--audit", "--project", "abc"])).toThrow(
+      /--project is not valid with --audit/,
+    );
+  });
+
+  it("rejects an audit-only flag passed WITHOUT --audit", () => {
+    expect(() => parseArgs(["--window-days", "30"])).toThrow(/--window-days requires --audit/);
+    expect(() => parseArgs(["--sample-size", "5"])).toThrow(/--sample-size requires --audit/);
+  });
+
+  it("still applies the project-sweep defaults when nothing was passed", () => {
+    // The defaults are tracked as `undefined` internally so "explicitly passed" is distinguishable
+    // from "defaulted" — but the RETURNED shape must be unchanged for every existing caller.
+    expect(parseArgs([])).toMatchObject({ types: "all", project: "all" });
+  });
+
   it("keeps the audit OUT of PROJECT_REPORT_TYPES — it is org-scoped, not a project type", () => {
     // Putting it in that list would make `--types all` POST one org-wide audit PER PROJECT.
     expect(PROJECT_REPORT_TYPES).not.toContain("org.data_quality_audit");

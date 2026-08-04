@@ -503,9 +503,34 @@ describe.skipIf(!TEST_URL || !APP_URL)("M16 16.4 data quality (two-role integrat
       batch({ session: "s1", connector: "claude-code", rawId: "r1", ts: INSIDE }),
     );
 
-    const targets = await asApp((tx) => recoverabilityTargets(tx, orgA, ["s1"]));
+    const targets = await asApp((tx) =>
+      recoverabilityTargets(tx, orgA, [{ sessionId: "s1", sourceConnector: "claude-code" }]),
+    );
     expect(targets).toHaveLength(2);
     expect(new Set(targets.map((t) => t.machineId))).toEqual(new Set([machineA, machineA2]));
+  });
+
+  /**
+   * The reason `recoverabilityTargets` takes (session, connector) PAIRS rather than bare session
+   * ids: filtering on the session alone would re-admit a connector the deterministic sample never
+   * selected, so the recoverability row would describe different subjects than the worksheet lists —
+   * and the decrypt fan-out would gain a third multiplier past the ceiling `schemas.ts` states.
+   */
+  it("excludes a connector the sample did not select, even on a sampled session", async () => {
+    await ingest(
+      machineA,
+      batch({ session: "s1", connector: "claude-code", rawId: "r1", ts: INSIDE }),
+    );
+    await ingest(
+      machineA,
+      batch({ session: "s1", connector: "codex-cli", rawId: "r9", ts: INSIDE }),
+    );
+
+    const targets = await asApp((tx) =>
+      recoverabilityTargets(tx, orgA, [{ sessionId: "s1", sourceConnector: "claude-code" }]),
+    );
+    expect(targets).toHaveLength(1);
+    expect(targets[0]!.sourceConnector).toBe("claude-code");
   });
 
   it("returns nothing for an empty session list without touching the database", async () => {

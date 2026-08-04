@@ -327,8 +327,13 @@ export const generateProjectReportBodySchema = {
  * stored in the artifact's `params` so the row is self-describing and a later regeneration can be
  * compared against the same window.
  *
- * The ceilings are bounds on real work rather than taste: `sampleSize` drives N server-side
- * decrypt+re-parse passes, so 50 keeps a single request's decrypt scope bounded.
+ * The ceilings are bounds on real work rather than taste, and the bound is stated precisely because
+ * an imprecise one is worse than none: `sampleSize` selects N (session, connector) pairs, and the
+ * dry run expands each to its MACHINES, because raw records are per-machine and a session captured
+ * by two machines is two independent re-parse subjects. So the real decrypt scope is
+ * `sampleSize × machines-per-session`, not `sampleSize` — 50 bounds it at 50 per machine.
+ * `recoverabilityTargets` takes pairs rather than session ids specifically so the CONNECTOR axis
+ * cannot add a third multiplier.
  */
 export const dataQualityAuditBodySchema = {
   type: "object",

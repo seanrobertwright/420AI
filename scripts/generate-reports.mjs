@@ -21,8 +21,10 @@
  * compromised. A key minted at `member` is enough for this script.
  *
  * Reads INGEST_URL + API_KEY from the environment. Every request is timeout-bounded
- * (AbortSignal.timeout, 30 s) so a stalled ingest can never hang the scheduled job. Prints one
- * line per artifact and exits non-zero if ANY call fails (so a cron wrapper can alert).
+ * (AbortSignal.timeout) so a stalled ingest can never hang the scheduled job — 30 s for the project
+ * sweep, and a separate 180 s for `--audit`, which decrypts and re-parses a sample server-side (see
+ * AUDIT_TIMEOUT_MS for why one deadline for both would print FAIL over a successful artifact).
+ * Prints one line per artifact and exits non-zero if ANY call fails (so a cron wrapper can alert).
  *
  * Library note: import-safe — the pure helpers are exported/testable; only the entrypoint guard
  * at the bottom performs network I/O + prints.
@@ -40,6 +42,20 @@ export const PROJECT_REPORT_TYPES = [
 ];
 
 const TIMEOUT_MS = 30_000;
+
+/**
+ * The audit gets its OWN, longer deadline, and the difference is not a safety margin — the two
+ * endpoints do categorically different work. A project report is pure aggregation; the M16 16.4
+ * audit additionally DECRYPTS and RE-PARSES a sample server-side (`sampleSize × machines-per-session`
+ * passes), which is unbounded by the same clock.
+ *
+ * Getting this wrong is worse than a slow request: `AbortSignal.timeout` cancels the CLIENT, not the
+ * server, and `insertReportArtifact` still commits — so a 30 s deadline makes cron print `FAIL` and
+ * exit 1 while a perfectly good artifact exists. Cron is the operator's only unattended trigger for
+ * this report, so that spurious red is the one most likely to be believed. An instrument reporting a
+ * problem it does not have is precisely the failure this milestone exists to remove.
+ */
+const AUDIT_TIMEOUT_MS = 180_000;
 
 /** Parse a `--flag <n>` integer value, or throw with the flag named. */
 function intArg(args, i, flag) {
@@ -59,10 +75,18 @@ function intArg(args, i, flag) {
  * than a seventh entry in `PROJECT_REPORT_TYPES`: the audit is ORG-scoped, so putting it in that
  * list would make `--types all` POST one audit per project — N identical org-wide artifacts, each
  * claiming to be about a different project.
+ *
+ * BECAUSE `--audit` IS A MODE, A FLAG FROM THE OTHER MODE IS AN ERROR, NOT A NO-OP. This file
+ * already throws on an unknown flag so a typo in a cron line fails loudly rather than silently
+ * generating the default sweep — and a flag that is KNOWN but inert defeats that intent by a
+ * different route. `--sample-size 20` alone would run the project sweep and quietly ignore the
+ * number; `--audit --types project.efficiency` would generate only the audit and quietly ignore the
+ * types. Both now throw. The defaults are tracked as `undefined` rather than `"all"` precisely so
+ * "explicitly passed" is distinguishable from "defaulted".
  */
 export function parseArgs(args) {
-  let types = "all";
-  let project = "all";
+  let types;
+  let project;
   let audit = false;
   let windowDays;
   let sampleSize;
@@ -86,7 +110,22 @@ export function parseArgs(args) {
       throw new Error(`unknown argument: ${a}`);
     }
   }
-  return { types, project, audit, windowDays, sampleSize };
+  if (audit) {
+    if (types !== undefined)
+      throw new Error(
+        "--types is not valid with --audit (the audit is org-scoped, not a report type)",
+      );
+    if (project !== undefined)
+      throw new Error(
+        "--project is not valid with --audit (the audit is org-scoped, not per-project)",
+      );
+  } else {
+    if (windowDays !== undefined) throw new Error("--window-days requires --audit");
+    if (sampleSize !== undefined) throw new Error("--sample-size requires --audit");
+  }
+  // The mode's own defaults are applied only after the cross-mode check above, so a caller that
+  // passed nothing is never mistaken for one that passed "all" explicitly.
+  return { types: types ?? "all", project: project ?? "all", audit, windowDays, sampleSize };
 }
 
 /** Resolve `--types` to a concrete, validated list of known project report types. */
@@ -163,7 +202,7 @@ async function main(args, env) {
         method: "POST",
         headers,
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(TIMEOUT_MS),
+        signal: AbortSignal.timeout(AUDIT_TIMEOUT_MS),
       });
       if (!res.ok) {
         console.error(`FAIL org.data_quality_audit → HTTP ${res.status} ${await safeText(res)}`);

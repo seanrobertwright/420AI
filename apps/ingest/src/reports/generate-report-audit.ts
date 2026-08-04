@@ -70,10 +70,13 @@ export async function generateDataQualityAuditReport(
     const machines = await machineStatuses(tx, orgId);
     const declared = await declaredConnectorHealth(tx, orgId);
     const observed = await observedConnectorAggregates(tx, orgId);
+    // (session, connector) PAIRS, not bare session ids: the dry run's subjects must be the same
+    // ones the worksheet lists, and filtering on the session alone would re-admit connectors the
+    // deterministic sample did not select (and widen the decrypt fan-out past the stated ceiling).
     const targets = await recoverabilityTargets(
       tx,
       orgId,
-      sample.map((s) => s.sessionId),
+      sample.map((s) => ({ sessionId: s.sessionId, sourceConnector: s.sourceConnector })),
     );
     return {
       sessions,
