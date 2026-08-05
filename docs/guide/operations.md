@@ -427,7 +427,8 @@ background dispatch loop).
 `npm run reports:generate` walks every project (`GET /v1/projects`) and POSTs one report of each
 project type (`POST /v1/projects/:id/reports`) authenticated with an **API key** (`API_KEY`) — the
 machine/service credential (12.3), which is exactly the machine-to-machine path it exists for. It
-reads `INGEST_URL` + `API_KEY` from the environment, **times every request out at 30 s** so a
+reads `INGEST_URL` + `API_KEY` from the environment, **timeout-bounds every request** (30 s for the
+project sweep; **180 s for `--audit`**, which decrypts and re-parses a sample server-side) so a
 stalled ingest can't hang the job, prints one line per artifact, and **exits non-zero if any call
 fails** (so a cron wrapper can alert).
 
@@ -437,6 +438,21 @@ INGEST_URL=http://localhost:8420 API_KEY=<k420_...> npm run reports:generate
 # a subset and/or a single project (note the `--` so npm forwards the flags):
 npm run reports:generate -- --types project.efficiency,project.cost_over_time --project <uuid>
 ```
+
+**The M16 16.4 data-quality audit is a separate MODE, not a seventh report type** — it is org-scoped
+(every §5.1 metric is a statement about the capture pipeline, not about a project), so it POSTs once
+and does not iterate projects:
+
+```sh
+# the weekly capture-quality audit that fills .agents/research/weekly/YYYY-WW.md:
+INGEST_URL=http://localhost:8420 API_KEY=<k420_...> npm run reports:generate -- --audit
+# non-default window / reconciliation sample size:
+npm run reports:generate -- --audit --window-days 30 --sample-size 20
+```
+
+`--audit` is **mutually exclusive** with `--types` and `--project`, and combining them is a hard
+error rather than a silent ignore — as is passing `--window-days`/`--sample-size` without `--audit`.
+A cron line that mixes the two modes fails loudly instead of quietly generating the wrong thing.
 
 Generation is **non-idempotent by design** — each run appends a new versioned artifact (the inverse
 of the event-fingerprint upsert), so report history accrues. Schedule it via the OS, exactly like

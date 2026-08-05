@@ -39,7 +39,14 @@ export type ReportType =
   | "project.failed_tool_calls"
   | "project.context_waste"
   | "project.efficiency"
-  | "project.trend_anomalies";
+  | "project.trend_anomalies"
+  /**
+   * M16 16.4 — the only ORG-scoped report type (D-16.4-1). Its `scopeKind` is `"org"` and its
+   * `projectId` is null, both of which `report_artifacts` already permits (free-text `scope_kind`,
+   * nullable `project_id`), so it inherits listing, version history, export and search with no
+   * migration. Its renderer lives in `reports-audit.ts`, on its own version lineage.
+   */
+  | "org.data_quality_audit";
 
 /**
  * Renderer identity stamped on every artifact for replay/versioning (PRD §23).

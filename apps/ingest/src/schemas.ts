@@ -319,6 +319,31 @@ export const generateProjectReportBodySchema = {
   },
 } as const;
 
+/**
+ * POST body for the ORG-scoped data-quality audit (M16 16.4). Both fields optional.
+ *
+ * Defaults live at the route, not here: `windowDays: 7` (the §10 WEEKLY scorecard this report is
+ * shaped to fill) and `sampleSize: 10` (§4.4's "a sample of ten sessions per month"). Both are
+ * stored in the artifact's `params` so the row is self-describing and a later regeneration can be
+ * compared against the same window.
+ *
+ * The ceilings are bounds on real work rather than taste, and the bound is stated precisely because
+ * an imprecise one is worse than none: `sampleSize` selects N (session, connector) pairs, and the
+ * dry run expands each to its MACHINES, because raw records are per-machine and a session captured
+ * by two machines is two independent re-parse subjects. So the real decrypt scope is
+ * `sampleSize × machines-per-session`, not `sampleSize` — 50 bounds it at 50 per machine.
+ * `recoverabilityTargets` takes pairs rather than session ids specifically so the CONNECTOR axis
+ * cannot add a third multiplier.
+ */
+export const dataQualityAuditBodySchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    windowDays: { type: "integer", minimum: 1, maximum: 365 },
+    sampleSize: { type: "integer", minimum: 1, maximum: 50 },
+  },
+} as const;
+
 /** POST body for a session autopsy — `type` defaults to the only session type. */
 export const generateSessionReportBodySchema = {
   type: "object",

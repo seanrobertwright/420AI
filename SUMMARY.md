@@ -283,9 +283,11 @@ through the deferral-audit + scope conversation that produced M12/M13/M14. Full 
   browser extension **off** during Phase 1 so the known `claude-live`↔`claude-export` dedup gap cannot
   contaminate the <1% duplicate-rate metric) and D-16.0-1…3. Slices: **16.0** ✅ Truth + research
   scaffold · **16.1** ✅ Outcome label model + API · **16.2** ✅ Label capture (desktop) + review (dashboard) ·
-  **16.3** ✅ Capture health scorecard · **16.4** Data-quality audit report. The §7 P1.6 hero-workflow
-  evidence panel is deliberately **not** a slice — the hero workflow is selected from evidence in
-  research Phase 2 (weeks 5–8).
+  **16.3** ✅ Capture health scorecard · **16.4** ✅ Data-quality audit report. **All five slices have
+  shipped**; what remains before milestone sign-off is the §4.4 manual reconciliation hand-count,
+  which by design cannot be automated (it compares the archive against tool-native session files on
+  disk). The §7 P1.6 hero-workflow evidence panel is deliberately **not** a slice — the hero workflow
+  is selected from evidence in research Phase 2 (weeks 5–8).
 - **M17 — Cross-platform collectors.** macOS + Linux (V1/M11 are Windows-first) + portable signed
   installers/auto-update. _Most parallelizable — best candidate to run alongside another milestone._
 - **M18 — Advanced intelligence & automation.** Semantic/vector search, scheduled _analysis_,
@@ -954,6 +956,44 @@ enforced`, the sibling of `skipped ≠ passed`. Closes the Spike-6 hole: a cross
     ajv runs `removeAdditional: true`, so the field is silently stripped and the request succeeds.
     Milder than feared, still silent — so the `onError` seam and the archive-before-collector deploy
     order both stayed, and both behaviours are now tests rather than a comment.
+
+  - **16.4** ✅ **DONE `2026-08-04` (PR #78)** — Data-quality audit report. §7 P0.3's acceptance
+    criterion is that _"weekly scorecard values are **queryable rather than manually guessed**"_, and
+    the §5.1 table was previously seven numbers a human filled in by eyeballing the Monitor page.
+    **One org-scoped artifact** — `org.data_quality_audit`, `POST /v1/audit/data-quality` — through
+    the existing M7 pipeline (`projections → metrics stored verbatim → pure renderer →
+insertReportArtifact`). **No migration, no new table, no new dashboard page**: `report_artifacts`
+    already carried free-text `scope_kind` and a nullable `project_id`, so listing, version history,
+    compare and Markdown/JSON export were inherited for free (D-16.4-1).
+    **The organising rule is §5.1's closing sentence — _"Record unknown values explicitly. Do not
+    substitute zero for absent data"_ — and it is enforced STRUCTURALLY rather than carefully.** No
+    metric is a bare number: every one is `measured`, `sampled (n=N)`, or `unknown` **with a reason**,
+    and `ratioMetric` is the ONLY constructor, so a zero denominator yields `unknown` rather than a
+    passing ratio. That is 16.3's healthy-looking zero one layer up — `0 parse failures ÷ 0 raw
+records` and `0 ÷ 4000` are opposite facts. An HTTP test asserts the literal string `100%`
+    appears **nowhere** in an empty org's report.
+    **Two metrics ship permanently `unknown`, and that is the deliverable, not a gap** (D-16.4-4):
+    capture coverage needs a denominator (tool-native sessions that actually happened) that does not
+    exist inside the product, and attribution CORRECTNESS is not attribution coverage — the archive
+    can tell that `project_path` resolves to a workspace key, never that it resolves to the RIGHT
+    project. Rendering coverage under §5.1's "Project attribution" label would have been M16 Risk 2
+    in one line: the instrument grading itself with the easier question.
+    **The duplicate rate is measured on `raw_source_records`, not `events`** (D-16.4-3) — `events`
+    upserts by fingerprint, so a duplicate has already collapsed and a count there is a structural
+    zero (success by blindness). The grouping key omits `session_id` to match the fingerprint's
+    actual inputs. **Recoverability is a read-only TWIN of the re-parse engine** (D-16.4-6):
+    `reparseAll` upserts and GCs, so calling it to MEASURE would mutate the archive under audit;
+    `reparseDryRun` shares its reassemblers by `export` (one implementation, two callers) and only
+    compares fingerprint sets. An int test snapshots `events` + `raw_source_records` counts across a
+    run — the one assertion that would catch someone "simplifying" the dry run into a real re-parse.
+    **The connector verdict is IMPORTED from 16.3, never re-derived** (D-16.4-2): the pure derivation
+    CALLS `deriveCaptureHealth`, so no code path can produce a second, disagreeing number.
+    **A shipped-class bug found by the behavioural app-role test**: the ingest-lag read cast its
+    result `::bigint::int` like every count in the file, and a back-dated event overflowed `int4`
+    (`22003`), 500ing the whole audit. A count is bounded by the table; a DIFFERENCE between two
+    clocks is not. Only `rls.int.test.ts` caught it — the one suite whose fixtures sit a year before
+    `now` — which is the Task-14 argument in miniature: a structural grep is file-granular, and an
+    audit under a missing org context returns zeros that look like a quiet week rather than a bug.
 
 - [ ] **M17–M20 remain committed scope, unsequenced** (§3, PRD §25). Each still needs its own
       deferral-audit + scope conversation before it is executable. (**M20** is Cloud-hosted SaaS,

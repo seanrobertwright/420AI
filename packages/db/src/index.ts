@@ -231,6 +231,25 @@ export {
   declaredConnectorHealth,
   observedConnectorAggregates,
 } from "./repositories/capture-health.js";
+// M16 16.4 — the §5.1 data-quality aggregates. Every row type (`SessionQualityRow`,
+// `RawRecordTotals`, `DuplicateTotals`, `IngestLagRow`, `GitLinkageRow`,
+// `ReconciliationSampleRow`) lives in `@420ai/shared` next to the PURE
+// `deriveDataQualityMetrics` that consumes them — the classification is the part that must be
+// testable with no database, so the types belong beside it rather than here.
+export {
+  sessionQualityRows,
+  rawRecordTotals,
+  duplicateRawRecords,
+  ingestLagRows,
+  gitLinkageRows,
+  reconciliationSample,
+  recoverabilityTargets,
+} from "./repositories/data-quality.js";
+// M16 16.4 — §5.1 recoverability as a READ-ONLY twin of `reparseAll` (D-16.4-6). It decrypts a
+// bounded sample and compares fingerprint sets; it writes NOTHING, which an integration test pins
+// by snapshotting `events` and `raw_source_records` counts across a run.
+export { reparseDryRun } from "./repositories/recoverability.js";
+export type { RecoverabilityTarget } from "./repositories/recoverability.js";
 export { issueIngestToken, findMachineIdByToken } from "./repositories/tokens.js";
 export { ingestBatch } from "./repositories/ingest.js";
 export {

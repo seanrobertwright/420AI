@@ -34,6 +34,7 @@ import interpretationRoutes from "./routes/interpretations.js";
 import heartbeatRoutes from "./routes/heartbeat.js";
 import monitorRoutes from "./routes/monitor.js";
 import captureHealthRoutes from "./routes/capture-health.js";
+import dataQualityRoutes from "./routes/data-quality.js";
 import alertRoutes from "./routes/alerts.js";
 import catalogRoutes from "./routes/catalog.js";
 import connectorCatalogRoutes from "./routes/connector-catalog.js";
@@ -249,6 +250,7 @@ export function buildApp(opts: BuildAppOptions): FastifyInstance {
   app.register(heartbeatRoutes);
   app.register(monitorRoutes);
   app.register(captureHealthRoutes);
+  app.register(dataQualityRoutes);
   app.register(alertRoutes);
   app.register(catalogRoutes);
   app.register(connectorCatalogRoutes);

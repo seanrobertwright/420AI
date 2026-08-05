@@ -473,6 +473,10 @@ V1 report types:
 - session autopsy
 - project efficiency report
 - trend anomalies
+- data-quality audit (**org-scoped**, M16 16.4) — the §5.1 capture-quality metric table, with every
+  metric labelled `measured`, `sampled (n=N)` or `unknown` with a reason. It is the only report type
+  whose scope is the org rather than a project or a session, because every metric in it is a
+  statement about the capture pipeline, not about a project.
 
 Reports must support:
 
