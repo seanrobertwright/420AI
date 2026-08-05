@@ -33,8 +33,6 @@ function session(over: Partial<SessionQualityRow> = {}): SessionQualityRow {
     eventCount: 10,
     withTokens: 5,
     attributed: true,
-    firstTs: "2026-08-01T00:00:00.000Z",
-    lastTs: "2026-08-01T01:00:00.000Z",
     ...over,
   };
 }

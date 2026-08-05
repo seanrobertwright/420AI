@@ -130,7 +130,7 @@ export async function reparseDryRun(
 
     // THE ONE DELIBERATE DEVIATION FROM THE SILENT-LIBRARY RULE IN THIS SLICE, named so it is not
     // "fixed" later. Everywhere else a decrypt/key error THROWS and the entrypoint reports it —
-    // `reparseAll` does exactly that ten lines away. Here it is caught per row and recorded as
+    // `reparseAll` does exactly that (`reparse.ts:203-204` — a different file). Here it is caught per row and recorded as
     // `decrypt-error`, because a bounded audit over a sample is precisely the context where one
     // corrupt row must not take down the instrument that would have reported it. An audit report
     // that fails to generate BECAUSE it found a problem is the worst possible failure mode for

@@ -1,6 +1,5 @@
 import { and, eq, gte, or, sql } from "drizzle-orm";
 import type {
-  ConnectorDeclarationRow,
   GitLinkageRow,
   IngestLagRow,
   RawRecordTotals,
@@ -11,7 +10,6 @@ import type {
 import type { DbClient } from "../client.js";
 import {
   events,
-  machineConnectors,
   rawSourceRecords,
   searchDocuments,
   sessionGitLinks,
@@ -81,7 +79,11 @@ export async function sessionQualityRows(
       // §5.1's "usable model + token data" — BOTH, not either. A token count with no model cannot
       // be priced and cannot be compared across models, so it is not usable data.
       withTokens: sql<number>`count(*) filter (where ${events.tokens} is not null and ${events.model} is not null)::int`,
-      attributed: sql<boolean>`bool_or(exists (
+      // `boolean | null` — `bool_or` over an empty group is NULL. It cannot actually be empty here
+      // (the group exists because a row produced it), but the sibling read at `reconciliationSample`
+      // types the identical expression the same way, and one expression typed two different ways in
+      // one file is how a reader learns to distrust both. Coalesced at the boundary below.
+      attributed: sql<boolean | null>`bool_or(exists (
         select 1
         from ${workspaceKeys} wk
         join ${workspaces} w on w.id = wk.workspace_id
@@ -89,9 +91,10 @@ export async function sessionQualityRows(
           and w.org_id = ${orgId}
           and wk.project_key = ${events.projectPath}
       ))`,
-      // AGGREGATES over a `mode:"string"` column → Postgres TEXT, not ISO. See the header.
-      firstTs: sql<string | null>`min(${events.ts})`,
-      lastTs: sql<string | null>`max(${events.ts})`,
+      // NO `min(ts)`/`max(ts)` HERE. They were computed, `toIso`-normalized and typed, and read by
+      // nothing: `deriveDataQualityMetrics` consumes only the counts and `attributed`, and these
+      // rows never reach the stored `metrics`. (The same-named fields on `ReconciliationSampleRow`
+      // ARE live — that row IS stored — which is exactly why the absence is worth a note here.)
     })
     .from(events)
     .where(and(eq(events.orgId, orgId), gte(events.ts, sinceIso)))
@@ -103,12 +106,9 @@ export async function sessionQualityRows(
     sourceConnector: r.sourceConnector,
     eventCount: r.eventCount,
     withTokens: r.withTokens,
-    // `bool_or` over a group with no matching row is NULL, and a null `project_path` makes the
-    // EXISTS false rather than null — but coalesce anyway so the wire type is honest.
+    // A null `project_path` makes the EXISTS false rather than null, so this only collapses the
+    // empty-group NULL the type admits.
     attributed: r.attributed === true,
-    // MANDATORY, not optional and not already ISO — the `mode:"string"` aggregate rule.
-    firstTs: toIso(r.firstTs),
-    lastTs: toIso(r.lastTs),
   }));
 }
 
@@ -121,7 +121,7 @@ export async function sessionQualityRows(
  * double-counts the denominator and the ratio drifts silently downward as machines are added.
  *
  * `events.raw_record_id` is the CONNECTOR's record id — the same namespace as
- * `raw_source_records.source_record_id` (spike S1 confirmed the match; `reparse.ts:228-233` already
+ * `raw_source_records.source_record_id` (spike S1 confirmed the match; `reparse.ts:235-240` already
  * treats them as one namespace). It is NOT the raw row's uuid.
  *
  * The window bound is a `Date`: `ingested_at` is a PLAIN timestamptz, a different mechanism from
@@ -209,12 +209,16 @@ export async function duplicateRawRecords(
  * from two normalized strings: `max(e.ts)` is a `mode:"string"` aggregate (Postgres text) and
  * `max(r.ingested_at)` is a plain timestamptz. Subtracting them in Postgres, where both are real
  * `timestamptz` values, avoids parsing either representation by hand. The result is milliseconds,
- * and it is NULL when either side is missing — an UNMEASURABLE lag, never a zero one.
+ * and it is NULL when the raw side is missing — an UNMEASURABLE lag, never a zero one.
  *
- * A FULL OUTER-ish shape is deliberate: the raw side is keyed per-machine while events converge, so
- * a session is joined on (session_id, source_connector) and the aggregate is taken independently on
- * each side. A session with events but no surviving raw record (or vice versa) yields a null lag
- * and is reported as unmeasurable rather than dropped.
+ * THE JOIN IS A PLAIN `LEFT JOIN` DRIVEN BY THE EVENTS SIDE, and the asymmetry is worth naming
+ * because it is NOT symmetric: `ev` determines the row set, and the aggregate is taken
+ * independently on each side (raw is keyed per-machine while events converge, so both are grouped
+ * to (session_id, source_connector) first).
+ *
+ *   - events but no in-window raw record → one row, `lagMs: null`, reported as unmeasurable.
+ *   - raw but no in-window events        → NO ROW AT ALL. That gap is parse success's subject,
+ *                                          not freshness's, so it is deliberately not counted here.
  */
 export async function ingestLagRows(
   db: DbClient,
@@ -270,36 +274,17 @@ export async function ingestLagRows(
   }));
 }
 
-/**
- * Every DECLARED connector fidelity in the org, one row per (machine, connector).
+/*
+ * THERE IS DELIBERATELY NO `connectorDeclarations` READ HERE.
  *
- * NOT windowed, and that is deliberate: a declaration is the collector's CURRENT statement about
- * what a connector can do, not an event that happened inside the window. The pure layer reduces
- * several machines' declarations of the same connector to one verdict (`summarizeDeclarations`).
- *
- * `connector_id` is not returned alone — the same connector declared by two machines yields two
- * rows on purpose, so the reduction rule stays visible and testable in TS rather than being
- * silently decided by a `DISTINCT ON` here.
+ * The token/liveness declarations this module's pure layer needs are already carried by 16.3's
+ * `declaredConnectorHealth` (capture-health.ts), whose `DeclaredConnectorRow` is a strict superset
+ * of the three fields `summarizeDeclarations` reads — and the orchestrator calls that read anyway,
+ * in the same transaction, for the capture-health roll-up. A second read of `machine_connectors`
+ * would be a redundant round-trip AND a second place for the two to disagree, which is D-16.4-2's
+ * argument applied to an input rather than a verdict. The orchestrator projects the three fields
+ * from `declared` instead; see `generate-report-audit.ts`.
  */
-export async function connectorDeclarations(
-  db: DbClient,
-  orgId: string,
-): Promise<ConnectorDeclarationRow[]> {
-  const rows = await db
-    .select({
-      connectorId: machineConnectors.connectorId,
-      tokens: machineConnectors.tokens,
-      liveness: machineConnectors.liveness,
-    })
-    .from(machineConnectors)
-    .where(eq(machineConnectors.orgId, orgId))
-    .orderBy(machineConnectors.connectorId);
-  return rows.map((r) => ({
-    connectorId: r.connectorId,
-    tokens: r.tokens,
-    liveness: r.liveness,
-  }));
-}
 
 /**
  * Distinct (session, git-link status) pairs for sessions with activity in the window.
@@ -376,7 +361,7 @@ export async function reconciliationSample(
     models: string[] | null;
     cost_confidences: string[] | null;
     indexed: boolean;
-    project_path: string | null;
+    project_paths: string[] | null;
     attributed: boolean | null;
     first_ts: string | null;
     last_ts: string | null;
@@ -400,15 +385,25 @@ export async function reconciliationSample(
       count(e.fingerprint)::int as event_count,
       count(*) filter (where e.tokens is not null and e.model is not null)::int as events_with_tokens,
       coalesce(array_agg(distinct e.model) filter (where e.model is not null), '{}') as models,
+      -- The filter guards the EXTRACTED value, not e.cost. Guarding "e.cost is not null" lets a
+      -- cost object written by an older shape (no confidence key) contribute a NULL ELEMENT to
+      -- the array, which the declared type says cannot happen and which the renderer's join(", ")
+      -- then prints as an unlabelled blank in the §4.4 check-5 cell — the one cell whose job is to
+      -- say the cost figure carries a label.
       coalesce(array_agg(distinct e.cost ->> 'confidence')
-        filter (where e.cost is not null), '{}') as cost_confidences,
+        filter (where e.cost ->> 'confidence' is not null), '{}') as cost_confidences,
       exists (
         select 1 from ${searchDocuments} sd
         where sd.org_id = ${orgId}
           and sd.entity_type = 'session'
           and sd.entity_id = e.session_id
       ) as indexed,
-      min(e.project_path) as project_path,
+      -- ALL distinct paths, not min(...). project_path is not in the GROUP BY, so an aggregate
+      -- would display one arbitrary path while attributed below is a bool_or over all of them —
+      -- the worksheet cell and its verdict could contradict each other, and §4.4 check 4 is a human
+      -- judging "is this the RIGHT project" against exactly that cell.
+      coalesce(array_agg(distinct e.project_path)
+        filter (where e.project_path is not null), '{}') as project_paths,
       bool_or(exists (
         select 1 from ${workspaceKeys} wk
         join ${workspaces} w on w.id = wk.workspace_id
@@ -437,7 +432,7 @@ export async function reconciliationSample(
     // honest treatment (§5.1: record what is there, do not substitute).
     costConfidences: (r.cost_confidences ?? []) as ReconciliationSampleRow["costConfidences"],
     indexed: r.indexed === true,
-    projectPath: r.project_path,
+    projectPaths: r.project_paths ?? [],
     attributed: r.attributed === true,
     // MANDATORY — `mode:"string"` aggregates are Postgres text, not ISO.
     firstTs: toIso(r.first_ts),

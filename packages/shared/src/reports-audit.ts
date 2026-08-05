@@ -7,9 +7,22 @@ import type { DataQualityMetrics, MetricValue } from "./data-quality.js";
  * (`generatedAt` is caller-injected), Markdown TABLES are the source of truth and the one Mermaid
  * block is explicitly labelled illustrative.
  *
- * The output is shaped to be copied straight into `.agents/research/weekly/YYYY-WW.md` — the §10
- * weekly scorecard's "Capture health" block has seven rows, and the §5.1 table below emits exactly
- * those rows plus the evidence behind each one.
+ * The output feeds `.agents/research/weekly/YYYY-WW.md`, but NOT one-table-to-one-table, and the
+ * difference matters because the template is an operator instruction. §10's "Capture health" block
+ * and §5.1's metric table are two different seven-row lists that only partly overlap:
+ *
+ *   §10 row                      ← where it comes from in this report
+ *   ---------------------------------------------------------------------------------------------
+ *   Captured sessions            ← the header bullet "Sessions in window", NOT the §5.1 table
+ *   Capture coverage (audit)     ← §5.1 table (always `unknown` — answer it from the worksheet)
+ *   Correct project attribution  ← §5.1 table, the CORRECTNESS row (also always `unknown`)
+ *   Token completeness           ← §5.1 table
+ *   Parse success                ← §5.1 table
+ *   Duplicate rate               ← §5.1 table
+ *   Stale/unhealthy connectors   ← "Capture health (from 16.3)" verdict counts, NOT the §5.1 table
+ *
+ * The §5.1 table additionally carries `Project attribution — coverage`, `Sync freshness` and
+ * `Recoverability`, for which §10 has no slot at all.
  *
  * §5.3 IS WHY EVERY ROW CARRIES ITS BASIS AND ITS WINDOW: "No recommendation presented without its
  * source metrics, data range, and confidence caveat." A bare percentage in a weekly scorecard four
@@ -267,7 +280,10 @@ export function renderDataQualityAuditReport(input: DataQualityAuditInput): stri
       "raw rows — the same `(connector, source_record_id)` shipped by two machines. It does not see " +
       "duplicates the collector suppressed at its queue cursor before upload, and it does not see " +
       "the cross-connector gap above (a different connector yields a different fingerprint, so two " +
-      "legitimate-looking sessions result). It cannot be measured on `events` at all: that table " +
+      "legitimate-looking sessions result). It also counts copies only INSIDE this window, so a " +
+      "second machine backfilling records whose first copy landed before the window start reports " +
+      "one copy and is invisible here — widen the window to see it. It cannot be measured on " +
+      "`events` at all: that table " +
       "upserts by fingerprint, so a duplicate has already collapsed before any query runs — a count " +
       "there is a structural zero, i.e. success by blindness.",
   );

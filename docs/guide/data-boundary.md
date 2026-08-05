@@ -240,8 +240,9 @@ surfaced in the manifest and header rather than being silent.
 ### The data-quality audit decrypts a bounded sample, and stores none of it (M16 16.4)
 
 `POST /v1/audit/data-quality` generates an org-scoped report artifact of the capture-quality
-metrics. Six of its seven metrics read **plaintext metadata only** — counts, timestamps, model
-names, connector ids, `project_path` — and never touch an encrypted column.
+metrics. Only **one** of its metrics, recoverability, reads an encrypted column at all. Every other
+row is derived from **plaintext metadata** — counts, timestamps, model names, connector ids,
+`project_path` — and never touches one.
 
 The seventh, **recoverability**, is the one place in the reporting layer that decrypts. It answers
 "can this archive still re-derive its events from its raw records?", which cannot be answered
@@ -256,15 +257,27 @@ without reading the raw records. Concretely, per sampled session it:
 Three properties bound it, and each is enforced rather than intended:
 
 - **Bounded.** Only the sampled sessions are decrypted — 10 by default, and the request schema caps
-  `sampleSize` at 50 (`apps/ingest/src/schemas.ts`). It is never an archive-wide decrypt.
-- **Nothing decrypted is stored or rendered.** The artifact's `metrics` and `markdown` contain
-  counts and session ids only. No message body, no tool payload, no file content, and no decrypted
-  text of any kind reaches the report, the search index, or the export endpoints above.
+  `sampleSize` at 50 (`apps/ingest/src/schemas.ts:330-345`). One dry run is performed per (session,
+  connector, **machine**), because raw records are per-machine, so the decrypt fan-out is the sample
+  times the machines holding it. It is never an archive-wide decrypt.
+- **Nothing DECRYPTED is stored or rendered.** No message body, no tool payload, no file content and
+  no decrypted text of any kind reaches the report, the search index or the export endpoints above —
+  the recoverability rows keep four integers (`storedEvents`, `reparsedEvents`, `missing`, `extra`)
+  plus the identifiers of what was checked.
+
+  **This is not the same as saying the artifact holds only counts**, and the difference matters
+  before you pair. Like every report artifact, it carries plaintext metadata: the rendered Markdown
+  includes machine names, connector ids, model names, cost-confidence labels and the connector's
+  **last error message** (which, per §1, may embed a home-relativized file path), and the stored
+  `metrics` embeds the reconciliation sample including each sampled session's `project_path` values
+  — which, per §3, may name a client, an employer or an unreleased product. Treat the audit artifact
+  as exactly as sensitive as any other report you export.
+
 - **It writes nothing at all.** `reparseDryRun` performs no insert, update or delete — it is a
   read-only twin of the M13 re-parse engine, deliberately kept separate so measuring recoverability
   cannot mutate the archive it is measuring. An integration test snapshots the `events` and
   `raw_source_records` row counts across a run and asserts both are unchanged
-  (`packages/db/src/repositories/recoverability.int.test.ts`).
+  (`packages/db/src/repositories/recoverability.int.test.ts:206`).
 
 The decrypt happens **server-side only**. The browser never receives raw payloads from this path;
 it receives the rendered Markdown, on the same terms as every other report artifact.

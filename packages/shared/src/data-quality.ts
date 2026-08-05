@@ -106,8 +106,12 @@ export interface SessionQualityRow {
   withTokens: number;
   /** True when `project_path` resolves to a `workspace_keys` row owned by THIS org. */
   attributed: boolean;
-  firstTs: string | null;
-  lastTs: string | null;
+  /**
+   * NO `firstTs`/`lastTs`. They were carried here, `toIso`-normalized and typed, and read by
+   * nothing — the derivation below consumes only the counts and `attributed`, and these rows never
+   * reach the stored `metrics`. Session timestamps that ARE needed live on
+   * `ReconciliationSampleRow`, which is stored, and on `IngestLagRow`, which computes lag in SQL.
+   */
 }
 
 /** Parse success, counted on raw ROWS (never a join — a join double-counts, spike S1). */
@@ -174,7 +178,16 @@ export interface ReconciliationSampleRow {
   costConfidences: CostConfidence[];
   /** §4.4 check 6 — the session is visible in the search surface. */
   indexed: boolean;
-  projectPath: string | null;
+  /**
+   * EVERY distinct `project_path` in the group, not one of them.
+   *
+   * `project_path` is not in the GROUP BY, so an aggregate would print one arbitrary path while
+   * `attributed` below is a `bool_or` over ALL of them — the displayed cell and the verdict could
+   * then contradict each other. §4.4 check 4 asks a human to judge "is this the RIGHT project"
+   * against what is displayed, so a session that moved between workspaces must show that it moved
+   * rather than hide it behind whichever path sorted first.
+   */
+  projectPaths: string[];
   /** Attribution COVERAGE only. Whether it is the RIGHT project is check 4, and human-only. */
   attributed: boolean;
   firstTs: string | null;
@@ -229,7 +242,10 @@ export interface DataQualityInputs {
 
 // --- Output ---------------------------------------------------------------
 
-/** The seven §5.1 rows, plus the two that §5.1's single "Project attribution" row conflates. */
+/**
+ * §5.1's seven rows, with its single "Project attribution" row split into the two metrics it
+ * conflates (D-16.4-4) — eight fields in total, not nine.
+ */
 export interface DataQualityMetricTable {
   captureCoverage: MetricValue;
   attributionCoverage: MetricValue;
@@ -495,6 +511,15 @@ export function deriveDataQualityMetrics(
         recoverabilityRollup.attempted += 1;
         if (r.ok) recoverabilityRollup.ok += 1;
         break;
+      default: {
+        // EXHAUSTIVENESS GUARD. Without it a sixth `skippedReason` compiles clean and its rows
+        // count toward NOTHING — not `attempted`, not any skip bucket — so the rollup's parts
+        // quietly stop summing to `rows.length` with no error anywhere. That is the same
+        // silently-dropped-row failure the `no-raw-records` reason exists to prevent, one layer up.
+        const unhandled: never = r.skippedReason;
+        void unhandled;
+        break;
+      }
     }
   }
   const recoverability = ratioMetric(

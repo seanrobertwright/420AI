@@ -21,9 +21,17 @@ export async function POST(req: NextRequest) {
     contentType: "application/json",
     // 15.10's optional signal, threaded here where every pre-15.10 sibling omits it: this is the
     // most expensive JSON hop in the dashboard (it decrypts and re-parses a sample), so a client
-    // that navigates away should not leave it running to completion. Safe because the artifact
-    // commits only at the very END of generation — an aborted hop cannot leave a half-written
-    // report, only an unwritten one.
+    // that navigates away should not leave THIS hop's socket open.
+    //
+    // WHAT IT DOES NOT DO — stated precisely, because the obvious reading is wrong: aborting here
+    // cancels the RESPONSE, not the work. Ingest installs no disconnect handling, so
+    // `generateDataQualityAuditReport` runs to completion and `insertReportArtifact` COMMITS.
+    // `scripts/generate-reports.mjs` states the same mechanic for the same endpoint from the cron
+    // side. The user-visible consequence is real and worth knowing: navigate away mid-generation,
+    // see no artifact, click Generate again, and two versions now exist for one intended run
+    // (generation is deliberately non-idempotent). What IS guaranteed is that the write is a
+    // single terminal append, so an aborted hop yields a committed-but-unreported artifact —
+    // never a half-written one.
     signal: req.signal,
   });
 }

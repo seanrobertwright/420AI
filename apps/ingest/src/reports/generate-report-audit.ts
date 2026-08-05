@@ -1,7 +1,6 @@
 import type { Db } from "@420ai/db";
 import {
   withOrg,
-  connectorDeclarations,
   declaredConnectorHealth,
   duplicateRawRecords,
   gitLinkageRows,
@@ -21,6 +20,7 @@ import {
   deriveDataQualityMetrics,
   deriveMachineStatus,
   renderDataQualityAuditReport,
+  type RecoverabilityRow,
 } from "@420ai/shared";
 
 /**
@@ -34,9 +34,11 @@ import {
  *
  * IT DECRYPTS, WHICH NO OTHER ORCHESTRATOR DOES, and the boundary is worth stating here rather than
  * only in the doc: `reparseDryRun` decrypts a bounded SAMPLE of raw records server-side to re-parse
- * them, then keeps only fingerprint COUNTS. No decrypted content reaches `metrics`, the rendered
- * Markdown, or the search index (docs/guide/data-boundary.md §5.1 says the same thing where a
- * design partner will read it).
+ * them, then keeps only fingerprint COUNTS. No DECRYPTED content reaches `metrics`, the rendered
+ * Markdown, or the search index — though like every report artifact both do carry plaintext
+ * metadata (project paths, model names, machine names, connector error strings). See
+ * docs/guide/data-boundary.md §5 ("The data-quality audit decrypts a bounded sample"), which states
+ * the same distinction where a design partner will read it.
  */
 export async function generateDataQualityAuditReport(
   db: Db, // UNWRAPPED. `insertReportArtifact` re-opens a transaction per retry attempt (D-15.3-6).
@@ -62,7 +64,6 @@ export async function generateDataQualityAuditReport(
     const rawTotals = await rawRecordTotals(tx, orgId, since);
     const duplicates = await duplicateRawRecords(tx, orgId, since);
     const lag = await ingestLagRows(tx, orgId, sinceIso, since);
-    const declarations = await connectorDeclarations(tx, orgId);
     const gitLinks = await gitLinkageRows(tx, orgId, sinceIso);
     const sample = await reconciliationSample(tx, orgId, sinceIso, params.sampleSize);
     // 16.3's INPUTS, not its conclusions — `deriveDataQualityMetrics` calls `deriveCaptureHealth`
@@ -70,6 +71,17 @@ export async function generateDataQualityAuditReport(
     const machines = await machineStatuses(tx, orgId);
     const declared = await declaredConnectorHealth(tx, orgId);
     const observed = await observedConnectorAggregates(tx, orgId);
+    // TOKEN/LIVENESS DECLARATIONS ARE PROJECTED FROM 16.3's ROWS, not fetched again. `declared` is
+    // already one row per (machine, connector) over the whole org and `DeclaredConnectorRow` is a
+    // strict superset of what `summarizeDeclarations` reads — so a second read of
+    // `machine_connectors` in this same transaction would be a redundant round-trip AND a second
+    // place for the two to disagree. Projected explicitly rather than passed through, so 16.4's
+    // input contract stays independent of 16.3's row shape.
+    const declarations = declared.map((d) => ({
+      connectorId: d.connectorId,
+      tokens: d.tokens,
+      liveness: d.liveness,
+    }));
     // (session, connector) PAIRS, not bare session ids: the dry run's subjects must be the same
     // ones the worksheet lists, and filtering on the session alone would re-admit connectors the
     // deterministic sample did not select (and widen the decrypt fan-out past the stated ceiling).
@@ -93,12 +105,47 @@ export async function generateDataQualityAuditReport(
     };
   });
 
-  // THE DRY RUN GETS ITS OWN `withOrg`, deliberately. It decrypts and re-parses, so it is a bounded
-  // second pass rather than another read folded into the block above — keeping the (fast, purely
-  // aggregate) transaction above short instead of holding one connection open across N re-parses.
-  const recoverability = await withOrg(db, orgId, role, (tx) =>
-    reparseDryRun(tx, orgId, inputs.targets),
-  );
+  // ONE TRANSACTION PER TARGET, not one for the whole dry run — and this is a real bound, not a
+  // tidiness preference. A `withOrg` holds a pooled connection for its whole body; the dry run's
+  // body is CPU-bound (decrypt → reassemble → re-parse) with queries only at the ends, so wrapping
+  // all N targets in one transaction parks a connection in `idle in transaction` for the entire
+  // run. `createDb` builds `new Pool({ connectionString })` — pg defaults, so `max: 10` and NO
+  // `connectionTimeoutMillis` — and this route is not rate-limited (`global: false`), so a handful
+  // of concurrent audits would exhaust the pool and every other ingest request would then block in
+  // `pool.connect()` forever: no error, no log, no 503. The dry run needs no cross-target
+  // atomicity (it writes nothing and each target is independent), so per-target transactions cost
+  // nothing and return the connection between targets.
+  const recoverability: RecoverabilityRow[] = [];
+  for (const target of inputs.targets) {
+    const [row] = await withOrg(db, orgId, role, (tx) => reparseDryRun(tx, orgId, [target]));
+    if (row) recoverability.push(row);
+  }
+
+  // A SAMPLED PAIR THAT PRODUCED NO TARGET IS REPORTED, NOT DROPPED. `recoverabilityTargets`
+  // selects FROM `raw_source_records`, so a sampled (session, connector) with no surviving raw row
+  // yields no target at all — and without this it would vanish from `rows`, from `attempted` and
+  // from every skip bucket, rendering as though it had never been sampled. That silently discards
+  // the WORST possible recoverability outcome: events that exist with no raw record behind them are
+  // 0% recoverable, which is precisely the finding this metric exists to surface. It is also the
+  // row `no-raw-records` was written for — the branch inside `reparseDryRun` cannot be reached,
+  // because targets are by construction selected from raw.
+  const reached = new Set(recoverability.map((r) => `${r.sessionId}\u0000${r.sourceConnector}`));
+  for (const s of inputs.sample) {
+    const key = `${s.sessionId}\u0000${s.sourceConnector}`;
+    if (reached.has(key)) continue;
+    reached.add(key);
+    recoverability.push({
+      sessionId: s.sessionId,
+      sourceConnector: s.sourceConnector,
+      machineId: s.machineId ?? "(unknown)",
+      storedEvents: 0,
+      reparsedEvents: 0,
+      missing: 0,
+      extra: 0,
+      ok: false,
+      skippedReason: "no-raw-records",
+    });
+  }
 
   const metrics = deriveDataQualityMetrics(
     {

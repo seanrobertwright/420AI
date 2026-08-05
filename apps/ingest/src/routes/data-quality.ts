@@ -20,8 +20,9 @@ interface AuditBody {
  * GATED AT `member`, NOT `viewer`, and that is measured rather than chosen. Spike F ran a `viewer`
  * insert against `report_artifacts` under the non-owner app role and it failed with `new row
  * violates row-level security policy "report_artifacts_role_write_ins"` — so a `viewer` gate here
- * would return a 500 instead of a clean 403. Every other report route gates at `member` for the
- * same reason.
+ * would return a 500 instead of a clean 403. Every other report GENERATION route gates at `member`
+ * for the same reason (`routes/reports.ts:67`, `:168`) — the report READ routes gate at `viewer`
+ * (`:198`, `:219`) and can, because they never insert.
  *
  * `principal.role`, NOT `SERVICE_ROLE`. The 15.4 test is "whose action is this?", and an operator
  * generating their own capture audit is the CALLER's action — unlike `routes/monitor.ts`, whose GET

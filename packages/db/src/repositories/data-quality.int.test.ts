@@ -12,8 +12,8 @@ import {
   workspaces,
 } from "../schema.js";
 import { ensurePersonalOrg } from "./organizations.js";
+import { declaredConnectorHealth } from "./capture-health.js";
 import {
-  connectorDeclarations,
   duplicateRawRecords,
   gitLinkageRows,
   ingestLagRows,
@@ -59,9 +59,12 @@ describe.skipIf(!TEST_URL || !APP_URL)("M16 16.4 data quality (two-role integrat
   let owner: ReturnType<typeof createDb>;
   let appRole: ReturnType<typeof createDb>;
   let orgA: string;
+  let orgB: string;
   let userA: string;
+  let userB: string;
   let machineA: string;
   let machineA2: string;
+  let machineB: string;
 
   beforeAll(() => {
     owner = createDb(TEST_URL!);
@@ -81,22 +84,31 @@ describe.skipIf(!TEST_URL || !APP_URL)("M16 16.4 data quality (two-role integrat
           ingest_tokens, pairing_codes, machines, memberships, organizations, users
           RESTART IDENTITY CASCADE`,
     );
-    const [seeded] = await owner.db
+    const seeded = await owner.db
       .insert(users)
-      .values([{ email: "a@example.com" }])
-      .returning({ id: users.id });
-    userA = seeded!.id;
+      .values([{ email: "a@example.com" }, { email: "b@example.com" }])
+      .returning({ id: users.id, email: users.email });
+    userA = seeded.find((u) => u.email === "a@example.com")!.id;
+    userB = seeded.find((u) => u.email === "b@example.com")!.id;
     orgA = await ensurePersonalOrg(owner.db, userA, "a@example.com");
+    // A SECOND TENANT, seeded in every test. Without one, every "does not leak across orgs"
+    // assertion below is vacuous — there is nothing to leak — and the explicit `eq(x.orgId, orgId)`
+    // predicates in `data-quality.ts` could all be deleted with the suite still green, because
+    // `withOrg` filters on its own. See the cross-tenant test at the bottom, which runs on the
+    // OWNER handle (RLS inert) precisely so the predicates are the only thing under test.
+    orgB = await ensurePersonalOrg(owner.db, userB, "b@example.com");
 
     const inserted = await owner.db
       .insert(machines)
       .values([
         { orgId: orgA, userId: userA, name: "machine-a" },
         { orgId: orgA, userId: userA, name: "machine-a2" },
+        { orgId: orgB, userId: userB, name: "machine-b" },
       ])
       .returning({ id: machines.id, name: machines.name });
     machineA = inserted.find((m) => m.name === "machine-a")!.id;
     machineA2 = inserted.find((m) => m.name === "machine-a2")!.id;
+    machineB = inserted.find((m) => m.name === "machine-b")!.id;
   });
 
   /**
@@ -193,12 +205,18 @@ describe.skipIf(!TEST_URL || !APP_URL)("M16 16.4 data quality (two-role integrat
     expect(rows.map((r) => r.sourceConnector)).toEqual(["claude-code", "codex-cli"]);
   });
 
+  /**
+   * The `toIso` coverage lives on `reconciliationSample`, which is where the only surviving
+   * `min/max(events.ts)` aggregates are — `sessionQualityRows` no longer selects them, because
+   * nothing read them. This is still the M5/M9 regression test: assert the ISO form, so a dropped
+   * `toIso` fails here rather than shipping Postgres text into a stored artifact.
+   */
   it('normalizes min/max(events.ts) through toIso — a `mode:"string"` aggregate is Postgres TEXT', async () => {
     await ingest(
       machineA,
       batch({ session: "s1", connector: "claude-code", rawId: "r1", ts: INSIDE }),
     );
-    const [row] = await asApp((tx) => sessionQualityRows(tx, orgA, SINCE_ISO));
+    const [row] = await asApp((tx) => reconciliationSample(tx, orgA, SINCE_ISO, 5));
     // Spike S4 measured the raw form: `"2026-08-02 09:00:00+00"` — space-separated, no T, no Z.
     expect(row!.firstTs).toBe(INSIDE);
     expect(row!.lastTs).toBe(INSIDE);
@@ -289,7 +307,15 @@ describe.skipIf(!TEST_URL || !APP_URL)("M16 16.4 data quality (two-role integrat
     expect(stored).toBe(3);
   });
 
-  it("resolves token eligibility across exact / none / undeclared connectors", async () => {
+  /**
+   * There is no `connectorDeclarations` read: the orchestrator PROJECTS `connectorId`/`tokens`/
+   * `liveness` out of 16.3's `declaredConnectorHealth`, which it already calls in the same
+   * transaction. This test pins the property that makes that projection legal — that 16.3's row is
+   * a strict superset — so deleting a field from `DeclaredConnectorRow` fails here rather than
+   * silently making every connector undeclared (which routes EVERY session to the `unknown` bucket
+   * and would read as a quiet week rather than a bug).
+   */
+  it("declaredConnectorHealth carries the token/liveness fields 16.4 projects from it", async () => {
     await owner.db.insert(machineConnectors).values([
       declaration(orgA, machineA, "claude-code", "exact", "streaming"),
       declaration(orgA, machineA, "gemini-cli", "none", "near-real-time"),
@@ -298,7 +324,12 @@ describe.skipIf(!TEST_URL || !APP_URL)("M16 16.4 data quality (two-role integrat
       declaration(orgA, machineA2, "claude-code", "none", "streaming"),
     ]);
 
-    const rows = await asApp((tx) => connectorDeclarations(tx, orgA));
+    const declared = await asApp((tx) => declaredConnectorHealth(tx, orgA));
+    const rows = declared.map((d) => ({
+      connectorId: d.connectorId,
+      tokens: d.tokens,
+      liveness: d.liveness,
+    }));
     expect(rows).toHaveLength(3);
     expect(
       rows
@@ -306,6 +337,7 @@ describe.skipIf(!TEST_URL || !APP_URL)("M16 16.4 data quality (two-role integrat
         .map((r) => r.tokens)
         .sort(),
     ).toEqual(["exact", "none"]);
+    expect(rows.every((r) => r.liveness !== undefined)).toBe(true);
     // `mystery-connector` is deliberately absent — an undeclared connector has NO row, which is
     // what routes its sessions to the pure layer's third bucket.
     expect(rows.some((r) => r.connectorId === "mystery-connector")).toBe(false);
@@ -361,6 +393,30 @@ describe.skipIf(!TEST_URL || !APP_URL)("M16 16.4 data quality (two-role integrat
     const rows = await asApp((tx) => ingestLagRows(tx, orgA, SINCE_ISO, SINCE));
     expect(rows).toHaveLength(1);
     expect(rows[0]!.lagMs).toBe(30 * 60 * 1000);
+  });
+
+  /**
+   * THE NULL BRANCH, which the title above promises and nothing exercised. The whole
+   * `syncFreshness.unknown` bucket rests on the `case when raw.last_ingested_at is null` arm of the
+   * LEFT JOIN, so without this the arm could be deleted and every suite stays green — while the
+   * metric silently reclassified unmeasurable sessions as fresh (lag 0).
+   *
+   * Events INSIDE the window, raw record ingested BEFORE it: the `raw` CTE filters it out, the left
+   * join finds nothing, and the lag is honestly unmeasurable rather than zero.
+   */
+  it("reports a NULL lag — not zero — when no raw record falls inside the window", async () => {
+    await ingest(
+      machineA,
+      batch({ session: "s1", connector: "claude-code", rawId: "r1", ts: INSIDE }),
+    );
+    await owner.db.execute(
+      sql`update raw_source_records set ingested_at = ${new Date(OUTSIDE)}
+          where source_record_id = 'r1'`,
+    );
+
+    const rows = await asApp((tx) => ingestLagRows(tx, orgA, SINCE_ISO, SINCE));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.lagMs).toBeNull();
   });
 
   it("clamps a negative lag to zero rather than reporting a nonsense negative", async () => {
@@ -486,11 +542,61 @@ describe.skipIf(!TEST_URL || !APP_URL)("M16 16.4 data quality (two-role integrat
       eventCount: 2, // check 3
       eventsWithTokens: 2, // check 3
       indexed: false, // check 6 — nothing indexed this session yet
-      projectPath: "/repo",
     });
+    expect(row!.projectPaths).toEqual(["/repo"]);
     expect(row!.models).toEqual(["claude-sonnet-5"]);
     // MANDATORY normalization — `min(ts)`/`max(ts)` are Postgres text, not ISO.
     expect(row!.firstTs).toBe(INSIDE);
+  });
+
+  /**
+   * `indexed: false` on its own does not discriminate — the `exists(...)` could be hardcoded
+   * `false`, name the wrong `entity_type`, or carry the wrong org predicate, and the assertion
+   * above still passes. Only the TRUE direction tests the subquery.
+   */
+  it("reports check 6 as indexed once a search document exists for the session", async () => {
+    await ingest(
+      machineA,
+      batch({ session: "s1", connector: "claude-code", rawId: "r1", ts: INSIDE }),
+    );
+    // `user_id` AND `redaction_version` are both NOT NULL — the same 23502 class that bit the
+    // planning spikes on `workspaces.user_id` / `workspace_keys.user_id`.
+    await owner.db.execute(sql`
+      insert into search_documents
+        (org_id, user_id, entity_type, entity_id, title, body, redaction_version)
+      values (${orgA}, ${userA}, 'session', 's1', 's1', 'body', 'test')`);
+
+    const [row] = await asApp((tx) => reconciliationSample(tx, orgA, SINCE_ISO, 5));
+    expect(row!.indexed).toBe(true);
+
+    // …and it is ORG-scoped: the same session id indexed under org B must not light up org A.
+    const [rowB] = await asApp((tx) => reconciliationSample(tx, orgB, SINCE_ISO, 5));
+    expect(rowB).toBeUndefined();
+  });
+
+  /**
+   * §4.4 check 5 asks whether the cost figure carries a confidence label, and the extraction
+   * (`cost ->> 'confidence'` out of jsonb) is otherwise unexercised at the DB layer — the renderer
+   * test uses a hand-built fixture. The second event deliberately carries a cost object with NO
+   * `confidence` key: that is the row that used to contribute a NULL array element, which the
+   * declared type says cannot happen and which rendered as an unlabelled blank.
+   */
+  it("extracts cost confidence labels, and never a null element for a cost without one", async () => {
+    await ingest(
+      machineA,
+      batch({ session: "s1", connector: "claude-code", rawId: "r1", ts: INSIDE }),
+    );
+    await owner.db.execute(sql`
+      insert into events (fingerprint, org_id, source_connector, parser_version, raw_record_id,
+                          event_index, event_type, session_id, ts, cost)
+      values ('fp-cost-exact', ${orgA}, 'claude-code', 'claude-code@1', 'r1', 80, 'cost.estimated',
+              's1', ${INSIDE}, '{"confidence":"exact"}'::jsonb),
+             ('fp-cost-nolabel', ${orgA}, 'claude-code', 'claude-code@1', 'r1', 81, 'cost.estimated',
+              's1', ${INSIDE}, '{"amount":1}'::jsonb)`);
+
+    const [row] = await asApp((tx) => reconciliationSample(tx, orgA, SINCE_ISO, 5));
+    expect(row!.costConfidences).toEqual(["exact"]);
+    expect(row!.costConfidences.every((c) => c !== null)).toBe(true);
   });
 
   it("returns one recoverability target per (session, connector, MACHINE) — raw is per-machine", async () => {
@@ -533,7 +639,17 @@ describe.skipIf(!TEST_URL || !APP_URL)("M16 16.4 data quality (two-role integrat
     expect(targets[0]!.sourceConnector).toBe("claude-code");
   });
 
-  it("returns nothing for an empty session list without touching the database", async () => {
+  /**
+   * SEEDS FIRST, DELIBERATELY. Asserting `[]` against an empty table passes with the early return
+   * deleted — `or()` over an empty array is `undefined`, so the predicate would degrade to "every
+   * raw record in this org", which is also `[]` when nothing was ingested. With a row present, the
+   * degraded version returns it and this test fails, which is the only version worth having.
+   */
+  it("returns nothing for an empty sample, even when the org HAS raw records", async () => {
+    await ingest(
+      machineA,
+      batch({ session: "s1", connector: "claude-code", rawId: "r1", ts: INSIDE }),
+    );
     expect(await asApp((tx) => recoverabilityTargets(tx, orgA, []))).toEqual([]);
   });
 
@@ -551,6 +667,83 @@ describe.skipIf(!TEST_URL || !APP_URL)("M16 16.4 data quality (two-role integrat
     // …and the owner CAN see it, so the zero above is the POLICY and not an empty table.
     const truth = await owner.db.execute<{ n: number }>(sql`select count(*)::int as n from events`);
     expect(truth.rows[0]!.n).toBe(1);
+  });
+
+  /**
+   * THE EXPLICIT `orgId` PREDICATES, ON THEIR OWN — run under the OWNER handle, against which RLS
+   * is INERT (it holds `rolbypassrls`). Under `withOrg` the policy filters first, so an app-role
+   * assertion cannot tell a correct predicate from a missing one; this is the only shape that can.
+   *
+   * That distinction is CLAUDE.md's 15.3 corollary stated as a test: the explicit predicates are the
+   * PRIMARY defence and RLS is the backstop, so each needs its own proof. Both orgs deliberately
+   * share a `session_id` AND a `project_path`, because those are connector-supplied globally-scoped
+   * strings — the exact 15.2 collision two tenants can produce without cooperating.
+   */
+  it("does not merge two orgs that share a session id, with RLS INERT (owner handle)", async () => {
+    await ingest(
+      machineA,
+      batch({ session: "shared", connector: "claude-code", rawId: "rA", ts: INSIDE }),
+    );
+    await withOrg(appRole.db, orgB, WRITE_ROLE, (tx) =>
+      ingestBatch(
+        tx,
+        machineB,
+        batch({ session: "shared", connector: "claude-code", rawId: "rB", ts: INSIDE }),
+      ),
+    );
+    // Control: the owner really does see BOTH, so a scoped result below is the predicate working
+    // rather than org B's write having silently failed.
+    const all = await owner.db.execute<{ n: number }>(sql`select count(*)::int as n from events`);
+    expect(all.rows[0]!.n).toBe(2);
+
+    const rowsA = await sessionQualityRows(owner.db, orgA, SINCE_ISO);
+    expect(rowsA).toHaveLength(1);
+    expect(rowsA[0]!.eventCount).toBe(1);
+
+    const totalsA = await rawRecordTotals(owner.db, orgA, SINCE);
+    expect(totalsA.rawRows).toBe(1);
+
+    const sampleA = await reconciliationSample(owner.db, orgA, SINCE_ISO, 5);
+    expect(sampleA).toHaveLength(1);
+    expect(sampleA[0]!.rawRecordCount).toBe(1);
+
+    // And the dry run's subjects never cross either — org B's machine must not appear.
+    const targetsA = await recoverabilityTargets(owner.db, orgA, [
+      { sessionId: "shared", sourceConnector: "claude-code" },
+    ]);
+    expect(targetsA.map((t) => t.machineId)).toEqual([machineA]);
+  });
+
+  /**
+   * §5.1's "usable model + token data" is BOTH, not either — a token count with no model cannot be
+   * priced or compared across models. Without this test, flipping the `and` to an `or` (or dropping
+   * the filter) breaks token completeness with nothing failing anywhere: the shared unit tests take
+   * `withTokens` as a fixture number, so only the SQL is unguarded.
+   */
+  it("counts an event as token-usable only when it has BOTH tokens and model", async () => {
+    await ingest(
+      machineA,
+      batch({
+        session: "s1",
+        connector: "claude-code",
+        rawId: "r1",
+        ts: INSIDE,
+        eventCount: 1,
+        withTokens: true,
+      }),
+    );
+    // tokens WITHOUT model, and model WITHOUT tokens — neither is usable.
+    await owner.db.execute(sql`
+      insert into events (fingerprint, org_id, source_connector, parser_version, raw_record_id,
+                          event_index, event_type, session_id, ts, tokens, model)
+      values ('fp-tokens-only', ${orgA}, 'claude-code', 'claude-code@1', 'r1', 90, 'message.user',
+              's1', ${INSIDE}, '{"total":5}'::jsonb, null),
+             ('fp-model-only', ${orgA}, 'claude-code', 'claude-code@1', 'r1', 91, 'message.user',
+              's1', ${INSIDE}, null, 'claude-sonnet-5')`);
+
+    const [row] = await asApp((tx) => sessionQualityRows(tx, orgA, SINCE_ISO));
+    expect(row!.eventCount).toBe(3);
+    expect(row!.withTokens).toBe(1);
   });
 });
 

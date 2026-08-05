@@ -150,6 +150,59 @@ describe.skipIf(!TEST_URL || !APP_URL)("M16 16.4 recoverability (two-role integr
     });
   });
 
+  /**
+   * THE DISCRIMINATING PAIR. Every other assertion in this file expects `missing: 0, extra: 0,
+   * ok: true` — so hardcoding both counters to `0` (or `ok` to `true`) would keep the whole suite
+   * green while the metric silently always scored a perfect result. Recoverability is the ONE §5.1
+   * metric whose target is "all sampled records", which makes a stuck-perfect bug precisely the one
+   * a reader would never question. These two tests fail if the set comparison stops comparing.
+   */
+  it("reports MISSING when a stored fingerprint is not reproduced by the re-parse", async () => {
+    const { sessionId, sourceConnector, storedEvents } = await ingestFixture("claude");
+    // A stored event the re-parse cannot possibly produce: same session/connector and a raw id the
+    // parse DOES emit, so it is inside the compared set, but a fingerprint of its own.
+    await owner.db.execute(sql`
+      insert into events (fingerprint, org_id, source_connector, parser_version, raw_record_id,
+                          event_index, event_type, session_id, ts)
+      select 'fp-phantom', ${orgA}, source_connector, parser_version, raw_record_id,
+             999, 'message.user', session_id, ts
+      from events where org_id = ${orgA} and session_id = ${sessionId} limit 1`);
+
+    const rows = await withOrg(appRole.db, orgA, WRITE_ROLE, (tx) =>
+      reparseDryRun(tx, orgA, [{ sessionId, sourceConnector, machineId: machineA }]),
+    );
+    expect(rows[0]).toMatchObject({
+      storedEvents: storedEvents + 1,
+      reparsedEvents: storedEvents,
+      missing: 1,
+      extra: 0,
+      ok: false,
+      skippedReason: null,
+    });
+  });
+
+  it("reports EXTRA when a reproduced fingerprint is not stored — the parser-drift signal", async () => {
+    const { sessionId, sourceConnector, storedEvents } = await ingestFixture("claude");
+    // Delete one stored event. The re-parse still produces it, so it is `extra`: reproduced but
+    // not stored. This is the direction that would flag a GC or an ingest that lost a row.
+    await owner.db.execute(
+      sql`delete from events where org_id = ${orgA} and session_id = ${sessionId}
+          and fingerprint = (select fingerprint from events
+                             where org_id = ${orgA} and session_id = ${sessionId} limit 1)`,
+    );
+
+    const rows = await withOrg(appRole.db, orgA, WRITE_ROLE, (tx) =>
+      reparseDryRun(tx, orgA, [{ sessionId, sourceConnector, machineId: machineA }]),
+    );
+    expect(rows[0]).toMatchObject({
+      storedEvents: storedEvents - 1,
+      reparsedEvents: storedEvents,
+      missing: 0,
+      extra: 1,
+      ok: false,
+    });
+  });
+
   it("IT WRITES NOTHING — `events` and `raw_source_records` counts are unchanged across a run", async () => {
     // The regression test for somebody "optimising" the dry run into a call to `reparseAll`. That
     // change would keep this metric reporting a perfect score while mutating the archive under

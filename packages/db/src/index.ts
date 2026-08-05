@@ -232,8 +232,8 @@ export {
   observedConnectorAggregates,
 } from "./repositories/capture-health.js";
 // M16 16.4 — the §5.1 data-quality aggregates. Every row type (`SessionQualityRow`,
-// `RawRecordTotals`, `DuplicateTotals`, `IngestLagRow`, `ConnectorDeclarationRow`,
-// `GitLinkageRow`, `ReconciliationSampleRow`) lives in `@420ai/shared` next to the PURE
+// `RawRecordTotals`, `DuplicateTotals`, `IngestLagRow`, `GitLinkageRow`,
+// `ReconciliationSampleRow`) lives in `@420ai/shared` next to the PURE
 // `deriveDataQualityMetrics` that consumes them — the classification is the part that must be
 // testable with no database, so the types belong beside it rather than here.
 export {
@@ -241,7 +241,6 @@ export {
   rawRecordTotals,
   duplicateRawRecords,
   ingestLagRows,
-  connectorDeclarations,
   gitLinkageRows,
   reconciliationSample,
   recoverabilityTargets,
