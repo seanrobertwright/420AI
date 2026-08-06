@@ -63,6 +63,65 @@ Logs roll under this folder as `420ai-collector.out.log` / `.err.log`. Confirm c
 .\collector.exe queue --home "C:\Users\YOURNAME"     # pending=N, inflight=M
 ```
 
+## When capture stops: the fault record and the restart (M16 16.6)
+
+Until M16 16.6 `collector watch` exited **0** no matter why it stopped. A revoked token therefore
+looked exactly like a deliberate `stop`: WinSW's `<onfailure action="restart"/>` fires only on a
+**non-zero** exit, so Windows recorded no failure, attempted no restart, and Service Manager simply
+showed "Stopped". That is how INC-2026-07 ran dead for ~8 days with 159,828 items stranded in the
+queue and nothing anywhere reporting it.
+
+Now:
+
+- A **fatal 401** (the archive rejected this machine's token — usually a re-paired, deleted, or
+  reset archive) makes `collector watch` write the reason to stderr and exit **1**. WinSW restarts
+  per `<onfailure>` and Windows records a service failure in the Event Log.
+- The 401 is detected on **any** of the three authenticated requests the collector makes, not just
+  the queue upload: the ingest POST, the ~30 s **heartbeat**, and the final **shutdown drain**. The
+  heartbeat one matters most on a quiet machine — with an empty queue the collector never uploads
+  anything, so the heartbeat is the only thing talking to the archive, and a revoked token would
+  otherwise go unreported for as long as the machine stayed idle.
+- Any **other** heartbeat failure (archive down, network blip, an older archive) is still swallowed
+  and capture continues — only a 401 is fatal.
+- A **Ctrl-C, `stop`, or `restart`** still exits **0**, so a deliberate stop never restart-loops.
+- On **start**, if `fault.json` is already present the collector says so in
+  `420ai-collector.out.log` (and the desktop shows it as an error) — so a fault recorded before a
+  reboot is not invisible just because the archive is now merely unreachable rather than rejecting
+  the token.
+- The durable record is `~\.420ai\fault.json` — under the **same profile as `--home`**, i.e.
+  `C:\Users\YOURNAME\.420ai\fault.json` for the LocalSystem install above, not the service profile:
+
+  ```powershell
+  Get-Content "C:\Users\YOURNAME\.420ai\fault.json"
+  ```
+
+  ```json
+  {
+    "code": "auth_revoked",
+    "message": "ingest returned 401 — token revoked. Re-pair needed: `collector pair <code>`. Stopping sync.",
+    "since": "2026-08-06T12:00:00.000Z",
+    "lastObservedAt": "2026-08-14T09:31:04.220Z",
+    "url": "http://localhost:8420"
+  }
+  ```
+
+  `since` is when the outage **started** and `lastObservedAt` when it was last seen — so the pair is
+  the outage's duration. `since` deliberately survives restarts: WinSW restarts the collector on
+  every non-zero exit, and re-stamping `since` each time would have reported an eight-day
+  INC-2026-07 as "started twenty seconds ago". A change of archive URL starts a new clock.
+
+  The record names the archive that rejected the credential and **never contains the token itself**,
+  so it is safe to paste into a bug report.
+
+- The signal is **self-resolving**: re-pair with
+  `collector.exe pair <CODE> --url … --home "C:\Users\YOURNAME"`, and the first sync that actually
+  **delivers queued items** deletes `fault.json`. (An idle, empty-queue drain does not count — it
+  never contacts the archive, so it proves nothing.) A file that is still there is a fault that is
+  still happening.
+
+Because a restarted service will hit the same 401 and exit 1 again, a repeating restart in the
+Event Log is itself the alarm — check `fault.json` first, then `420ai-collector.err.log`.
+
 ## Run as your user (least-privilege alternative)
 
 Instead of LocalSystem + `--home`, run the service as your account so `homedir()` is naturally

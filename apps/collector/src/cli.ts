@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync, realpathSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, realpathSync, writeSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { hostname as osHostname, homedir } from "node:os";
 import { parseClaudeCodeSession } from "./connectors/claude-code.js";
@@ -40,6 +40,7 @@ import {
   NotPairedError,
   type Credentials,
 } from "./identity.js";
+import { faultPathFor, saveFault, loadFault, clearFault, type CaptureFault } from "./fault.js";
 import { QueueStore, type QueueStats, type SyncOutcome } from "./queue/queue-store.js";
 import { runCaptureEngine } from "./capture-engine.js";
 import { resolveConnectorStates } from "./connectors/connector-info.js";
@@ -180,6 +181,44 @@ function resolveCreds(opts: { url?: string; token?: string; home?: string }): Cr
 }
 
 /**
+ * The outcome of one `collector watch` run.
+ *
+ * M16 16.6: `runWatch` used to return `void`, which gave `main()` nothing to distinguish a
+ * deliberate SIGINT from a token revocation — so it exited 0 for both. `fault` is that missing
+ * distinction, and only the ENTRYPOINT turns it into an exit code (library files never exit).
+ */
+export interface WatchRunResult {
+  /** Set iff capture stopped for a fatal, non-recoverable reason (today: a revoked token). */
+  fault?: CaptureFault;
+  /**
+   * True iff `fault` was successfully written to disk. A LocalSystem service can plausibly fail the
+   * write (read-only disk, ENOSPC, EPERM), and the entrypoint must not then print "Recorded at
+   * <path>" for a file that does not exist — the operator would go looking for it, find nothing,
+   * and distrust the whole mechanism.
+   *
+   * REQUIRED, not optional: `runWatch` initialises it to `false` and always returns it, so an
+   * optional marker would have been a lie the compiler enforced on the READER instead. The concrete
+   * cost of the lie: `main()` renders `result.recorded ? "Recorded at …" : "WARNING: could NOT be
+   * written"`, so an `undefined` reaching that ternary prints the alarming half for a write that
+   * actually succeeded — the opposite of the fact, on the one message this feature exists to emit.
+   */
+  recorded: boolean;
+}
+
+/**
+ * The `collector watch` exit code, extracted from `main()` for the same reason `pairSummary` and
+ * `formatCliError` were: `main()` is not exported and `process.exit` is not seamed, so the slice's
+ * headline behaviour — exit 1 on a fatal 401, exit 0 on SIGINT — was otherwise untestable, and
+ * deleting the branch entirely left every test green.
+ *
+ * Exit 1 ONLY for a fatal fault. WinSW's `<onfailure action="restart"/>` fires on a non-zero exit,
+ * so a deliberate Ctrl-C / `Stop-Service` must stay 0 or the service restart-loops.
+ */
+export function watchExitCode(result: WatchRunResult): number {
+  return result.fault ? 1 : 0;
+}
+
+/**
  * Run the background capture agent: discover + tail Claude sessions, buffer to
  * the durable queue, sync to the archive. Resolves when `signal` aborts (SIGINT)
  * after a graceful final drain. Pure of process concerns except via callbacks.
@@ -207,7 +246,7 @@ export async function runWatch(opts: {
   loadConnectorConfig?: () => ConnectorConfig;
   loadConnectorApprovals?: () => ConnectorApprovals;
   saveConnectorApprovals?: (cfg: ConnectorApprovals) => void;
-}): Promise<void> {
+}): Promise<WatchRunResult> {
   const creds = resolveCreds(opts);
   const home = opts.home ?? homedir();
   // M12 12.7c: best-effort pull of the active signed connector catalog → cache it.
@@ -264,6 +303,36 @@ export async function runWatch(opts: {
     );
   }
 
+  /**
+   * M16 16.6 — the durable fault record, resolved from the SAME `home` as creds + queue (see
+   * `faultPathFor`). A fault written under one profile and read under another is worth nothing.
+   */
+  const faultPath = faultPathFor(home);
+  /**
+   * M16 16.6 (F3): SURFACE a pre-existing fault at startup.
+   *
+   * `loadFault` had no production caller at all — the record was written and never read back, so
+   * after a restart in which the archive is merely UNREACHABLE (network down, containers not up)
+   * rather than 401, the collector ran happily and the operator got no signal that a fault had ever
+   * been recorded. They would only find it by reading the file by hand, which is precisely the
+   * "you have to suspect it first" trigger this slice exists to remove.
+   *
+   * Reported through the LOGGER, not stdout: `runWatch` is called by both `cli.ts` (which prints)
+   * and tests. `since` + `lastObservedAt` are included because together they are the outage
+   * duration, which is the number the record exists to answer.
+   */
+  const existingFault = loadFault(faultPath);
+  if (existingFault) {
+    opts.logger?.(
+      `a capture fault is on record at ${faultPath}: ${existingFault.message} ` +
+        `(since ${existingFault.since}` +
+        (existingFault.lastObservedAt ? `, last observed ${existingFault.lastObservedAt}` : "") +
+        `). It clears on the next sync that actually delivers.`,
+    );
+  }
+  let fault: CaptureFault | undefined;
+  let recorded = false;
+
   await (opts.runEngine ?? runCaptureEngine)({
     creds,
     signal: opts.signal,
@@ -284,7 +353,35 @@ export async function runWatch(opts: {
     // Config + approvals are read ONCE per report, not once per connector per report; the mapping
     // itself is shared with `serve.ts` so the service and desktop views cannot drift.
     connectorStates: (reg) => resolveConnectorStates(reg, loadCfg(), loadApprovals(), home),
+    // M16 16.6: persist the fatal reason so it survives BOTH this process and a server-side DB
+    // reset, and remember it locally so the entrypoint can exit non-zero (WinSW `<onfailure>` only
+    // fires on a non-zero exit — exit 0 reads to Windows as a deliberate stop).
+    onFatal: (f) => {
+      // The in-memory fault is assigned BEFORE the write, deliberately: a failed write must still
+      // produce exit 1. Losing the exit code as well as the file would restore exactly the silence
+      // this slice exists to end.
+      fault = f;
+      try {
+        saveFault(f, faultPath);
+        recorded = true;
+      } catch (err) {
+        // The engine's `onStop` swallows anything thrown here, so an unguarded failure was invisible
+        // AND the entrypoint went on to print "Recorded at <path>" for a file that never existed.
+        opts.logger?.(`could not record capture fault at ${faultPath}: ${String(err)}`);
+      }
+    },
+    // …and CLEAR it on the next drain that actually DELIVERED, which is what makes the signal
+    // self-resolving. Unconditional as to WHICH process wrote it (the fault may have been left by an
+    // earlier run — the service restarting under `<onfailure>`), but conditional on `delivered > 0`:
+    // an empty-queue drain returns "ok" and fires this callback every ~2 s WITHOUT making a single
+    // request, so clearing on that would delete the record on the first idle tick after a restart,
+    // having never re-contacted the archive. Only bytes accepted by the archive prove it is over.
+    onSyncSuccess: (_at, delivered) => {
+      if (delivered > 0) clearFault(faultPath);
+    },
   });
+
+  return { fault, recorded };
 }
 
 export interface SyncRunResult {
@@ -449,6 +546,27 @@ export async function runProjects(opts: {
 }
 
 // --- CLI plumbing (the ONLY place allowed to log / exit / write files) ---
+
+/**
+ * Write to stderr with a write that CANNOT be lost to a pending flush (M16 16.6 F4).
+ *
+ * `process.stderr.write` is asynchronous for some stdio targets, and `process.exit` does not flush
+ * pending asynchronous writes — so `process.stderr.write(msg); process.exit(1)` can truncate or drop
+ * the message entirely when stderr is a pipe (`collector watch … | tee log.txt`). That is the one
+ * human-readable notice this feature adds, on the one path where the process is deliberately about
+ * to die. `fs.writeSync` on fd 2 is unconditionally synchronous: the bytes are gone before `exit`
+ * can be reached.
+ *
+ * The fallback exists because a raw `writeSync` on a non-blocking fd can throw `EAGAIN`; losing the
+ * message to an exception would be worse than losing it to a flush.
+ */
+export function writeStderrSync(msg: string): void {
+  try {
+    writeSync(2, msg);
+  } catch {
+    process.stderr.write(msg);
+  }
+}
 
 function getFlag(args: string[], name: string): string | undefined {
   const i = args.indexOf(name);
@@ -630,18 +748,42 @@ async function main(argv: string[]): Promise<void> {
     const pushPortFlag = getFlag(args, "--push-port");
     const pushPort =
       pushPortFlag && Number.isFinite(Number(pushPortFlag)) ? Number(pushPortFlag) : undefined;
-    await runWatch({
+    // Resolve the home ONCE and use it for both the run and the fault-path message — the same
+    // footgun `pairSummary` documents: two `resolveHome` calls are two values the compiler cannot
+    // tell apart, and the printed path must be the one actually written to.
+    const home = resolveHome(args);
+    const result = await runWatch({
       url: getFlag(args, "--url"),
       token: getFlag(args, "--token"),
       intervalMs,
-      home: resolveHome(args),
+      home,
       signal: controller.signal,
       logger: (msg) => process.stdout.write(msg + "\n"),
       collectorVersion: readCollectorVersion(),
       heartbeatIntervalMs: parseHeartbeatIntervalMs(heartbeatFlag),
       pushPort,
     });
-    process.exit(0);
+    /**
+     * C.11, applied to the DAEMON (M16 16.6). `collector sync` has exited non-zero on a revoked
+     * token since M12; `watch` exited 0 unconditionally, and INC-2026-07 is what that cost. WinSW's
+     * `<onfailure action="restart"/>` fires only on a NON-ZERO exit, so exit 0 told Windows the
+     * eight-day outage was a deliberate stop — no restart, no Event Log entry, nothing.
+     *
+     * Exit 1 ONLY for a fatal 401. A Ctrl-C or a `Stop-Service` must stay 0, or WinSW restart-loops
+     * the collector every time the operator stops it on purpose.
+     */
+    if (result.fault) {
+      const faultPath = faultPathFor(home);
+      // F4: written SYNCHRONOUSLY — `process.exit` two lines below does not flush a pending async
+      // stderr write, so on a pipe this notice could vanish exactly when it matters.
+      writeStderrSync(
+        `Capture stopped: ${result.fault.message}\n` +
+          (result.recorded
+            ? `Recorded at ${faultPath}\n`
+            : `WARNING: the fault record could NOT be written to ${faultPath}\n`),
+      );
+    }
+    process.exit(watchExitCode(result));
   }
 
   if (command === "sync") {
@@ -779,7 +921,9 @@ function isMain(): boolean {
 
 if (isMain()) {
   main(process.argv).catch((error) => {
-    process.stderr.write(`${formatCliError(error)}\n`);
+    // Same exposure as the `watch` fault notice above: this write is immediately followed by
+    // `process.exit`, so it must not be left in an unflushed async buffer.
+    writeStderrSync(`${formatCliError(error)}\n`);
     process.exit(1);
   });
 }

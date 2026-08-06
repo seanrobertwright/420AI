@@ -81,6 +81,43 @@ const monitorStreamIntervalMs = parsePositiveInt(
   3000,
 );
 
+// M16 16.6 background alert-evaluator cadence (INC-2026-07). This is the ONE caller that turns the
+// evaluator on — `buildApp` defaults it to 0/disabled so no test starts a timer.
+//
+// SHIPPED WITH A REAL VALUE IN `.env.example`, never empty. An empty
+// `ALERT_EVALUATOR_INTERVAL_MS=` reaches `parsePositiveInt` as `""` and THROWS AT BOOT — the
+// numeric sibling of the CLAUDE.md `??`-vs-`||` env rule (same class, a shipped-empty key
+// defeating a fallback; different operator). The two existing interval keys both ship populated
+// for exactly this reason; copy them, not the empty-valued secrets.
+//
+// `0` IS ACCEPTED HERE, uniquely among the interval keys, and it is the OFF SWITCH. Note this is
+// deliberately NOT the same thing as empty: `""` is a misconfiguration and still throws, while the
+// literal `"0"` is an intention.
+// `parsePositiveInt` rejects 0 everywhere else, which is right for the others — a 0 ms SSE cadence
+// or a 0 ms heartbeat is a mistake, not an intention. But this key is the only one whose feature an
+// operator may legitimately want to turn OFF, and without this branch the only way to do that was
+// to UNSET the variable, which falls through to the 60 000 default — i.e. exactly the opposite of
+// what they intended, silently. An explicit `=0` now means what it looks like it means.
+// It stays a STRICT literal check so a typo (`ALERT_EVALUATOR_INTERVAL_MS=off`) still throws at
+// boot rather than quietly disabling the detector this slice exists to add.
+const alertEvaluatorIntervalMs =
+  process.env.ALERT_EVALUATOR_INTERVAL_MS === "0"
+    ? 0
+    : parsePositiveInt(
+        process.env.ALERT_EVALUATOR_INTERVAL_MS,
+        "ALERT_EVALUATOR_INTERVAL_MS",
+        60000,
+      );
+if (alertEvaluatorIntervalMs === 0) {
+  // Entrypoint, so logging is in bounds (CLAUDE.md's boundary). LOUD, because a disabled evaluator
+  // reproduces INC-2026-07's precondition: alerts become derivable-but-never-evaluated again, and
+  // the failure mode is total silence rather than an error.
+  console.warn(
+    "ALERT_EVALUATOR_INTERVAL_MS=0 — the background alert evaluator is DISABLED. Alerts will only " +
+      "be evaluated when somebody opens the dashboard, which is the INC-2026-07 condition.",
+  );
+}
+
 // M12 12.4b structured-logging level (pino: trace|debug|info|warn|error|fatal).
 const logLevel = process.env.LOG_LEVEL ?? "info";
 
@@ -279,6 +316,7 @@ const app = buildApp({
   analysisProvider: createAnalysisProvider(analysisConfig),
   analysisMaxOutputTokens,
   monitorStreamIntervalMs,
+  alertEvaluatorIntervalMs,
   logLevel,
   rateLimit,
   alertDeliverer,

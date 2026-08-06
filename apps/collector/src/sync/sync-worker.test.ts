@@ -254,6 +254,45 @@ describe("runSyncLoop (M13 13.1 — onSync surfaces a live last-sync time)", () 
       queue.close();
     }
   });
+
+  /**
+   * M16 16.6 (F1) — "ok" does not mean "we reached the archive".
+   *
+   * `syncOnce` returns "ok" immediately on an empty queue WITHOUT posting, and this loop fires
+   * `onSync` on every such idle tick. A caller that reads that as proof of contact (clearing the
+   * durable fault record) resolves an outage it never re-tested. `delivered` is the discriminator:
+   * 0 for the no-op drain, the acked item count for a real one.
+   */
+  it("reports delivered=0 for an empty (no-POST) drain and the acked count for a real one", async () => {
+    const queue = tmpQueue();
+    const post = vi.fn().mockResolvedValue({ recordsInserted: 0, eventsUpserted: 2 });
+    const drains: number[] = [];
+    const controller = new AbortController();
+    try {
+      queue.enqueue("event", "fp1", { fingerprint: "fp1" });
+      queue.enqueue("event", "fp2", { fingerprint: "fp2" });
+      await runSyncLoop(
+        {
+          queue,
+          url: "http://x",
+          token: "t",
+          post,
+          idleMs: 1,
+          retryMs: 1,
+          onSync: (_at, delivered) => {
+            drains.push(delivered);
+            if (drains.length >= 2) controller.abort();
+          },
+        },
+        controller.signal,
+      );
+      // First drain delivered both queued items; the second found an empty queue and never posted.
+      expect(drains).toEqual([2, 0]);
+      expect(post).toHaveBeenCalledTimes(1);
+    } finally {
+      queue.close();
+    }
+  });
 });
 
 describe("runSyncLoop (C.8 — SIGINT cancels an in-flight stalled sync)", () => {

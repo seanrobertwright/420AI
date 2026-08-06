@@ -29,6 +29,21 @@
       Duplicate rate              <- §5.1 table
       Stale/unhealthy connectors  <- the "Capture health (from 16.3)" verdict counts
                                      (not-capturing + broken), NOT the §5.1 table
+      Alerts fired (detection)    <- NOT in the report. Dashboard → Alerts, or
+                                     `GET /v1/alerts` — count firings whose `firstFiredAt`
+                                     falls in the week. Record OPEN and UNACKED separately:
+                                     "3 fired / 1 still open".
+      Collector fault present?    <- NOT in the report and NOT server-side at all. Check the
+                                     COLLECTOR machine for `~/.420ai/fault.json` (M16 16.6).
+                                     yes / no / unknown. Its presence means the archive
+                                     rejected this collector's credential and capture stopped.
+
+  THE LAST TWO ROWS ARE THE DETECTION ROWS, added by 16.6 after INC-2026-07 — the week capture
+  ran dead for 8 days and every other row above would have read a plausible, quiet zero. They ask
+  the question the rest of the block cannot: "did anything TELL us?". A week with zero captured
+  sessions and zero alerts fired is a DETECTION failure, not a quiet week; the two rows exist so
+  that combination is visible on the page rather than inferred later. `unknown` is a legal answer
+  for both and a zero is not a substitute — same rule as every row above.
 
   The §5.1 table also carries "Project attribution — coverage", "Sync freshness" and
   "Recoverability", which this block has no slot for — read them in the report.
@@ -48,6 +63,8 @@
 | Parse success                 |           |          99% |       |
 | Duplicate rate                |           |          <1% |       |
 | Stale/unhealthy connectors    |           | 0 unresolved |       |
+| Alerts fired (detection)      |           |            — |       |
+| Collector fault present?      |           |           no |       |
 
 ## Value
 

@@ -1,6 +1,10 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import { PassThrough } from "node:stream";
+import { mkdtempSync, rmSync, existsSync } from "node:fs";
+import { tmpdir, homedir } from "node:os";
+import { join } from "node:path";
 import { runServe, type ServeDeps } from "./serve.js";
+import { faultPathFor, loadFault, saveFault } from "./fault.js";
 import type { CaptureEngineOptions } from "./capture-engine.js";
 import { connectors as defaultConnectors, type Connector } from "./connectors/connector.js";
 import type { ConnectorConfig } from "./connectors/connector-config.js";
@@ -27,6 +31,35 @@ interface Harness {
   send(cmd: ControlCommand | string, pred: (e: ControlEvent) => boolean): Promise<ControlEvent>;
   waitFor(pred: (e: ControlEvent) => boolean, timeoutMs?: number): Promise<ControlEvent>;
 }
+
+/**
+ * Temp collector homes minted by `makeHarness`, removed after every test.
+ *
+ * PR #80 review (HIGH) — `makeHarness` used to supply NO `home`, so `runServe` fell through to
+ * `deps.home ?? homedir()` and every harness in this file operated on the DEVELOPER'S REAL
+ * `~/.420ai`. That was harmless while nothing there was written; 16.6 made it destructive. The
+ * 13.1 test below fires `onSyncSuccess(…, 1)`, which reaches the new `delivered > 0` branch and
+ * `rmSync`es the real `<profile>/.420ai/fault.json` — so on a dogfood machine, where a Windows
+ * service under the same profile is the documented writer, `npm test` ERASES the durable outage
+ * record this slice exists to create, and `service/README.md` tells the operator "no file =
+ * healthy". The suite manufactured the exact false negative the slice was built to eliminate.
+ *
+ * There was a quieter READ half too: `startEngine` now calls `loadFault(faultPathFor(home))`, so
+ * ~15 pre-existing tests emitted an extra `error` ControlEvent IFF the host machine happened to
+ * hold a fault — a unit test whose event stream depended on whose laptop ran it. Same root cause,
+ * same fix. This mirrors the `approvalsBlob` seam directly above, whose comment already says it
+ * exists "so seed-on-boot never touches the real ~/.420ai".
+ */
+const harnessHomes: string[] = [];
+afterEach(() => {
+  for (const h of harnessHomes.splice(0)) {
+    try {
+      rmSync(h, { recursive: true, force: true });
+    } catch {
+      /* best effort */
+    }
+  }
+});
 
 function makeHarness(overrides: Partial<ServeDeps> = {}): Harness {
   const stdin = new PassThrough();
@@ -80,7 +113,15 @@ function makeHarness(overrides: Partial<ServeDeps> = {}): Harness {
   // (Tests that need to assert drift inject their own via overrides.)
   let approvalsBlob: ConnectorApprovals = { version: "test", approved: {} };
 
+  // Default home = a PER-HARNESS temp dir (see `harnessHomes`). Every path `runServe` derives from
+  // `home` — the fault record, the connector config, the approvals file — therefore lands in a
+  // sandbox instead of the operator's profile. Tests that pass their own `home` still win: the
+  // `...overrides` spread below is applied after this.
+  const defaultHome = mkdtempSync(join(tmpdir(), "m16-serve-home-"));
+  harnessHomes.push(defaultHome);
+
   const deps: ServeDeps = {
+    home: defaultHome,
     stdin,
     stdout,
     stderr: { write: () => true },
@@ -103,6 +144,17 @@ function makeHarness(overrides: Partial<ServeDeps> = {}): Harness {
     },
     ...overrides,
   };
+
+  // The structural half of the guard, applied to EVERY harness in this file including any future
+  // one that passes its own `home`: a unit test may never resolve a collector-home artifact under
+  // the operator's real profile. A default that silently regresses to `undefined` (which `runServe`
+  // turns into `homedir()`) fails here rather than in the operator's `~/.420ai`.
+  if (deps.home === undefined || deps.home === homedir()) {
+    throw new Error(
+      `makeHarness must run against a sandbox home, got ${String(deps.home)} — runServe writes ` +
+        `fault.json / connectors.json / approvals.json under it.`,
+    );
+  }
 
   const done = runServe(deps);
 
@@ -173,7 +225,7 @@ describe("serve control protocol", () => {
 
   it("M13 13.1: a successful sync surfaces a non-null ISO lastSyncAt on status", async () => {
     const runEngine = (opts: CaptureEngineOptions): Promise<void> => {
-      opts.onSyncSuccess?.("2026-07-07T00:00:00.000Z");
+      opts.onSyncSuccess?.("2026-07-07T00:00:00.000Z", 1);
       return new Promise<void>((resolve) => {
         if (opts.signal.aborted) return resolve();
         opts.signal.addEventListener("abort", () => resolve(), { once: true });
@@ -513,5 +565,234 @@ describe("serve custom connectors (M10-S2)", () => {
     expect(seen?.map((c) => c.id)).toEqual(["claude-code"]);
     await h.send({ cmd: "stop" }, (e) => e.type === "stopped");
     await h.done;
+  });
+  /**
+   * M16 16.6 — the desktop must say WHY capture died, not just that it did.
+   *
+   * Before this the `.then()` branch below could only log "capture engine stopped unexpectedly":
+   * the engine knew a 401 had revoked the token and threw the fact away as it unwound. This reuses
+   * the EXISTING `error` ControlEvent (D-16.6-3), so CONTROL_PROTOCOL_VERSION is unchanged.
+   */
+  it("M16 16.6: a fatal 401 emits an error event with the reason and records it durably", async () => {
+    const home = mkdtempSync(join(tmpdir(), "m16-serve-fault-"));
+    try {
+      const fault = {
+        code: "auth_revoked" as const,
+        message: "ingest returned 401 — token revoked. Re-pair needed: `collector pair <code>`.",
+        since: "2026-08-06T12:00:00.000Z",
+        url: "https://archive.example",
+      };
+      // An engine that dies fatally and returns NORMALLY — exactly how INC-2026-07 looked.
+      const runEngine = async (opts: CaptureEngineOptions): Promise<void> => {
+        opts.onFatal?.(fault);
+      };
+      const h = makeHarness({ runEngine, home });
+
+      const err = (await h.send({ cmd: "start" }, (e) => e.type === "error")) as Extract<
+        ControlEvent,
+        { type: "error" }
+      >;
+      expect(err.message).toMatch(/401/);
+      // Durable too: the desktop closing must not erase the only record of the outage.
+      expect(loadFault(faultPathFor(home))).toEqual({ ...fault, lastObservedAt: fault.since });
+      // F14: ONE report per stop — the reason rides the `error` event, not also a duplicate `log`.
+      expect(
+        h.events.filter(
+          (e) =>
+            e.type === "log" &&
+            /capture stopped|stopped unexpectedly/.test((e as { message: string }).message),
+        ),
+      ).toHaveLength(0);
+
+      const st = await h.send({ cmd: "status" }, (e) => e.type === "status");
+      expect(st).toMatchObject({ type: "status", state: "error" });
+
+      await h.send({ cmd: "stop" }, (e) => e.type === "stopped");
+      await h.done;
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * F3 — a stale fault file must not survive forever.
+   *
+   * `startEngine` resets the in-memory `fault` on every start, so clearing only `if (fault)` meant:
+   * run 1 faults and writes the file → the operator re-pairs and restarts → run 2 syncs fine → the
+   * flag is false → the record survives permanently and stops meaning anything. The clear is now
+   * unconditional as to WHO wrote it, and conditional only on the drain having actually delivered.
+   */
+  it("M16 16.6 (F3): a delivering sync clears a fault file THIS run never wrote", async () => {
+    const home = mkdtempSync(join(tmpdir(), "m16-serve-fault-"));
+    try {
+      // A previous run (or the Windows service) left the record; this process starts clean.
+      saveFault(
+        {
+          code: "auth_revoked",
+          message: "ingest returned 401 — token revoked.",
+          since: "2026-08-06T12:00:00.000Z",
+          url: "https://archive.example",
+        },
+        faultPathFor(home),
+      );
+      const runEngine = (opts: CaptureEngineOptions): Promise<void> => {
+        opts.onSyncSuccess?.("2026-08-06T13:00:00.000Z", 4);
+        return new Promise<void>((resolve) => {
+          if (opts.signal.aborted) return resolve();
+          opts.signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      };
+      const h = makeHarness({ runEngine, home });
+
+      await h.send({ cmd: "start" }, (e) => e.type === "status" && e.state === "running");
+      expect(existsSync(faultPathFor(home))).toBe(false);
+
+      await h.send({ cmd: "stop" }, (e) => e.type === "stopped");
+      await h.done;
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * F3 — the desktop must surface a fault recorded EARLIER (by a previous run, or by the Windows
+   * service under the same profile) at launch. `loadFault` had no production caller at all, so the
+   * durable record was write-only: after a restart in which the archive is merely unreachable, the
+   * operator saw a perfectly healthy-looking desktop.
+   *
+   * Reuses the EXISTING `error` ControlEvent (D-16.6-3) — CONTROL_PROTOCOL_VERSION is untouched.
+   */
+  it("M16 16.6 (F3): start surfaces a pre-existing fault as an error event", async () => {
+    const home = mkdtempSync(join(tmpdir(), "m16-serve-fault-"));
+    try {
+      saveFault(
+        {
+          code: "auth_revoked",
+          message: "ingest returned 401 — token revoked.",
+          since: "2026-08-06T12:00:00.000Z",
+          url: "https://archive.example",
+        },
+        faultPathFor(home),
+      );
+      // An engine that runs perfectly well — the archive is simply unreachable, so nothing ever
+      // delivers and nothing ever clears the record. Without F3 this start is completely silent.
+      const runEngine = (opts: CaptureEngineOptions): Promise<void> =>
+        new Promise<void>((resolve) => {
+          if (opts.signal.aborted) return resolve();
+          opts.signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      const h = makeHarness({ runEngine, home });
+
+      const err = (await h.send({ cmd: "start" }, (e) => e.type === "error")) as Extract<
+        ControlEvent,
+        { type: "error" }
+      >;
+      expect(err.message).toContain("capture fault is on record");
+      expect(err.message).toContain("since 2026-08-06T12:00:00.000Z");
+
+      await h.send({ cmd: "stop" }, (e) => e.type === "stopped");
+      await h.done;
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * PR #80 review (HIGH) — `npm test` must not touch the operator's REAL `~/.420ai`.
+   *
+   * `makeHarness` supplied no `home`, so `runServe` fell back to `homedir()` and the 13.1 test's
+   * `onSyncSuccess("…", 1)` reached 16.6's `delivered > 0` branch and `rmSync`ed the developer's
+   * own `fault.json` — on a dogfood machine, where the Windows service under the same profile is
+   * the documented writer, the suite deleted the durable outage record while `service/README.md`
+   * tells the operator that no file means healthy.
+   *
+   * Measured, not asserted structurally: `homedir()` reads `USERPROFILE`/`HOME` on each call, so
+   * redirecting them puts a REAL collector home under a temp dir. A file planted exactly where an
+   * operator's would live must still be there after driving the very harness shape that deleted it
+   * (no `home` override, a delivering sync). `fileParallelism: false` (vitest.config.ts) means no
+   * other test file runs while the environment is redirected, and it is restored in a `finally`.
+   */
+  it("PR #80: a harness with NO home override never touches the real ~/.420ai", async () => {
+    const profile = mkdtempSync(join(tmpdir(), "m16-serve-profile-"));
+    const prevHome = process.env.HOME;
+    const prevUserProfile = process.env.USERPROFILE;
+    process.env.HOME = profile;
+    process.env.USERPROFILE = profile;
+    try {
+      // Sanity: without this the whole test is theatre — it would sandbox nothing and pass anyway.
+      expect(homedir()).toBe(profile);
+      const operatorFault = faultPathFor(homedir());
+      saveFault(
+        {
+          code: "auth_revoked",
+          message: "ingest returned 401 — token revoked.",
+          since: "2026-08-06T12:00:00.000Z",
+          url: "https://archive.example",
+        },
+        operatorFault,
+      );
+
+      // EXACTLY the shape that deleted it: no `home`, and a drain that delivered.
+      const runEngine = (opts: CaptureEngineOptions): Promise<void> => {
+        opts.onSyncSuccess?.("2026-08-06T13:00:00.000Z", 1);
+        return new Promise<void>((resolve) => {
+          if (opts.signal.aborted) return resolve();
+          opts.signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      };
+      const h = makeHarness({ runEngine });
+      await h.send({ cmd: "start" }, (e) => e.type === "status" && e.state === "running");
+
+      // The operator's record survives the test suite.
+      expect(existsSync(operatorFault)).toBe(true);
+      expect(loadFault(operatorFault)?.since).toBe("2026-08-06T12:00:00.000Z");
+      // …and the read half: the harness never announced the operator's fault as its own.
+      expect(
+        h.events.filter(
+          (e) => e.type === "error" && /capture fault is on record/.test(e.message ?? ""),
+        ),
+      ).toHaveLength(0);
+
+      await h.send({ cmd: "stop" }, (e) => e.type === "stopped");
+      await h.done;
+    } finally {
+      if (prevHome === undefined) delete process.env.HOME;
+      else process.env.HOME = prevHome;
+      if (prevUserProfile === undefined) delete process.env.USERPROFILE;
+      else process.env.USERPROFILE = prevUserProfile;
+      rmSync(profile, { recursive: true, force: true });
+    }
+  });
+
+  /** F1's half of the same rule: an idle, empty-queue drain proves nothing and clears nothing. */
+  it("M16 16.6 (F1): an empty drain (delivered=0) leaves the fault file in place", async () => {
+    const home = mkdtempSync(join(tmpdir(), "m16-serve-fault-"));
+    try {
+      saveFault(
+        {
+          code: "auth_revoked",
+          message: "ingest returned 401 — token revoked.",
+          since: "2026-08-06T12:00:00.000Z",
+          url: "https://archive.example",
+        },
+        faultPathFor(home),
+      );
+      const runEngine = (opts: CaptureEngineOptions): Promise<void> => {
+        opts.onSyncSuccess?.("2026-08-06T13:00:00.000Z", 0);
+        return new Promise<void>((resolve) => {
+          if (opts.signal.aborted) return resolve();
+          opts.signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      };
+      const h = makeHarness({ runEngine, home });
+
+      await h.send({ cmd: "start" }, (e) => e.type === "status" && e.state === "running");
+      expect(existsSync(faultPathFor(home))).toBe(true);
+
+      await h.send({ cmd: "stop" }, (e) => e.type === "stopped");
+      await h.done;
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });

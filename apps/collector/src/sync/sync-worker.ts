@@ -31,6 +31,15 @@ export interface SyncDeps {
   signal?: AbortSignal;
   /** Per-request timeout override (ms); used to bound the shutdown drain to its deadline (C.8). */
   timeoutMs?: number;
+  /**
+   * M16 16.6 (F1): observe how many queue items the archive actually ACCEPTED on this drain —
+   * called only after a 2xx `ack`, never for an empty (no-POST) drain.
+   *
+   * `syncOnce`'s outcome cannot answer "did anything reach the archive?": an empty queue returns
+   * "ok" without making a single request. That ambiguity is what let a fault self-resolve on a
+   * quiet machine that had never re-contacted the archive at all.
+   */
+  onDelivered?: (count: number) => void;
 }
 
 /**
@@ -60,6 +69,7 @@ export async function syncOnce(deps: SyncDeps): Promise<SyncOutcome> {
       timeoutMs: deps.timeoutMs,
     });
     deps.queue.ack(items.map((i) => i.id));
+    deps.onDelivered?.(items.length);
     return "ok";
   } catch (err) {
     if (isUnauthorized(err)) {
@@ -107,8 +117,14 @@ export interface SyncLoopDeps extends SyncDeps {
    * M13 13.1: called with an ISO timestamp after each successful drain (`syncOnce` outcome
    * "ok" — including a no-op empty-queue drain) so the engine/cli can surface a live
    * "last sync" time (mirrors how `consecutiveSyncFailures` already feeds the heartbeat).
+   *
+   * M16 16.6 (F1): `delivered` is how many items the archive ACCEPTED on that drain — **0 for the
+   * empty-queue drain**, which is the common case on an idle machine (every ~2 s). A caller
+   * treating "we are alive" as the signal keeps using the timestamp alone; a caller deciding
+   * whether the collector has actually re-reached the archive (clearing the durable fault record)
+   * MUST require `delivered > 0`, or a quiet machine clears its fault without sending a byte.
    */
-  onSync?: (at: string) => void;
+  onSync?: (at: string, delivered: number) => void;
   /**
    * M9 heartbeat (opt-in): when `collectorVersion` is set, the loop sends a throttled,
    * best-effort liveness ping each iteration (queue backlog + version). Omitting it
@@ -170,7 +186,17 @@ export async function runSyncLoop(
     await sendHeartbeat(consecutiveSyncFailures);
     // Thread the loop's abort signal into the POST so SIGINT cancels an in-flight sync immediately
     // (C.8) — otherwise a stalled archive connection blocks the engine's shutdown await forever.
-    const outcome = await syncOnce({ ...deps, signal });
+    // M16 16.6 (F1): count what this drain actually delivered. Reset per iteration, and set only
+    // by `syncOnce` after a 2xx ack — an empty drain leaves it 0.
+    let delivered = 0;
+    const outcome = await syncOnce({
+      ...deps,
+      signal,
+      onDelivered: (n) => {
+        delivered = n;
+        deps.onDelivered?.(n);
+      },
+    });
     if (outcome === "stop") {
       deps.onStop?.();
       return "stop";
@@ -178,7 +204,7 @@ export async function runSyncLoop(
     if (signal.aborted) break;
     if (outcome === "ok") {
       consecutiveSyncFailures = 0; // archive reachable — clear the failure streak
-      deps.onSync?.((deps.now ?? (() => new Date()))().toISOString());
+      deps.onSync?.((deps.now ?? (() => new Date()))().toISOString(), delivered);
       // Empty/clean drain — idle. (A non-empty 2xx returns "ok" too; we still
       // idle briefly, then the next claim pulls any remaining batch.)
       await delay(idleMs, signal);
