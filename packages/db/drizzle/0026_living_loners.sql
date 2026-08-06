@@ -1,0 +1,34 @@
+-- M16 16.5 — the index `rawRecordTotals` has needed since 16.4 shipped. Purely additive: one
+-- CREATE INDEX, no column, no constraint, no policy, no shape change. The fingerprint is untouched
+-- and `events` keeps `fingerprint` as its sole primary key.
+--
+-- WHY IT IS A MIGRATION AND NOT A TUNING NOTE. `rawRecordTotals`
+-- (`repositories/data-quality.ts`) counts, per raw record in the window, whether any event was
+-- derived from it — a correlated EXISTS on
+-- `(org_id, source_connector, raw_record_id) = (r.org_id, r.source_connector, r.source_record_id)`.
+-- Before this index NOTHING covered `raw_record_id`: the only candidate was `events_by_org`, which
+-- in a single-org archive matches every row. So the planner chose a sequential scan of `events`
+-- executed once per raw record.
+--
+-- Measured on the real dogfood archive (60,909 raw / 98,919 events), not estimated:
+--
+--     as shipped   plan cost 446,378,008 — did NOT return in 7 minutes (aborted twice)
+--     with index   plan cost     519,564 — 402 ms, Index Only Scan, 9,354 heap fetches
+--
+-- The consequence was not slowness. `POST /v1/audit/data-quality` never responded, no row was ever
+-- written to `report_artifacts`, and the failure was SILENT in the way this milestone keeps
+-- rediscovering: no error, no log line, no alert — the client simply times out and the operator
+-- concludes the archive is busy. Research plan §7 P0.3's acceptance criterion ("weekly scorecard
+-- values are queryable rather than manually guessed") was therefore unmet in production conditions
+-- for the whole life of 16.4, while its integration suite stayed green.
+--
+-- THE COLUMN ORDER IS THE PREDICATE'S ORDER and is not cosmetic. Leading with `org_id` also keeps
+-- the index useful under RLS, where every read already carries an `org_id` equality; leading with
+-- `raw_record_id` (a connector-supplied, globally-scoped string two tenants can share — the
+-- 15.1/15.2 lesson) would have been the tempting choice and the wrong one.
+--
+-- LOCKING: a plain CREATE INDEX takes a SHARE lock, blocking writes to `events` while it builds.
+-- On ~100k rows that is sub-second and the migration runner wraps statements in a transaction, so
+-- CONCURRENTLY (which cannot run inside one) is deliberately NOT used. Revisit only if this table
+-- reaches a size where the build window matters for a live ingest.
+CREATE INDEX "events_by_raw_record" ON "events" USING btree ("org_id","source_connector","raw_record_id");

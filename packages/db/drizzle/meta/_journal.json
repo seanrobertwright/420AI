@@ -183,6 +183,13 @@
       "when": 1785853611904,
       "tag": "0025_naive_overlord",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1785975586909,
+      "tag": "0026_living_loners",
+      "breakpoints": true
     }
   ]
 }

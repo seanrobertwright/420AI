@@ -188,6 +188,39 @@ describe.skipIf(!TEST_URL || !APP_URL)("M16 16.4 data quality (two-role integrat
     expect(who.rows[0]!.u).toBe("420ai_app");
   });
 
+  /**
+   * M16 16.5 regression guard. THIS IS A STRUCTURAL ASSERTION ON PURPOSE, and the reason is the
+   * whole lesson: every OTHER test in this file passes with or without the index, because on
+   * fixtures of a handful of rows O(n·m) and O(n log m) return the same number in the same
+   * millisecond. `rawRecordTotals` shipped in 16.4 with nothing covering `raw_record_id`, and on
+   * the real archive (60,909 raw / 98,919 events) its correlated EXISTS became one sequential scan
+   * of `events` per raw record: plan cost 446,378,008, no result in seven minutes, so
+   * `POST /v1/audit/data-quality` never responded and never wrote an artifact — silently, with a
+   * green suite. With the index: cost 519,564, 402 ms.
+   *
+   * A TIMING ASSERTION WOULD BE THE OBVIOUS TEST AND THE WRONG ONE — it needs production-scale data
+   * to discriminate, and at fixture scale it can only be flaky. So this pins the ACCESS PATH
+   * instead. It is deliberately keyed on the index's COLUMN LIST rather than its name, so renaming
+   * it is fine and dropping or reordering the columns is not.
+   *
+   * The repo's `skipped ≠ passed` / `bypassed ≠ enforced` family gains a third member here:
+   * **passes on fixtures ≠ runs in production.**
+   */
+  it("keeps an index covering the rawRecordTotals join — fixtures cannot detect its absence", async () => {
+    const rows = await appRole.db.execute<{ indexdef: string }>(
+      sql`select indexdef from pg_indexes where schemaname = 'public' and tablename = 'events'`,
+    );
+    const covering = rows.rows.filter((r) =>
+      /\(org_id,\s*source_connector,\s*raw_record_id\)/.test(r.indexdef),
+    );
+    expect(
+      covering.length,
+      "no index on events(org_id, source_connector, raw_record_id) — rawRecordTotals degrades to a " +
+        "seq scan of `events` per raw record and the data-quality audit stops completing on any " +
+        "real archive. See migration 0026.",
+    ).toBe(1);
+  });
+
   it("groups sessions by (session_id, source_connector), never by session_id alone", async () => {
     // The SAME session id on two connectors. Grouping on the id alone would merge them and force
     // an aggregate over `source_connector` — the 15.1 `min(org_id)` smell one column over.

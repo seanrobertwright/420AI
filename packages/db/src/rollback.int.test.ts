@@ -220,7 +220,16 @@ describe.skipIf(!TEST_URL)("migration rollback (rollbackLast, integration)", () 
     return r.rows.map((x) => x.s);
   }
 
-  it("rolls back the latest migration (0025 machine connectors) and a re-migrate restores it", async () => {
+  /** Is the M16 16.5 `rawRecordTotals` covering index present? 0026 creates it; its down drops it. */
+  async function rawRecordIndexExists(): Promise<boolean> {
+    const r = await pool.query(
+      `select 1 from pg_indexes where schemaname = 'public' and tablename = 'events'
+         and indexdef like '%(org_id, source_connector, raw_record_id)%'`,
+    );
+    return r.rowCount === 1;
+  }
+
+  it("rolls back the latest migration (0026 raw-record index) and a re-migrate restores it", async () => {
     // M15 D-M15-13 drill, run in CI rather than by hand. `rollbackLast` reverses THE LATEST
     // migration, so this test retargets with every slice that adds one — 15.5's version named 0017,
     // 15.6's named 0018, 15.7's named 0019 and 15.8's named 0020. The assertions those made survive
@@ -259,9 +268,26 @@ describe.skipIf(!TEST_URL)("migration rollback (rollbackLast, integration)", () 
     // LIVE signal, re-reported in full by every collector on its next heartbeat (≤30 s), so the rows
     // rebuild themselves. Asserting that plainly matters as much as the loud warnings above do — a
     // drill whose every table is irreplaceable teaches the reader to skip the distinction.
-    expect(await trackedCount()).toBe(26);
-    expect(await policyCount()).toBe(72); // 68 through 0024 + 1 org + 3 restrictive from 0025
-    expect(await restrictivePolicyCount()).toBe(51); // 48 through 0024 + 3 from 0025
+    //
+    // M16 16.5 RETARGETS THE DRILL TO 0026, and it is the mildest retarget the file has ever had:
+    // ONE `CREATE INDEX`, no table, no column, no policy. The policy counts therefore do NOT move
+    // (72/51 before and after), which makes 0026 the second INDEX-ONLY migration after 0022 and the
+    // second whose rollback is genuinely LOSSLESS — an index holds no rows, so nothing needs
+    // rebuilding and no dump is required. 0022's "index-only ⇒ lossless" asymmetry survives here as
+    // an untouched-by-0026 invariant, now checked for a second such migration.
+    //
+    // WHAT MAKES 0026 WORTH DRILLING IS THE OPPOSITE OF EVERY ENTRY ABOVE. Those roll back LOUDLY:
+    // a dropped table 500s, a dropped policy denies, a dropped column fails to parse. Dropping this
+    // index changes NO answer anywhere — every query still returns exactly the same rows. What it
+    // changes is whether `POST /v1/audit/data-quality` ever RETURNS: without it `rawRecordTotals`
+    // degrades to one seq scan of `events` per raw record (measured on the real archive at plan cost
+    // 446,378,008, no result in seven minutes), so the endpoint hangs, writes nothing, logs nothing,
+    // and the operator sees a spinner. A rollback of 0026 is therefore SILENT in production, which
+    // is precisely why it is pinned here — this drill is the only place that can notice.
+    expect(await trackedCount()).toBe(27);
+    expect(await policyCount()).toBe(72); // UNMOVED by 0026 — index-only, no policy
+    expect(await restrictivePolicyCount()).toBe(51); // likewise unmoved
+    expect(await rawRecordIndexExists()).toBe(true);
     expect(await machineConnectorsTableExists()).toBe(true);
     expect(await machineConnectorPolicyShape()).toEqual([
       "PERMISSIVE:ALL",
@@ -294,21 +320,28 @@ describe.skipIf(!TEST_URL)("migration rollback (rollbackLast, integration)", () 
     expect(await mixedCaseEmailCount()).toBe(0);
 
     const result = await rollbackLast(TEST_URL!, { downDir, journalPath });
-    expect(result).toEqual({ rolledBack: "0025_naive_overlord" });
-    expect(await trackedCount()).toBe(25);
-    // The table and all four of its policies are gone. Unlike every other destructive down asserted
-    // in this file, THE LOSS IS RECOVERABLE WITHOUT A DUMP: the rows are a projection of a live
-    // signal and the next heartbeat re-reports the whole inventory. The one value that does not
-    // rebuild from the archive's own data — the historical `error_count` — lives in the collector's
-    // `queue.sqlite`, which is its source of truth by design (D-16.3-7), so it survives on the
-    // machine side and re-populates too.
-    expect(await machineConnectorsTableExists()).toBe(false);
-    expect(await machineConnectorPolicyShape()).toEqual([]);
-    expect(await policyCount()).toBe(68);
-    expect(await restrictivePolicyCount()).toBe(48);
-    // 0024's label tables are UNTOUCHED — 0025 names them nowhere, so rolling back capture health
-    // does not cost the human ground truth as well. This is the assertion 16.1 made as its headline;
-    // it survives here as an untouched-by-0025 invariant.
+    expect(result).toEqual({ rolledBack: "0026_living_loners" });
+    expect(await trackedCount()).toBe(26);
+    // THE INDEX IS GONE AND NOTHING ELSE IS. No rows were lost, because an index holds none — the
+    // lossless case 0022 established, now confirmed for a second index-only migration. And unlike
+    // every destructive down above, NOTHING BREAKS LOUDLY: every query still returns exactly the
+    // same rows. Only the audit endpoint stops completing, silently. That asymmetry is the reason
+    // this assertion exists.
+    expect(await rawRecordIndexExists()).toBe(false);
+    // 0025's table and all four of its policies are UNTOUCHED — 0026 names them nowhere — so the
+    // counts that moved for 0025 stay put. An index-only migration must not disturb them.
+    expect(await machineConnectorsTableExists()).toBe(true);
+    expect(await machineConnectorPolicyShape()).toEqual([
+      "PERMISSIVE:ALL",
+      "RESTRICTIVE:DELETE",
+      "RESTRICTIVE:INSERT",
+      "RESTRICTIVE:UPDATE",
+    ]);
+    expect(await policyCount()).toBe(72);
+    expect(await restrictivePolicyCount()).toBe(51);
+    // 0024's label tables are UNTOUCHED — 0026 names them nowhere, so rolling back the audit index
+    // does not cost the human ground truth. This is the assertion 16.1 made as its headline; it
+    // survives here as an untouched-by-0026 invariant.
     expect(await outcomeLabelTablesExist()).toBe(2);
     expect(await outcomeLabelPolicyShape()).toEqual([
       "outcome_label_revisions:PERMISSIVE:ALL",
@@ -350,7 +383,12 @@ describe.skipIf(!TEST_URL)("migration rollback (rollbackLast, integration)", () 
     // the migration FILE (not `db:generate`) is the source of truth for it — the property 0023
     // established and 0024 confirmed, now checked for a THIRD hand-edited migration.
     await runMigrations(TEST_URL!);
-    expect(await trackedCount()).toBe(26);
+    expect(await trackedCount()).toBe(27);
+    // 0026 comes back. There is no "…but the rows are gone" caveat to make here for the first time
+    // in the file — an index has no rows to lose, so for THIS migration the round trip really is
+    // total. Said explicitly because every other re-apply above is followed by an emptiness
+    // assertion, and a reader skimming for the pattern should see why this one has none.
+    expect(await rawRecordIndexExists()).toBe(true);
     expect(await machineConnectorsTableExists()).toBe(true);
     expect(await machineConnectorPolicyShape()).toEqual([
       "PERMISSIVE:ALL",
