@@ -284,7 +284,7 @@ through the deferral-audit + scope conversation that produced M12/M13/M14. Full 
   contaminate the <1% duplicate-rate metric) and D-16.0-1…3. Slices: **16.0** ✅ Truth + research
   scaffold · **16.1** ✅ Outcome label model + API · **16.2** ✅ Label capture (desktop) + review (dashboard) ·
   **16.3** ✅ Capture health scorecard · **16.4** ✅ Data-quality audit report · **16.5** ✅ Audit
-  raw-record index (fix) · **16.6** ✅ Capture-liveness detection (INC-2026-07) · **16.7** ⬜
+  raw-record index (fix) · **16.6** ✅ Capture-liveness detection (INC-2026-07, PR #80) · **16.7** ⬜
   Deployment-scoped alert firings (split out of 16.6's triage — needs a migration). The §7 P1.6
   hero-workflow evidence panel is deliberately **not** a slice —
   the hero workflow is selected from evidence in research Phase 2 (weeks 5–8).
@@ -1046,7 +1046,7 @@ records` and `0 ÷ 4000` are opposite facts. An HTTP test asserts the literal st
     the index name, so a rename is fine and a drop is not. `rollback.int.test.ts` retargets to 0026
     — the second index-only migration after 0022 and the second whose rollback is **lossless**, and
     the first whose rollback is **silent in production**, which is precisely why the drill pins it.
-  - **16.6** ✅ **DONE `2026-08-06`** — Capture-liveness detection. The slice INC-2026-07 earned:
+  - **16.6** ✅ **DONE `2026-08-06` (PR #80)** — Capture-liveness detection. The slice INC-2026-07 earned:
     capture ran dead for ~8 days and **nothing reported it**. Planning found **three independent
     causes, each sufficient for total silence on its own**, all confirmed by reading the code rather
     than inferred. (i) `reconcileAlertFirings` + `deliverPendingFirings` were reachable from exactly
