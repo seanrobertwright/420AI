@@ -195,8 +195,14 @@ export interface WatchRunResult {
    * write (read-only disk, ENOSPC, EPERM), and the entrypoint must not then print "Recorded at
    * <path>" for a file that does not exist — the operator would go looking for it, find nothing,
    * and distrust the whole mechanism.
+   *
+   * REQUIRED, not optional: `runWatch` initialises it to `false` and always returns it, so an
+   * optional marker would have been a lie the compiler enforced on the READER instead. The concrete
+   * cost of the lie: `main()` renders `result.recorded ? "Recorded at …" : "WARNING: could NOT be
+   * written"`, so an `undefined` reaching that ternary prints the alarming half for a write that
+   * actually succeeded — the opposite of the fact, on the one message this feature exists to emit.
    */
-  recorded?: boolean;
+  recorded: boolean;
 }
 
 /**

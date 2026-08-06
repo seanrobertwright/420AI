@@ -265,10 +265,30 @@ export async function deliverPendingFirings(
   log?: (err: unknown) => void,
 ): Promise<void> {
   if (!deliverer) return; // delivery disabled — no query
+  // M16 16.6 — CLAIM ATOMICALLY, then deliver. This was `SELECT … WHERE delivery_attempted_at IS
+  // NULL` → `await deliver()` → `UPDATE … SET delivery_attempted_at`, i.e. a read-then-write with a
+  // THIRD-PARTY NETWORK ROUND TRIP inside the window and no lock, no claim and no conditional
+  // update. Two callers could therefore select the same row and both deliver it.
+  //
+  // That was survivable while the only second caller was another browser tab. 16.6 makes an
+  // unattended second caller permanent: the evaluator ticks for `(org, OWNER)` — and D-16.6-2
+  // deliberately picks the owner, i.e. the one user most likely to also have the dashboard open —
+  // while `routes/monitor.ts` calls `deliverFirings` on EVERY request and EVERY SSE frame,
+  // UNTHROTTLED (unlike the reconcile, which `shouldReconcile` gates). At a 3 s stream cadence the
+  // overlap is not exotic: tick selects a firing and awaits a ~200 ms webhook; 50 ms later the SSE
+  // frame selects the same still-unstamped row and posts it again. Two identical pages for one
+  // outage.
+  //
+  // `UPDATE … WHERE delivery_attempted_at IS NULL … RETURNING` makes the claim and the stamp one
+  // statement, so exactly one caller can win a row — the same trick `attribution.ts` uses, and the
+  // mechanism named rather than "it's in a transaction" (CLAUDE.md 15.5). The at-most-once contract
+  // is unchanged and if anything strengthened: the stamp now lands BEFORE the attempt, so a crash
+  // mid-delivery costs one notice rather than duplicating it. It is also fewer round trips — the
+  // per-firing UPDATE loop is gone.
   const rows = await withOrg(db, orgId, role, (tx) =>
     tx
-      .select(firingColumns)
-      .from(alertFirings)
+      .update(alertFirings)
+      .set({ deliveryAttemptedAt: now })
       .where(
         and(
           eq(alertFirings.orgId, orgId),
@@ -276,22 +296,15 @@ export async function deliverPendingFirings(
           eq(alertFirings.status, "open"),
           isNull(alertFirings.deliveryAttemptedAt),
         ),
-      ),
+      )
+      .returning(firingColumns),
   );
   for (const r of rows) {
-    const firing = toFiring(r);
     try {
-      await deliverer.deliver(firing);
+      await deliverer.deliver(toFiring(r));
     } catch (err) {
       log?.(err);
     }
-    // Stamp regardless of outcome — at-most-once attempt, no 3-second retry spam.
-    await withOrg(db, orgId, role, (tx) =>
-      tx
-        .update(alertFirings)
-        .set({ deliveryAttemptedAt: now })
-        .where(and(eq(alertFirings.orgId, orgId), eq(alertFirings.id, r.id))),
-    );
   }
 }
 
@@ -322,10 +335,13 @@ export async function deliverResolvedFirings(
   log?: (err: unknown) => void,
 ): Promise<void> {
   if (!deliverer) return; // delivery disabled — no query
+  // M16 16.6 — the same atomic claim as `deliverPendingFirings`, for the same reason and against
+  // the same second caller. See that function's note; a resolve notice duplicates just as readily
+  // as an open one, and `resolve_delivered_at` is its `delivery_attempted_at`.
   const rows = await withOrg(db, orgId, role, (tx) =>
     tx
-      .select(firingColumns)
-      .from(alertFirings)
+      .update(alertFirings)
+      .set({ resolveDeliveredAt: now })
       .where(
         and(
           eq(alertFirings.orgId, orgId),
@@ -335,21 +351,14 @@ export async function deliverResolvedFirings(
           isNotNull(alertFirings.deliveryAttemptedAt),
           isNull(alertFirings.resolveDeliveredAt),
         ),
-      ),
+      )
+      .returning(firingColumns),
   );
   for (const r of rows) {
-    const firing = toFiring(r);
     try {
-      await deliverer.deliver(firing);
+      await deliverer.deliver(toFiring(r));
     } catch (err) {
       log?.(err);
     }
-    // Stamp regardless of outcome — at-most-once resolve notice.
-    await withOrg(db, orgId, role, (tx) =>
-      tx
-        .update(alertFirings)
-        .set({ resolveDeliveredAt: now })
-        .where(and(eq(alertFirings.orgId, orgId), eq(alertFirings.id, r.id))),
-    );
   }
 }

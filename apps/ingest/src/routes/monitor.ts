@@ -8,10 +8,7 @@ import {
   MONITOR_VERSION,
   ACTIVE_WINDOW_MS,
   SERVICE_ROLE,
-  alertKey,
-  type AlertFiring,
   type LiveMonitorSnapshot,
-  type OperationalAlert,
 } from "@420ai/shared";
 import {
   machineStatuses,
@@ -31,7 +28,7 @@ import {
   type DbClient,
 } from "@420ai/db";
 import { resolvePrincipal, authorized } from "../auth.js";
-import { deriveAlertSet } from "../alert-set.js";
+import { deriveAlertSet, openFiringsDiverge } from "../alert-set.js";
 
 // `ACTIVE_WINDOW_MS` was a local const here until M16 16.2. It moved to `@420ai/shared` because
 // `GET /v1/labels/queue` defines "settled" as the inverse of this same window (D-16.2-2) and the
@@ -141,21 +138,6 @@ async function buildSnapshot(
     alertFirings = await reconcileAlertFirings(db, orgId, userId, alerts, now);
   }
   return { ...built, alerts, alertFirings };
-}
-
-/**
- * True when the set of OPEN firing keys differs from the set of derived alert keys — i.e. an
- * alert has appeared or cleared since the last reconcile. Compared by `alertKey` (the same key
- * the partial unique index uses), so this asks exactly the question the reconcile would answer.
- * Recently-RESOLVED firings are ignored: they linger in the list as confirmation by design and
- * are not evidence of a change.
- */
-function openFiringsDiverge(alerts: OperationalAlert[], firings: AlertFiring[]): boolean {
-  const open = new Set(firings.filter((f) => f.status === "open").map((f) => f.alertKey));
-  const derived = new Set(alerts.map(alertKey));
-  if (open.size !== derived.size) return true;
-  for (const key of derived) if (!open.has(key)) return true;
-  return false;
 }
 
 /**

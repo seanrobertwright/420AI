@@ -1,7 +1,7 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import { PassThrough } from "node:stream";
 import { mkdtempSync, rmSync, existsSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 import { runServe, type ServeDeps } from "./serve.js";
 import { faultPathFor, loadFault, saveFault } from "./fault.js";
@@ -31,6 +31,35 @@ interface Harness {
   send(cmd: ControlCommand | string, pred: (e: ControlEvent) => boolean): Promise<ControlEvent>;
   waitFor(pred: (e: ControlEvent) => boolean, timeoutMs?: number): Promise<ControlEvent>;
 }
+
+/**
+ * Temp collector homes minted by `makeHarness`, removed after every test.
+ *
+ * PR #80 review (HIGH) — `makeHarness` used to supply NO `home`, so `runServe` fell through to
+ * `deps.home ?? homedir()` and every harness in this file operated on the DEVELOPER'S REAL
+ * `~/.420ai`. That was harmless while nothing there was written; 16.6 made it destructive. The
+ * 13.1 test below fires `onSyncSuccess(…, 1)`, which reaches the new `delivered > 0` branch and
+ * `rmSync`es the real `<profile>/.420ai/fault.json` — so on a dogfood machine, where a Windows
+ * service under the same profile is the documented writer, `npm test` ERASES the durable outage
+ * record this slice exists to create, and `service/README.md` tells the operator "no file =
+ * healthy". The suite manufactured the exact false negative the slice was built to eliminate.
+ *
+ * There was a quieter READ half too: `startEngine` now calls `loadFault(faultPathFor(home))`, so
+ * ~15 pre-existing tests emitted an extra `error` ControlEvent IFF the host machine happened to
+ * hold a fault — a unit test whose event stream depended on whose laptop ran it. Same root cause,
+ * same fix. This mirrors the `approvalsBlob` seam directly above, whose comment already says it
+ * exists "so seed-on-boot never touches the real ~/.420ai".
+ */
+const harnessHomes: string[] = [];
+afterEach(() => {
+  for (const h of harnessHomes.splice(0)) {
+    try {
+      rmSync(h, { recursive: true, force: true });
+    } catch {
+      /* best effort */
+    }
+  }
+});
 
 function makeHarness(overrides: Partial<ServeDeps> = {}): Harness {
   const stdin = new PassThrough();
@@ -84,7 +113,15 @@ function makeHarness(overrides: Partial<ServeDeps> = {}): Harness {
   // (Tests that need to assert drift inject their own via overrides.)
   let approvalsBlob: ConnectorApprovals = { version: "test", approved: {} };
 
+  // Default home = a PER-HARNESS temp dir (see `harnessHomes`). Every path `runServe` derives from
+  // `home` — the fault record, the connector config, the approvals file — therefore lands in a
+  // sandbox instead of the operator's profile. Tests that pass their own `home` still win: the
+  // `...overrides` spread below is applied after this.
+  const defaultHome = mkdtempSync(join(tmpdir(), "m16-serve-home-"));
+  harnessHomes.push(defaultHome);
+
   const deps: ServeDeps = {
+    home: defaultHome,
     stdin,
     stdout,
     stderr: { write: () => true },
@@ -107,6 +144,17 @@ function makeHarness(overrides: Partial<ServeDeps> = {}): Harness {
     },
     ...overrides,
   };
+
+  // The structural half of the guard, applied to EVERY harness in this file including any future
+  // one that passes its own `home`: a unit test may never resolve a collector-home artifact under
+  // the operator's real profile. A default that silently regresses to `undefined` (which `runServe`
+  // turns into `homedir()`) fails here rather than in the operator's `~/.420ai`.
+  if (deps.home === undefined || deps.home === homedir()) {
+    throw new Error(
+      `makeHarness must run against a sandbox home, got ${String(deps.home)} — runServe writes ` +
+        `fault.json / connectors.json / approvals.json under it.`,
+    );
+  }
 
   const done = runServe(deps);
 
@@ -646,6 +694,73 @@ describe("serve custom connectors (M10-S2)", () => {
       await h.done;
     } finally {
       rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * PR #80 review (HIGH) — `npm test` must not touch the operator's REAL `~/.420ai`.
+   *
+   * `makeHarness` supplied no `home`, so `runServe` fell back to `homedir()` and the 13.1 test's
+   * `onSyncSuccess("…", 1)` reached 16.6's `delivered > 0` branch and `rmSync`ed the developer's
+   * own `fault.json` — on a dogfood machine, where the Windows service under the same profile is
+   * the documented writer, the suite deleted the durable outage record while `service/README.md`
+   * tells the operator that no file means healthy.
+   *
+   * Measured, not asserted structurally: `homedir()` reads `USERPROFILE`/`HOME` on each call, so
+   * redirecting them puts a REAL collector home under a temp dir. A file planted exactly where an
+   * operator's would live must still be there after driving the very harness shape that deleted it
+   * (no `home` override, a delivering sync). `fileParallelism: false` (vitest.config.ts) means no
+   * other test file runs while the environment is redirected, and it is restored in a `finally`.
+   */
+  it("PR #80: a harness with NO home override never touches the real ~/.420ai", async () => {
+    const profile = mkdtempSync(join(tmpdir(), "m16-serve-profile-"));
+    const prevHome = process.env.HOME;
+    const prevUserProfile = process.env.USERPROFILE;
+    process.env.HOME = profile;
+    process.env.USERPROFILE = profile;
+    try {
+      // Sanity: without this the whole test is theatre — it would sandbox nothing and pass anyway.
+      expect(homedir()).toBe(profile);
+      const operatorFault = faultPathFor(homedir());
+      saveFault(
+        {
+          code: "auth_revoked",
+          message: "ingest returned 401 — token revoked.",
+          since: "2026-08-06T12:00:00.000Z",
+          url: "https://archive.example",
+        },
+        operatorFault,
+      );
+
+      // EXACTLY the shape that deleted it: no `home`, and a drain that delivered.
+      const runEngine = (opts: CaptureEngineOptions): Promise<void> => {
+        opts.onSyncSuccess?.("2026-08-06T13:00:00.000Z", 1);
+        return new Promise<void>((resolve) => {
+          if (opts.signal.aborted) return resolve();
+          opts.signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      };
+      const h = makeHarness({ runEngine });
+      await h.send({ cmd: "start" }, (e) => e.type === "status" && e.state === "running");
+
+      // The operator's record survives the test suite.
+      expect(existsSync(operatorFault)).toBe(true);
+      expect(loadFault(operatorFault)?.since).toBe("2026-08-06T12:00:00.000Z");
+      // …and the read half: the harness never announced the operator's fault as its own.
+      expect(
+        h.events.filter(
+          (e) => e.type === "error" && /capture fault is on record/.test(e.message ?? ""),
+        ),
+      ).toHaveLength(0);
+
+      await h.send({ cmd: "stop" }, (e) => e.type === "stopped");
+      await h.done;
+    } finally {
+      if (prevHome === undefined) delete process.env.HOME;
+      else process.env.HOME = prevHome;
+      if (prevUserProfile === undefined) delete process.env.USERPROFILE;
+      else process.env.USERPROFILE = prevUserProfile;
+      rmSync(profile, { recursive: true, force: true });
     }
   });
 

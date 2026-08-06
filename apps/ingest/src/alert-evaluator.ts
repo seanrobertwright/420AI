@@ -8,6 +8,7 @@ import {
   countPendingCatalogs,
   countRecentAuthFailures,
   reconcileAlertFirings,
+  listAlertFirings,
   deliverPendingFirings,
   deliverResolvedFirings,
   withOrg,
@@ -24,7 +25,7 @@ import {
   type AlertFiring,
   type LiveMonitorSnapshot,
 } from "@420ai/shared";
-import { deriveAlertSet } from "./alert-set.js";
+import { deriveAlertSet, openFiringsDiverge } from "./alert-set.js";
 
 /**
  * M16 16.6 — the BACKGROUND alert evaluator (INC-2026-07).
@@ -72,6 +73,23 @@ export interface EvaluatorDeps {
   now: Date;
   /** Library file — it never logs itself. The plugin wires this to `app.log.error`. */
   onError: (err: unknown) => void;
+  /**
+   * The SAME reconcile gate `routes/monitor.ts` applies, injected so the tick and the route share
+   * one throttle keyed on `(orgId, userId)` (M15 15.4 audit B.4).
+   *
+   * Sharing it is not about saving a write. Before this, the tick reconciled unconditionally while
+   * the route consulted `app.reconcileLastRunAt`, so two reconciles for the SAME `(org, owner)`
+   * could run concurrently — and `reconcileAlertFirings` takes locks in two phases: a per-alert
+   * upsert loop, then a bulk `UPDATE … WHERE alert_key NOT IN (keys)`. When two transactions derive
+   * DIFFERENT alert sets, phase 1 of one holds rows phase 2 of the other wants and vice versa —
+   * a lock-order inversion, i.e. `40P01`. Divergent sets are ordinary rather than exotic: every
+   * alert is time-windowed and the two callers hold different `now` values, so a window boundary
+   * crossing between them is enough. That deadlock is also precisely the never-settling tick that
+   * wedges the plugin's re-entrancy guard permanently, from which there is no automatic recovery.
+   *
+   * Omitted → always reconcile, which is the right default for a direct call in a test.
+   */
+  shouldReconcile?: (orgId: string, userId: string, now: Date) => boolean;
 }
 
 /** What one tick did, for the caller's log line. Counts, never rows — nothing here is a wire type. */
@@ -196,7 +214,19 @@ export async function evaluateOrgAlerts(
       authFailureCount,
       windowedConnectors,
     });
-    await reconcileAlertFirings(tx, orgId, userId, derived, deps.now);
+    // THROTTLED, UNLESS THE ANSWER WOULD DIFFER — the route's exact logic (`routes/monitor.ts`),
+    // now reached through the shared `openFiringsDiverge`. A blanket "skip the reconcile while
+    // throttled" would be wrong in the way that is easy to miss: `deliverPendingFirings` reads
+    // persisted ROWS, so a newly-derived alert with no row yet would be un-ackable and undelivered
+    // until the throttle elapsed — on the one path whose entire job is to report that something
+    // broke. So a throttled tick READS first (a SELECT it would do anyway) and reconciles anyway
+    // when the derived set disagrees with what is persisted. The write is skipped only when there
+    // is genuinely nothing to write, which is the common case by far.
+    const due = deps.shouldReconcile?.(orgId, userId, deps.now) ?? true;
+    const persisted = due ? null : await listAlertFirings(tx, orgId, userId, deps.now);
+    if (persisted === null || openFiringsDiverge(derived, persisted)) {
+      await reconcileAlertFirings(tx, orgId, userId, derived, deps.now);
+    }
     return derived;
   });
 
@@ -256,7 +286,18 @@ export async function runEvaluatorTick(deps: EvaluatorDeps): Promise<EvaluatorTi
         result.skipped += 1;
         continue;
       }
-      result.alerts += await evaluateOrgAlerts(deps, org.id, reconcileUser.userId);
+      // A FRESH CLOCK PER ORG, not one instant frozen across the whole tick. Within a single org
+      // the reconcile and both deliver calls must share an instant (that pairing is what makes
+      // `first_fired_at`/`resolved_at`/`delivery_attempted_at` consistent), but ACROSS orgs a frozen
+      // clock means the last org is judged against a `now` stale by the whole tick duration: a
+      // machine that crossed the offline threshold mid-tick stays `online` for another cycle, and
+      // stamps record times earlier than the events they describe. Harmless at one org; org count
+      // tracks USER count here (`ensurePersonalOrg`), so it does not stay at one.
+      result.alerts += await evaluateOrgAlerts(
+        { ...deps, now: new Date() },
+        org.id,
+        reconcileUser.userId,
+      );
       result.orgs += 1;
     } catch (err) {
       result.failed += 1;

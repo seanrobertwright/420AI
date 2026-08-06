@@ -326,6 +326,48 @@ describe.skipIf(!TEST_URL || !APP_URL)("M16 16.6 background alert evaluator", ()
     expect((firings.rows[0] as { user_id: string }).user_id).not.toBe(viewerId);
   });
 
+  it("ISOLATES a failing org — the loop continues and later orgs still deliver", async () => {
+    // `expect(result.failed).toBe(0)` appears five times in this file; `failed > 0` appeared
+    // nowhere, so the try/catch around the loop body — which the source calls "the one outcome this
+    // component may never produce" — was pinned by nothing. Deleting it would leave the whole file
+    // green while making ONE bad org cost EVERY other org its detection, in the component whose
+    // entire job is to survive to report other things' failures.
+    //
+    // The throwing deliverer test does NOT cover this: `deliverPendingFirings` catches internally,
+    // so `failed` stays 0 there. The failure has to be at the ORG level, which is what proxying
+    // `transaction` gives us — the first `withOrg` of the tick rejects.
+    const userB = await setUserPassword(owner.db, "b@example.com", hashPassword(PASSWORD));
+    const orgB = await ensurePersonalOrg(owner.db, userB, "b@example.com");
+    await seedOfflineMachine(orgId, userId, "doomed-machine"); // org A — created first
+    const machineB = await seedOfflineMachine(orgB, userB, "surviving-machine");
+
+    let transactions = 0;
+    const flaky = new Proxy(appRole.db, {
+      get(target, prop, receiver) {
+        if (prop === "transaction") {
+          return (...args: unknown[]) =>
+            transactions++ === 0
+              ? Promise.reject(new Error("simulated org failure"))
+              : (target.transaction as (...a: unknown[]) => unknown)(...args);
+        }
+        return Reflect.get(target, prop, receiver) as unknown;
+      },
+    });
+
+    const result = await runEvaluatorTick(deps({ db: flaky }));
+
+    expect(result.failed).toBe(1);
+    expect(result.orgs).toBe(1); // org B was still evaluated
+    expect(deliverer.deliver).toHaveBeenCalledTimes(1);
+    expect(delivered[0]!.machineId).toBe(machineB);
+    // The error names WHICH org failed and preserves the original — without the wrapper the
+    // operator gets a bare stack trace, in a sink shared by three different failure sources.
+    expect(errors).toHaveLength(1);
+    const err = errors[0] as Error;
+    expect(err.message).toContain(orgId);
+    expect((err as Error & { cause?: Error }).cause).toBeInstanceOf(Error);
+  });
+
   it("skips an org with NO members rather than throwing", async () => {
     // Possible mid-teardown: the org row outlives its last membership. `withOrg` needs a user to
     // reconcile as, so there is nothing to do — but a throw here would take out every OTHER org's

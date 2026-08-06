@@ -436,3 +436,111 @@ describe("runCaptureEngine shutdown-drain 401 (M16 16.6 F2)", () => {
     expect(JSON.stringify(seen[0])).not.toContain("tok-drain");
   });
 });
+
+/**
+ * M16 16.6 (F-D) — a SHUTDOWN DRAIN that delivers must resolve a stale fault, like any other
+ * delivery.
+ *
+ * The drain called `syncOnce` without `onDelivered`, so its acks never reached `onSyncSuccess` —
+ * the only path `cli.ts` / `serve.ts` clear `fault.json` from. Realistic run: a fault is on disk
+ * from a previous run, the operator re-pairs, and the run is short enough (a `Stop-Service`, or a
+ * desktop pause landing inside the ~2 s idle cadence) that the ONLY successful delivery happens in
+ * the 5 s drain. The record then survives a run that demonstrably re-reached the archive and reads
+ * as a live outage — `service/README.md` tells the operator a file that is still there is a fault
+ * that is still happening.
+ *
+ * Same fixture shape as F2 above: the sync loop's POST is cancelled by SIGINT (so the loop unwinds
+ * through "aborted" having delivered NOTHING and fired no `onSync`), which makes the drain the only
+ * possible source of any `onSyncSuccess` call in this test.
+ */
+describe("runCaptureEngine shutdown-drain delivery (M16 16.6 F-D)", () => {
+  const homes: string[] = [];
+  afterEach(() => {
+    for (const h of homes.splice(0)) {
+      try {
+        rmSync(h, { recursive: true, force: true });
+      } catch {
+        /* best effort */
+      }
+    }
+  });
+
+  /** Seed `items` queued events under a fresh temp home and return its queue path. */
+  function seedQueue(items: number): { home: string; queuePath: string } {
+    const home = mkdtempSync(join(tmpdir(), "m16-drain-deliver-"));
+    homes.push(home);
+    const queuePath = join(home, "queue.sqlite");
+    const seed = new QueueStore(queuePath);
+    for (let i = 0; i < items; i += 1)
+      seed.enqueue("event", `fp-d-${i}`, { fingerprint: `fp-d-${i}` });
+    seed.close();
+    return { home, queuePath };
+  }
+
+  it("reports what the drain DELIVERED through onSyncSuccess, so a stale fault self-resolves", async () => {
+    const { home, queuePath } = seedQueue(3);
+    const ctrl = new AbortController();
+    const syncs: { at: string; delivered: number }[] = [];
+
+    await runCaptureEngine({
+      creds: { url: "https://archive.example", token: "tok-dd", machineId: "m1" },
+      signal: ctrl.signal,
+      queuePath,
+      home,
+      connectors: [],
+      gitIntervalMs: 0,
+      intervalMs: 5,
+      post: async (_url, _token, batch, o) => {
+        if (o?.signal) {
+          // The SYNC LOOP's call — Ctrl-C cancels it. `syncOnce` releases the claim with no
+          // backoff and returns "retry"; the loop breaks on `signal.aborted` and fires no `onSync`.
+          ctrl.abort();
+          const err = new Error("aborted");
+          err.name = "AbortError";
+          throw err;
+        }
+        // The SHUTDOWN DRAIN's call — the archive is reachable again and accepts the backlog.
+        return { recordsInserted: batch.records.length, eventsUpserted: batch.events.length };
+      },
+      onSyncSuccess: (at, delivered) => syncs.push({ at, delivered }),
+    });
+
+    // Exactly one report, carrying a POSITIVE count — the predicate `cli.ts`/`serve.ts` gate the
+    // `clearFault` on. Without the fix this array is EMPTY and the fault file survives forever.
+    expect(syncs).toHaveLength(1);
+    expect(syncs[0]!.delivered).toBe(3);
+    expect(Date.parse(syncs[0]!.at)).not.toBeNaN();
+  });
+
+  /**
+   * The negative half, preserved deliberately: an EMPTY drain makes no request at all, so it proves
+   * nothing about the archive and must NOT reach the callers' `delivered > 0` clear. Threading the
+   * count out of the drain would be worthless if it also invented a delivery here.
+   */
+  it("an EMPTY drain reports nothing at all (it contacted no archive)", async () => {
+    const { home, queuePath } = seedQueue(0);
+    const ctrl = new AbortController();
+    const syncs: { at: string; delivered: number }[] = [];
+
+    const engine = runCaptureEngine({
+      creds: { url: "https://archive.example", token: "tok-dd", machineId: "m1" },
+      signal: ctrl.signal,
+      queuePath,
+      home,
+      connectors: [],
+      gitIntervalMs: 0,
+      intervalMs: 5,
+      post: async () => {
+        throw new Error("an empty queue must never POST");
+      },
+      onSyncSuccess: (at, delivered) => syncs.push({ at, delivered }),
+    });
+    // Let the loop take one idle turn, then stop it: the sync loop's own empty-drain `onSync`
+    // carries delivered=0, and the shutdown drain must add nothing.
+    await new Promise((r) => setTimeout(r, 30));
+    ctrl.abort();
+    await engine;
+
+    expect(syncs.every((s) => s.delivered === 0)).toBe(true);
+  });
+});

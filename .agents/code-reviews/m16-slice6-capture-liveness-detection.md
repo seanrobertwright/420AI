@@ -427,3 +427,123 @@ tests that could not fail, two comments asserting mechanisms that do not exist, 
 teardown leak — plus, after the maintainer's triage, the three remaining 401 observation points that
 the first cut left unwatched.
 
+
+---
+
+## Third pass — `prp-review --agents all` (PR #80)
+
+Two specialists over the **PR diff** (correctness/errors, tests/types) rather than the working tree.
+16 new findings, none duplicating the passes above. The maintainer chose to fix 1–12 and defer one
+to 16.7. Every fix measured red-on-revert.
+
+### 21. `npm test` DELETED the operator's real `~/.420ai/fault.json` — FIXED
+
+```
+severity: high (destroys state outside the repo)
+file: apps/collector/src/serve.test.ts
+```
+
+`makeHarness()` never supplied `home`, so `runServe` fell through to `deps.home ?? homedir()`. The
+M13 13.1 test was updated to `onSyncSuccess?.(…, 1)` — `delivered > 0` — which reaches 16.6's new
+`clearFault(faultPathFor(home))` and `rmSync`es the REAL record. On a dogfood machine, where a
+Windows service under the same profile is the documented writer, **running the test suite erases the
+durable outage record this slice exists to create** — and `service/README.md` tells the operator "no
+file = healthy", so the suite manufactures precisely the false negative the slice was built to
+eliminate. The quieter read half: ~15 pre-existing serve tests called `loadFault(faultPathFor(
+homedir()))`, making their event stream depend on the developer's machine.
+
+Fixed with a per-harness `mkdtemp` home plus **two guards**: a structural assertion that throws if
+any harness resolves `home` to `homedir()`, and a behavioural test that redirects the profile,
+plants a real `fault.json`, drives the exact shape that deleted it, and asserts the file survives.
+**verified:** reverting deletes the planted file (`expected false to be true`); reverting only the
+home while keeping the assertion fails 12 tests with a named error.
+
+### 22. Duplicate alert delivery — the tick and the dashboard drained the same rows — FIXED
+
+```
+severity: medium
+file: packages/db/src/repositories/alert-firings.ts
+```
+
+`deliverPendingFirings` was `SELECT … WHERE delivery_attempted_at IS NULL` → `await deliver()` → 
+`UPDATE … SET delivery_attempted_at`: a read-then-write with a **third-party network round trip**
+inside the window, no lock and no claim. Survivable while the only second caller was another browser
+tab; 16.6 makes an unattended one permanent, and `routes/monitor.ts` calls `deliverFirings` on every
+request and every SSE frame **unthrottled** (unlike the reconcile). At a 3 s stream cadence: the tick
+selects a firing and awaits a ~200 ms webhook, 50 ms later the SSE frame selects the same unstamped
+row and posts it again. Two identical pages for one outage.
+
+Fixed with an atomic `UPDATE … WHERE delivery_attempted_at IS NULL … RETURNING` claim in both
+deliver functions. At-most-once is unchanged and arguably strengthened — the stamp now lands before
+the attempt, so a crash mid-delivery costs one notice rather than duplicating it.
+
+### 23. The tick bypassed the 15.4 reconcile throttle → deadlock → wedge — FIXED
+
+```
+severity: medium
+file: apps/ingest/src/alert-evaluator.ts
+```
+
+The route gates `reconcileAlertFirings` behind `shouldReconcile`; the tick called it directly,
+neither consulting nor updating `app.reconcileLastRunAt`. So two reconciles for the same
+`(org, owner)` could run concurrently — and `reconcileAlertFirings` takes locks in two phases (a
+per-alert upsert loop, then a bulk `UPDATE … WHERE alert_key NOT IN (keys)`). With **different**
+derived sets, phase 1 of one holds rows phase 2 of the other wants: a lock-order inversion, `40P01`.
+Divergent sets are ordinary, not exotic — every alert is time-windowed and the two callers hold
+different `now` values, so one window boundary between them suffices. And that deadlock is exactly
+the never-settling tick that wedges the re-entrancy guard permanently.
+
+Fixed by injecting the route's gate into `EvaluatorDeps` so both share one throttle, with
+`openFiringsDiverge` moved to `alert-set.ts` so a throttled tick still reconciles when the answer
+would differ — otherwise a newly-derived alert would sit with no firing row, un-ackable and
+undelivered, on the path whose whole job is to report that something broke.
+
+### 24–26. Three earlier fixes had shipped UNPINNED — FIXED
+
+The wedge escalation, the `info`/`debug` decision, and per-org error isolation each had zero
+coverage. The first two **are log lines** — their entire value is visibility at the default level —
+and the test app was built with `logger: false`, making them unassertable; reverting the escalation
+constant to 500 or the level to `debug` left the suite green. `failed > 0` appeared in no test, so
+deleting the try/catch around the org loop would have left the whole file green while making one bad
+org cost every other org its detection.
+
+Fixed with a capturing pino stream in the plugin test and a proxied `transaction` in the int suite
+that fails exactly one org. **verified:** each reverts red.
+
+### 27–32. Six lows — FIXED
+
+`loadFault` now validates `lastObservedAt` (read by two production callers, so `12345` would reach an
+operator message); `WatchRunResult.recorded` made required and pinned with `@ts-expect-error`; the
+shutdown drain now reports its delivered count so a stale fault clears; `as never` casts replaced;
+`deriveAlertSet` gained a **no-DB** unit test (its only coverage was behind a DOUBLE env gate —
+`skipped ≠ passed` applied to the guard rather than the feature); the clock is now read per org
+rather than frozen across the tick.
+
+**The unhandled-rejection test was rewritten rather than kept.** It asserted
+`process.on("unhandledRejection")` was never called — which passes for the wrong reason: without the
+swallow, the rejection propagates into `inFlight` and `await app.close()` rejects FIRST, so the test
+goes red at a line unrelated to its name, and it never established that Node would emit the event
+under vitest with fake timers at all. It now asserts the two things that are true and load-bearing:
+the error is logged, and `close()` resolves.
+
+### Deferred to 16.7 — a persistently unreachable archive is silent
+
+`consecutiveSyncFailures` is reported **only via the heartbeat**, which is the one channel that
+cannot arrive when the archive is what is down. So a 500/ECONNREFUSED loop grows the queue without
+bound, writes no fault, exits 0, and leaves WinSW seeing a healthy service — INC-2026-07's
+*observable symptom* reached by a different cause. The archive-side `archive.unreachable` alert
+cannot cover it either, since it derives from heartbeat rows that by definition stop arriving. The
+cheap fix is a second `CaptureFault.code`, which 16.6's "no new alert code" criterion excludes.
+
+### Not fixed (maintainer's call, stated)
+
+- The `"Recorded at"` vs `WARNING` string selection in `cli.ts` — `main()` is not seamed, so pinning
+  one string needs a child-process harness.
+
+### A note on the test run
+
+Two intermediate full-suite runs showed scattered failures — an FK violation for a row just created,
+`unknown machine` immediately after inserting it, different tests each time. That is the documented
+Docker Postgres checkpoint-stall signature, not a regression: `CHECKPOINT` on both databases and the
+suite returned to 169 files / 1646 tests / 653 integration / **0 skipped**, green. Recorded here
+because the instinct on seeing it is to bisect, and bisecting a checkpoint stall finds nothing.

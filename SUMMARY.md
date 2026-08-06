@@ -1137,6 +1137,14 @@ records` and `0 ÷ 4000` are opposite facts. An HTTP test asserts the literal st
     functions, three call sites in `routes/monitor.ts`, three in `alert-evaluator.ts`, the ack route,
     and a rollback drill. Needs its own decision on whether global alerts get a deployment scope
     (nullable `org_id` + a partial index) or stay org-scoped and deduplicate at delivery.
+    A third item joined it from 16.6's `prp-review`: **a persistently UNREACHABLE archive (non-401)
+    is entirely silent.** `consecutiveSyncFailures` is reported only via the heartbeat — the one
+    channel that cannot arrive when the archive is what is down — so a 500/ECONNREFUSED loop grows
+    the queue without bound, writes no fault, exits 0, and leaves WinSW seeing a healthy service.
+    That is INC-2026-07's observable symptom reached by a different cause, and the server-side
+    `archive.unreachable` alert cannot cover it because it derives from heartbeat rows that by
+    definition stop arriving. The cheap fix is a second `CaptureFault.code`, which 16.6's "no new
+    alert code" criterion excludes.
 
 - [ ] **M17–M20 remain committed scope, unsequenced** (§3, PRD §25). Each still needs its own
       deferral-audit + scope conversation before it is executable. (**M20** is Cloud-hosted SaaS,

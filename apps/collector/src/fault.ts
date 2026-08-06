@@ -100,13 +100,20 @@ export function loadFault(path = FAULT_PATH): CaptureFault | undefined {
   }
   // A cast is not a check: `{}` parses fine and would hand every caller a record whose `message`
   // and `since` are `undefined` — which then reaches `saveFault`'s continuity comparison, the CLI's
-  // stderr line and the desktop's error event as the string "undefined". Validate the three fields
-  // the readers actually use; anything else is treated exactly like a corrupt file.
+  // stderr line and the desktop's error event as the string "undefined". Validate EVERY field a
+  // reader touches; anything else is treated exactly like a corrupt file.
+  //
+  // That includes `lastObservedAt`, which is optional but NOT unread: `cli.ts` and `serve.ts` both
+  // interpolate it into the operator-facing "a capture fault is on record …, last observed X"
+  // message, and `saveFault` carries it forward. Validating four fields and casting the fifth is
+  // the same defect one field over — the declared type would say `string | undefined` while the
+  // runtime value was a number. Optional here means "absent or a string", never "anything".
   if (typeof parsed !== "object" || parsed === null) return undefined;
   const rec = parsed as Partial<CaptureFault>;
   if (rec.code !== "auth_revoked") return undefined;
   if (typeof rec.message !== "string" || typeof rec.since !== "string") return undefined;
   if (typeof rec.url !== "string") return undefined;
+  if (rec.lastObservedAt !== undefined && typeof rec.lastObservedAt !== "string") return undefined;
   return rec as CaptureFault;
 }
 

@@ -72,6 +72,17 @@ export default fp(async function alertEvaluatorPlugin(app: FastifyInstance): Pro
         deliverer: app.alertDeliverer,
         now: new Date(),
         onError: (err) => app.log.error(err),
+        // THE SAME MAP AND THE SAME THRESHOLD `routes/monitor.ts` uses, so the tick and the route
+        // share ONE throttle per `(org, user)` rather than each keeping its own idea of when the
+        // last reconcile happened. Stamped BEFORE the caller awaits anything, exactly as the route
+        // does it, so two overlapping evaluations cannot both observe a stale `last`.
+        shouldReconcile: (orgId, userId, now) => {
+          const key = `${orgId}:${userId}`;
+          const last = app.reconcileLastRunAt.get(key) ?? 0;
+          const due = now.getTime() - last >= app.reconcileThrottleMs;
+          if (due) app.reconcileLastRunAt.set(key, now.getTime());
+          return due;
+        },
       });
       // AT `info` WHEN ANYTHING HAPPENED, and that is not a logging preference. `server.ts`
       // defaults `LOG_LEVEL` to `info`, so a `debug`-only line means production has NO evidence the

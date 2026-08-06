@@ -93,6 +93,11 @@ export interface CaptureEngineOptions {
    * M16 16.6 (F1): `delivered` is how many queue items the archive accepted on that drain — **0 for
    * the empty-queue drain that fires every idle tick without making a request**. "We are alive" may
    * use the timestamp alone; "we have re-reached the archive" must require `delivered > 0`.
+   *
+   * M16 16.6 (F-D): also fired for the SHUTDOWN DRAIN when that drain delivered anything, because on
+   * a short run (a `Stop-Service`, a pause inside the idle cadence) the drain is the only delivery
+   * the run ever makes — and a caller that never hears about it leaves a stale fault record on disk
+   * after a run that provably re-reached the archive.
    */
   onSyncSuccess?: (at: string, delivered: number) => void;
   /**
@@ -502,6 +507,20 @@ export async function runCaptureEngine(opts: CaptureEngineOptions): Promise<void
     // Best-effort final drain of anything captured but not yet sent — bounded by SHUTDOWN_DRAIN_MS
     // so a huge backlog or a stalled archive can never hang exit (C.8). Leftover items stay queued.
     log("draining queue before exit…");
+    /**
+     * M16 16.6 (F-D): what the SHUTDOWN DRAIN actually delivered.
+     *
+     * The drain omitted `onDelivered`, so items it successfully acked were invisible to
+     * `onSyncSuccess` — the only path that clears the durable fault record. The run that costs:
+     * a fault is on disk from a previous run, the operator re-pairs, and the run is SHORT (a
+     * `Stop-Service`, or a desktop pause landing inside the ~2 s idle cadence) so the ONLY
+     * successful delivery happens here, in the 5 s drain. The stale record then survived a run that
+     * had demonstrably re-reached the archive, and reads as a live outage.
+     *
+     * Accumulated across every drain iteration (`drainBeforeExit` may call `syncOnce` repeatedly),
+     * so a multi-batch drain reports the total rather than the last batch.
+     */
+    let drainDelivered = 0;
     const drainOutcome = await drainBeforeExit(
       // Each drain POST is bounded by the budget REMAINING until the deadline, so even a single
       // stalled archive connection can't outlast it (the between-calls check alone can't interrupt a
@@ -513,10 +532,22 @@ export async function runCaptureEngine(opts: CaptureEngineOptions): Promise<void
           token: opts.creds.token,
           timeoutMs,
           post: opts.post,
+          onDelivered: (n) => {
+            drainDelivered += n;
+          },
         }),
       () => queue.stats().pending,
       { deadlineMs: SHUTDOWN_DRAIN_MS },
     );
+    // Route the drain's deliveries through the SAME `onSyncSuccess` the sync loop uses, so the
+    // callers' `delivered > 0` predicate — the property that stops an empty, no-POST drain from
+    // clearing a fault it never disproved — keeps deciding, unchanged. Fired only when something was
+    // actually accepted, so a no-op drain still reports nothing (and never stamps a fake "last
+    // sync"), and never after a `"stop"`, whose fault record is written two lines below and must not
+    // be erased by deliveries that preceded the 401 in the same drain.
+    if (drainDelivered > 0 && drainOutcome !== "stop") {
+      opts.onSyncSuccess?.(new Date().toISOString(), drainDelivered);
+    }
     // M16 16.6 (F2): the drain is the LAST authenticated request the collector makes, and on the
     // realistic path — the operator restarts the machine, the token having been revoked meanwhile —
     // it is the FIRST to see the 401: SIGINT ends the sync loop through the "aborted" branch before

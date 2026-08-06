@@ -109,10 +109,22 @@ describe("fault record (M16 16.6)", () => {
       '{ "code": "auth_revoked", "since": "s", "url": "u" }', // no message
       '{ "code": "auth_revoked", "message": "m", "url": "u" }', // no since
       '{ "code": "auth_revoked", "message": "m", "since": 12345, "url": "u" }', // wrong type
+      // OPTIONAL is not UNCHECKED. `lastObservedAt` is read by both entrypoints (they interpolate
+      // it into "…, last observed X"), so a number here yields a record whose declared type says
+      // `string | undefined` and whose runtime value is neither — the `{}` defect one field over.
+      '{ "code": "auth_revoked", "message": "m", "since": "s", "url": "u", "lastObservedAt": 12345 }',
     ]) {
       writeFileSync(path, body);
       expect(loadFault(path), body).toBeUndefined();
     }
+  });
+
+  /** …but an ABSENT `lastObservedAt` is legitimate: it is optional, and a pre-16.6-fix file lacks it. */
+  it("accepts a record with no lastObservedAt at all (the field is genuinely optional)", () => {
+    const path = faultPathFor(tempHome());
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, '{ "code": "auth_revoked", "message": "m", "since": "s", "url": "u" }');
+    expect(loadFault(path)).toEqual({ code: "auth_revoked", message: "m", since: "s", url: "u" });
   });
 
   it("clearFault removes the record, making the signal self-resolving", () => {

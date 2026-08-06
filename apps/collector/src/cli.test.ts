@@ -380,6 +380,40 @@ describe("watchExitCode (M16 16.6 — exit 1 on a fatal 401, 0 on SIGINT)", () =
   });
 
   it("exits 0 for a clean SIGINT-style stop, so a deliberate stop never restart-loops", () => {
-    expect(watchExitCode({})).toBe(0);
+    expect(watchExitCode({ recorded: false })).toBe(0);
+  });
+
+  /**
+   * `recorded` is REQUIRED. `runWatch` initialises it to `false` and always returns it, so marking
+   * it optional made the type claim something untrue — and the claim is load-bearing, because
+   * `main()` prints "WARNING: the fault record could NOT be written" on the falsy branch. An
+   * `undefined` there is a warning about a write that succeeded.
+   *
+   * Enforced by the COMPILER (root `tsc -b` covers co-located `*.test.ts`): `@ts-expect-error` is
+   * itself an error when the expression compiles cleanly, so making `recorded` optional again fails
+   * the typecheck on this line.
+   */
+  it("declares `recorded` as required, not optional", async () => {
+    // @ts-expect-error `recorded` is required — omitting it must not compile.
+    const missing: WatchRunResult = { fault };
+    expect(watchExitCode(missing)).toBe(1);
+    // …and the runtime honours the declaration on the happy path too.
+    const home = mkdtempSync(join(tmpdir(), "m16-fault-watch-"));
+    try {
+      const result = await runWatch({
+        url: "http://127.0.0.1:1/unreachable",
+        token: "t",
+        home,
+        signal: new AbortController().signal,
+        loadConnectorConfig: () => ({ version: "test", connectors: {} }),
+        loadConnectorApprovals: () => ({ version: "test", approved: {} }),
+        saveConnectorApprovals: () => {},
+        runEngine: async () => {},
+      });
+      expect(result.recorded).toBe(false);
+      expect(typeof result.recorded).toBe("boolean");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });

@@ -1,4 +1,6 @@
 import {
+  alertKey,
+  type AlertFiring,
   deriveAlerts,
   deriveBacklogTrendAlerts,
   deriveCatalogAlerts,
@@ -75,4 +77,27 @@ export function deriveAlertSet(
     ...deriveAuthFailureAlerts(inputs.authFailureCount),
     ...deriveConnectorFailureRateAlerts(inputs.windowedConnectors),
   ]);
+}
+
+/**
+ * True when the set of OPEN firing keys differs from the set of derived alert keys — i.e. an alert
+ * has appeared or cleared since the last reconcile. Compared by `alertKey`, the same key the
+ * partial unique index uses, so this asks exactly the question the reconcile would answer.
+ * Recently-RESOLVED firings are ignored: they linger in the list as confirmation by design and are
+ * not evidence of a change.
+ *
+ * M16 16.6 — moved here from `routes/monitor.ts` (behaviour identical) so the background evaluator
+ * can make the SAME throttling decision the route does. That matters more than code reuse: the
+ * throttle exists to stop a steady-state write, but skipping a reconcile when the derived set has
+ * genuinely CHANGED would leave a newly-derived alert with no firing row — un-ackable and
+ * undelivered — on the one path whose whole job is to say something broke. Both callers must
+ * therefore apply "throttled, UNLESS the answer would differ", and having two copies of that
+ * predicate is exactly the drift `deriveAlertSet` above exists to prevent.
+ */
+export function openFiringsDiverge(alerts: OperationalAlert[], firings: AlertFiring[]): boolean {
+  const open = new Set(firings.filter((f) => f.status === "open").map((f) => f.alertKey));
+  const derived = new Set(alerts.map(alertKey));
+  if (open.size !== derived.size) return true;
+  for (const key of derived) if (!open.has(key)) return true;
+  return false;
 }
