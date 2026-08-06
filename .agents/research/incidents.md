@@ -63,10 +63,57 @@ each one.** A fixed parser bug with no fixture is a bug that returns.
 
 <!-- Newest first. -->
 
-All five below were raised by the 2026-08-02 clean-room deploy
-([`cleanroom-2026-08-02.md`](./cleanroom-2026-08-02.md), slice 16.0 part 4). **None is fixed** —
-D-16.0-2: the exercise measures, and each entry is the evidence that earns a fix under §2's
-scope-change rule.
+INC-2026-07 was raised during M16 pre-sign-off (2026-08-05). The five below it were raised by the
+2026-08-02 clean-room deploy ([`cleanroom-2026-08-02.md`](./cleanroom-2026-08-02.md), slice 16.0
+part 4). **None of those five is fixed** — D-16.0-2: the exercise measures, and each entry is the
+evidence that earns a fix under §2's scope-change rule.
+
+## INC-2026-07 — capture kept working for 8 days while DELIVERY was dead, and every surface said fine
+
+- **Date / observed by:** 2026-08-05 / M16 pre-sign-off, box 3 (§4.4 reconciliation) setup
+- **Severity:** **high** _(§5.3: unrecoverable capture gap — see the qualification under "User
+  impact"; nothing was in fact lost, and that is the durable queue working, not luck)_
+- **Category (§4.4):** capture
+- **What happened:** Preparing the ten-session reconciliation, the archive was found to hold
+  **0 `raw_source_records`, 0 `events`, 0 `machines`, 0 `ingest_tokens`** — against a
+  `queue.sqlite` of **806 MB / 159,828 queue items, every one `status = 'pending'`**. Not one item
+  had ever been claimed. The only rows in the archive were M15 auth-QA residue: 2 organizations
+  (`uat-admin@test.local`, `Acme Corp`) and 4 users, created 2026-07-28/29.
+- **User impact:** Capture never stopped — the collector tailed, parsed and enqueued correctly
+  throughout, and 1,148 file cursors advanced. **Delivery** stopped, for roughly 8 days. Nothing was
+  lost, because the durable queue is designed for exactly this and held every item; the drain
+  recovered all of it. But the operator had no way to know: the collector logged normally, the queue
+  reported healthy, the archive served 200s, and the only artifact that would have shown it is a row
+  count nobody runs. This is INC-2026-05's failure mode one hop downstream and considerably worse —
+  there, a new install captured nothing and said nothing; here, a working install **captured
+  everything, delivered none of it, and said nothing.**
+- **Root cause:** the archive database was reset during M15 auth QA (2026-07-28/29) and never
+  restored. That destroyed the `machines` and `ingest_tokens` rows, so the machine credential in
+  `~/.420ai/credentials.json` referenced a machine id that no longer existed. Sync could only have
+  failed authentication from that moment on. Two things then hid it: the collector was not being run
+  interactively (nobody read its stderr), and **no server-side signal exists for "a machine that used
+  to report has stopped"** — `machine_heartbeats` cannot show the absence of a machine that has no
+  row. The 8-day figure is bounded by the reset date, not measured from a log.
+- **Evidence:** `raw_source_records`=0, `events`=0, `machines`=0, `ingest_tokens`=0 at
+  2026-08-05T10:00Z; `queue_items`=159,828 all `pending`; `file_cursors`=1,148; `poll_state`=350;
+  queue composition `claude-code` 150,441 / `codex-cli` 9,387 (clean w.r.t. D-M16-1 — no Cursor
+  contamination). Organizations/users timestamps as above. Recovery: re-pair issued machine
+  `a2657feb-…`, then `collector sync` drained the queue.
+- **Disposition:** **fixed now** as to the outage (high severity, §5.3 one-week bound) — re-paired
+  and drained. The DETECTION gap is **not** fixed and **earns a slice** under D-16.0-2. The honest
+  shape of the fix is a capture-health state the scorecard can already express but nothing currently
+  computes: _a machine whose queue depth is growing while its delivered-event count is flat_. Note
+  16.3 shipped `sync.backlog_growing` on the alert side and a scorecard on the read side, and neither
+  fired here — because both are driven by heartbeats, and an unpaired machine sends none. **A health
+  signal that depends on the channel it is monitoring cannot report that channel being down.** That
+  is the design point the slice has to answer, and it is a sharper statement of §7 P0.1 than the
+  scorecard's current acceptance criterion.
+- **Regression test?** Not yet, and it must ship with the slice. The discriminating shape is
+  behavioural and mirrors 15.6's revoked-session proof: assert that a collector holding a **valid,
+  well-formed credential for a machine row that does not exist** produces a state the operator can
+  see — distinct both from "healthy" and from "no work happened". A test that only checks the
+  scorecard's output for a *heartbeating* machine cannot fail here, which is precisely why this
+  survived 16.3.
 
 ## INC-2026-06 — a separate DATABASE is not isolation: Postgres ROLES are cluster-wide
 

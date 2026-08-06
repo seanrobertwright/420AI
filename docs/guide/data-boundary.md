@@ -123,7 +123,7 @@ Encrypted columns:
   source record. **Not nullable**: a raw record always carries an encrypted payload.
 - `events.payload_ciphertext` / `_iv` / `_tag` (`schema.ts:472-475`) — the tool-call payload.
   Nullable, because events without a payload store NULLs (`schema.ts:472`).
-- `git_commits.message_ciphertext` (`schema.ts:717`) — the commit **message** only.
+- `git_commits.message_ciphertext` (`schema.ts:719`) — the commit **message** only.
 
 **The key never touches the database.** The 32-byte key(s) come from the environment as base64 and
 are _never stored in the DB_ (`crypto.ts:17-19`). A fresh 96-bit IV is generated per call and stored
@@ -212,14 +212,14 @@ but "redacted" here means "these 14 classes were masked", not "no secret can sur
 
 Four export surfaces, all authenticated, all redacted before the bytes leave the archive — three in
 `exports.ts` (whose header at `apps/ingest/src/routes/exports.ts:33` states the §18 gate for them)
-plus the M16 label export in `apps/ingest/src/routes/outcome-labels.ts:331-343`:
+plus the M16 label export in `apps/ingest/src/routes/outcome-labels.ts:393-432`:
 
 | Endpoint                                                           | Content                              | Redaction                                                        |
 | ------------------------------------------------------------------ | ------------------------------------ | ---------------------------------------------------------------- |
 | `GET /v1/exports/events` (`exports.ts:150`)                        | Event stream, plaintext columns only | `redactJson(rows)` (`exports.ts:193`)                            |
 | `GET /v1/reports/:id/export` (`exports.ts:232`)                    | A rendered report artifact (md/json) | `redactJson(…)` (`exports.ts:252`)                               |
 | `GET /v1/sessions/:sessionId/transcript/export` (`exports.ts:299`) | Session transcript (md/json/jsonl)   | `redact(e.text)` per entry (`exports.ts:320`)                    |
-| `GET /v1/labels/export` (`outcome-labels.ts:358`)                  | Outcome labels (json/jsonl/csv)      | `redactJson(rows.map(serializeLabel))` (`outcome-labels.ts:375`) |
+| `GET /v1/labels/export` (`outcome-labels.ts:415`)                  | Outcome labels (json/jsonl/csv)      | `redactJson(rows.map(serializeLabel))` (`outcome-labels.ts:432`) |
 
 The label export is the only one whose content is **human-authored free text** rather than captured
 or derived data, and that is precisely why it redacts: `intent` is 200 characters somebody typed, and
@@ -330,7 +330,7 @@ not, is anything the collector captured:
 > in one transaction. Nothing is retained, and nothing else is touched — the session's raw records,
 > events, reports and search documents are unaffected.**
 
-`DELETE /v1/sessions/:sessionId/label` (`apps/ingest/src/routes/outcome-labels.ts:262`) is that API;
+`DELETE /v1/sessions/:sessionId/label` (`apps/ingest/src/routes/outcome-labels.ts:273`) is that API;
 the cascade is deliberately visible in code rather than hidden in DDL
 (`packages/db/src/repositories/outcome-labels.ts:569-577`). Anyone at `member` or above may delete their
 own label; `admin` and above may delete any label in the organization, as a data-hygiene lever.

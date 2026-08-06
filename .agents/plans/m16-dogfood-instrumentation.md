@@ -307,11 +307,35 @@ thinking it was forgotten.
 
 Adopted from M14/M15 practice. Evidence under `.agents/qa/m16-signoff/`.
 
-- [ ] A label round-trips: created from the tray, visible and editable in the dashboard, exported,
-      deleted — with the raw record provably unmutated
-- [ ] The capture health scorecard distinguishes "no work happened" from "capture is broken" on a
-      **deliberately broken** connector, not merely a healthy one
-- [ ] The data-quality audit's numbers reconcile against a hand-counted ten-session sample (§4.4)
-- [ ] `docs/guide/data-boundary.md` re-verified against source after the last schema-touching slice
-- [ ] Four consecutive weekly scorecards exist in `.agents/research/weekly/`
-- [ ] `npm run repo-health -- --require-db` green with **0 skipped**
+- [x] A label round-trips: created from the tray, visible and editable in the dashboard, exported,
+      deleted — with the raw record provably unmutated **(2026-08-05; API-level rather than
+      tray-level — see the note below)**
+- [x] The capture health scorecard distinguishes "no work happened" from "capture is broken" on a
+      **deliberately broken** connector, not merely a healthy one **(2026-08-05; `claude-code`
+      driven `idle/capturing` → `erroring/broken` by a denied-read file in its capture scope, with
+      no other connector moving)**
+- [x] The data-quality audit's numbers reconcile against a hand-counted ten-session sample (§4.4)
+      **(2026-08-05; parse success matched to the row. Blocked first by a shipped defect — the
+      audit could not complete on a real archive — fixed as slice 16.5)**
+- [x] `docs/guide/data-boundary.md` re-verified against source after the last schema-touching slice
+      **(2026-08-05; four positional citations corrected, all in M16-added content; no substantive
+      claim found false)**
+- [ ] Four consecutive weekly scorecards exist in `.agents/research/weekly/` — **⛔ BLOCKED BY
+      CALENDAR, and it is the only open box.** The scaffold landed 2026-08-02 (16.0) and `weekly/`
+      holds only `TEMPLATE.md`; four consecutive Mondays cannot be manufactured. **M16 stays IN
+      PROGRESS until this fills**, which is the whole point of a cadence gate — it certifies that
+      the instrumentation survived contact with four real weeks, and nothing done in one day
+      substitutes for that.
+- [x] `npm run repo-health -- --require-db` green with **0 skipped** **(2026-08-05; 164 files,
+      1571 tests, 635 integration, 0 skipped)**
+
+Evidence: [`.agents/qa/m16-signoff/`](../qa/m16-signoff/). Two scope notes, stated rather than
+quietly absorbed:
+
+- **Box 1 was exercised at the API, not through the desktop tray.** The checklist says "created
+  from the tray"; this run drove `POST/GET/PATCH/DELETE /v1/sessions/:id/label` and
+  `GET /v1/labels/export` directly. The raw-record immutability claim — the load-bearing half — is
+  fully proven either way, but the tray's own capture path (16.2's 15-second surface) has **not**
+  been re-exercised here.
+- **This exercise produced INC-2026-07 and slice 16.5.** The checklist found a shipped defect and an
+  8-day capture-delivery outage, which is what a pre-sign-off pass is for.
