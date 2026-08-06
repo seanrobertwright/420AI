@@ -283,11 +283,30 @@ through the deferral-audit + scope conversation that produced M12/M13/M14. Full 
   browser extension **off** during Phase 1 so the known `claude-live`↔`claude-export` dedup gap cannot
   contaminate the <1% duplicate-rate metric) and D-16.0-1…3. Slices: **16.0** ✅ Truth + research
   scaffold · **16.1** ✅ Outcome label model + API · **16.2** ✅ Label capture (desktop) + review (dashboard) ·
-  **16.3** ✅ Capture health scorecard · **16.4** ✅ Data-quality audit report. **All five slices have
-  shipped**; what remains before milestone sign-off is the §4.4 manual reconciliation hand-count,
-  which by design cannot be automated (it compares the archive against tool-native session files on
-  disk). The §7 P1.6 hero-workflow evidence panel is deliberately **not** a slice — the hero workflow
-  is selected from evidence in research Phase 2 (weeks 5–8).
+  **16.3** ✅ Capture health scorecard · **16.4** ✅ Data-quality audit report · **16.5** ✅ Audit
+  raw-record index (fix). The §7 P1.6 hero-workflow evidence panel is deliberately **not** a slice —
+  the hero workflow is selected from evidence in research Phase 2 (weeks 5–8).
+  **The 2026-08-05 pre-sign-off pass ran five of the six checklist boxes green** (evidence:
+  [`.agents/qa/m16-signoff/`](./.agents/qa/m16-signoff/)) — including the §4.4 ten-session
+  reconciliation, whose parse-success figure matched the audit's to the row (46,293/60,909). It also
+  found the two things a pre-sign-off pass exists to find. **(a)** The audit **could not complete on
+  a real archive**: `rawRecordTotals` ran a correlated EXISTS with no covering index, so
+  `POST /v1/audit/data-quality` hung, wrote nothing and logged nothing — plan cost 446,378,008 and
+  no result in seven minutes, while every integration test stayed green because the fixtures are a
+  handful of rows. Fixed as **16.5** (migration `0026`): cost 519,564, 402 ms, and the endpoint now
+  answers 201 in 4 s. The repo's `skipped ≠ passed` / `bypassed ≠ enforced` family gains
+  **passes on fixtures ≠ runs in production**. **(b)** **INC-2026-07** — capture had been running
+  for ~8 days with delivery dead: 159,828 queue items all `pending` against an archive holding
+  **zero** raw records, because the DB was reset during M15 auth QA and the machine credential
+  pointed at a machine row that no longer existed. Nothing reported it, because a health signal that
+  depends on heartbeats cannot report an unpaired machine. Re-paired and drained (60,909 raw /
+  98,919 events); the **detection** gap earns a slice. Capture coverage measured **40%** against a
+  ≥95% target, and the misses split into two mechanisms that a single percentage conflates — a
+  2026-07-22 cold start cursoring pre-existing files at EOF (never captured, unrecoverable) and the
+  reset itself (recoverable only from `backups/420ai-20260722T125801Z.sql.gz`).
+  **M16 remains IN PROGRESS**: the one open box is _four consecutive weekly scorecards in
+  `.agents/research/weekly/`_, which is blocked by the calendar rather than by work — the scaffold
+  landed 2026-08-02, so the earliest it can close is late August.
 - **M17 — Cross-platform collectors.** macOS + Linux (V1/M11 are Windows-first) + portable signed
   installers/auto-update. _Most parallelizable — best candidate to run alongside another milestone._
 - **M18 — Advanced intelligence & automation.** Semantic/vector search, scheduled _analysis_,
@@ -994,6 +1013,30 @@ records` and `0 ÷ 4000` are opposite facts. An HTTP test asserts the literal st
     clocks is not. Only `rls.int.test.ts` caught it — the one suite whose fixtures sit a year before
     `now` — which is the Task-14 argument in miniature: a structural grep is file-granular, and an
     audit under a missing org context returns zeros that look like a quiet week rather than a bug.
+  - **16.5** ✅ **DONE `2026-08-05`** — Audit raw-record index. A one-statement fix slice raised by
+    the pre-sign-off pass, not by a plan: **16.4's audit could not complete on a real archive.**
+    `rawRecordTotals` asks, per raw record in the window, whether any event was derived from it — a
+    correlated `EXISTS` on `(org_id, source_connector, raw_record_id)` — and **nothing indexed
+    `raw_record_id`**. The only candidate was `events_by_org`, which in a single-org archive matches
+    every row, so the planner chose one sequential scan of `events` per raw record: on 60,909 raw /
+    98,919 events that is plan cost **446,378,008** and no result in seven minutes. Migration `0026`
+    adds the covering index — cost **519,564**, **402 ms**, and `POST /v1/audit/data-quality` went
+    from never responding to **201 in 4 s**.
+    **The failure was not slowness, it was silence.** The endpoint hung, wrote no
+    `report_artifacts` row, logged nothing and returned nothing; the client timed out and the
+    operator would read it as a busy archive. So §7 P0.3's acceptance criterion — _"weekly scorecard
+    values are queryable rather than manually guessed"_ — was **unmet in production conditions for
+    the entire life of 16.4**, while its integration suite stayed green.
+    **No behavioural test could have caught it, and that is the transferable lesson.**
+    `data-quality.int.test.ts` asserts the RIGHT ANSWER on fixtures of a handful of rows, where
+    O(n·m) and O(n log m) return the same number in the same millisecond. Hence
+    **`passes on fixtures ≠ runs in production`**, the third member of the repo's
+    `skipped ≠ passed` / `bypassed ≠ enforced` family. The guard is therefore **structural, not
+    timed** (a timing assertion could only be flaky at fixture scale): a test pinning that some
+    index covers `(org_id, source_connector, raw_record_id)`, keyed on the COLUMN LIST rather than
+    the index name, so a rename is fine and a drop is not. `rollback.int.test.ts` retargets to 0026
+    — the second index-only migration after 0022 and the second whose rollback is **lossless**, and
+    the first whose rollback is **silent in production**, which is precisely why the drill pins it.
 
 - [ ] **M17–M20 remain committed scope, unsequenced** (§3, PRD §25). Each still needs its own
       deferral-audit + scope conversation before it is executable. (**M20** is Cloud-hosted SaaS,

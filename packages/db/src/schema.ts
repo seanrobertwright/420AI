@@ -483,6 +483,28 @@ export const events = pgTable(
     // events. Additive (no column/shape change — the fingerprint is untouched).
     index("events_by_project_path").on(t.projectPath),
     index("events_by_org").on(t.orgId),
+    // M16 16.5 — the join key of `rawRecordTotals` (§5.1 parse success) and of every other
+    // raw→event reachability probe. Column order matches that predicate exactly:
+    // `e.org_id = r.org_id AND e.source_connector = r.source_connector AND
+    //  e.raw_record_id = r.source_record_id`.
+    //
+    // IT IS A CORRECTNESS FIX WEARING A PERFORMANCE FIX'S CLOTHES, which is why it is a migration
+    // rather than a tuning note. Without it Postgres has no index covering `raw_record_id` at all
+    // (`events_by_org` matches EVERY row of a single-org archive), so the correlated EXISTS
+    // degrades to one sequential scan of `events` per raw record — measured on the real archive at
+    // 60,909 raw × 98,919 events: plan cost 446,378,008, and the query did not return in seven
+    // minutes. With this index: cost 519,564 and 402 ms. The audit therefore did not merely run
+    // slowly before this — `POST /v1/audit/data-quality` never responded at all, so §7 P0.3's
+    // acceptance criterion ("weekly scorecard values are queryable rather than manually guessed")
+    // was unmet in production conditions while every test was green.
+    //
+    // NO TEST COULD HAVE CAUGHT IT, and that is the transferable part. `data-quality.int.test.ts`
+    // asserts the RIGHT ANSWER on fixtures of a handful of rows, where O(n·m) and O(n log m) are
+    // indistinguishable — both return the same number in the same millisecond. The repo's
+    // `skipped ≠ passed` / `bypassed ≠ enforced` family gains a sibling here:
+    // **passes on fixtures ≠ runs in production**. Do not remove this index on the grounds that
+    // the suite stays green without it; the suite cannot see it.
+    index("events_by_raw_record").on(t.orgId, t.sourceConnector, t.rawRecordId),
   ],
 );
 

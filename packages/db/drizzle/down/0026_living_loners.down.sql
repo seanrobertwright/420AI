@@ -1,0 +1,17 @@
+-- Down-migration for 0026 (M16 16.5, the `rawRecordTotals` covering index).
+--
+-- D-M15-13 rollback-drill note: THERE IS NO DATA LOSS AT ALL. An index holds no rows of its own —
+-- dropping it removes a derived access path and nothing else, so no `pg_dump` is required before
+-- rolling back and nothing needs rebuilding afterwards. This is the mildest down-migration in the
+-- repo, and saying so plainly is the point: 0025's note argues that a rollback comment which cries
+-- wolf on every table teaches the reader to skip all of them.
+--
+-- THE APPLICATION SIDE IS SILENT, AND THAT IS THE HAZARD. Unlike 0025 — where a post-16.3 server
+-- against a pre-16.3 schema 500s loudly — every query here keeps returning the CORRECT ANSWER after
+-- this index is dropped. `POST /v1/audit/data-quality` simply stops completing: it hangs, the client
+-- times out, `report_artifacts` gains no row, and nothing is logged. So a rollback of 0026 does not
+-- announce itself; it reintroduces exactly the invisible failure 0026's header documents.
+--
+-- Rolling this back therefore only makes sense together with a rollback of the code that reads it.
+-- If the audit is being generated at all, leave the index in place.
+DROP INDEX IF EXISTS "events_by_raw_record";
