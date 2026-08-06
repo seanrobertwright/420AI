@@ -284,7 +284,8 @@ through the deferral-audit + scope conversation that produced M12/M13/M14. Full 
   contaminate the <1% duplicate-rate metric) and D-16.0-1…3. Slices: **16.0** ✅ Truth + research
   scaffold · **16.1** ✅ Outcome label model + API · **16.2** ✅ Label capture (desktop) + review (dashboard) ·
   **16.3** ✅ Capture health scorecard · **16.4** ✅ Data-quality audit report · **16.5** ✅ Audit
-  raw-record index (fix). The §7 P1.6 hero-workflow evidence panel is deliberately **not** a slice —
+  raw-record index (fix) · **16.6** ✅ Capture-liveness detection (INC-2026-07). The §7 P1.6
+  hero-workflow evidence panel is deliberately **not** a slice —
   the hero workflow is selected from evidence in research Phase 2 (weeks 5–8).
   **The 2026-08-05 pre-sign-off pass ran five of the six checklist boxes green** (evidence:
   [`.agents/qa/m16-signoff/`](./.agents/qa/m16-signoff/)) — including the §4.4 ten-session
@@ -304,6 +305,13 @@ through the deferral-audit + scope conversation that produced M12/M13/M14. Full 
   ≥95% target, and the misses split into two mechanisms that a single percentage conflates — a
   2026-07-22 cold start cursoring pre-existing files at EOF (never captured, unrecoverable) and the
   reset itself (recoverable only from `backups/420ai-20260722T125801Z.sql.gz`).
+  **That detection gap is closed by 16.6**, which found three independent causes each sufficient
+  for total silence: alerts were evaluated ONLY inside `GET /v1/monitor` (so the trigger was a
+  human opening the dashboard); `collector watch` exited **0** on a fatal 401, which WinSW reads as
+  a deliberate stop and does not restart; and a deleted machine row cannot be `offline`, because
+  absence is not a state the projection represents. The signal existed the whole time —
+  `ingest_auth_failures` rows were being written on every rejected token and `deriveAuthFailureAlerts`
+  fires at ≥3 in 15 min. Hence the family's fourth member: **`derivable ≠ detected`**.
   **M16 remains IN PROGRESS**: the one open box is _four consecutive weekly scorecards in
   `.agents/research/weekly/`_, which is blocked by the calendar rather than by work — the scaffold
   landed 2026-08-02, so the earliest it can close is late August.
@@ -1037,6 +1045,69 @@ records` and `0 ÷ 4000` are opposite facts. An HTTP test asserts the literal st
     the index name, so a rename is fine and a drop is not. `rollback.int.test.ts` retargets to 0026
     — the second index-only migration after 0022 and the second whose rollback is **lossless**, and
     the first whose rollback is **silent in production**, which is precisely why the drill pins it.
+  - **16.6** ✅ **DONE `2026-08-06`** — Capture-liveness detection. The slice INC-2026-07 earned:
+    capture ran dead for ~8 days and **nothing reported it**. Planning found **three independent
+    causes, each sufficient for total silence on its own**, all confirmed by reading the code rather
+    than inferred. (i) `reconcileAlertFirings` + `deliverPendingFirings` were reachable from exactly
+    ONE place — inside `GET /v1/monitor` — so **the trigger for evaluating alerts was a human
+    opening the dashboard**, and a human has no reason to do that while they believe things are
+    fine. That made all NINE alert codes undeliverable for the whole incident, not one. (ii)
+    `collector watch` called `process.exit(0)` unconditionally, and a revoked-token 401 makes the
+    engine unwind and return _normally_ — so WinSW's `<onfailure action="restart"/>`, which fires
+    only on non-zero, read it as a deliberate stop. **Windows' own supervisor was standing right
+    there and was told everything was fine.** The one-shot sibling `collector sync` got this right
+    in M12 as lesson **C.11**; the daemon that runs unattended for weeks never learned it.
+    (iii) `deriveAlerts` iterates `snapshot.machines`, and the DB reset removed the row — **absence
+    is not a state the projection can represent**, so there was nothing to be `offline`.
+    **The evidence existed the entire time.** `plugins/auth.ts` writes an `ingest_auth_failures`
+    row on every unknown token and `deriveAuthFailureAlerts` fires a global `ingest.auth_failure`
+    at ≥3 in 15 minutes. Both the data and the derivation were correct and present; only the
+    _trigger_ was missing. Hence the family's fourth member:
+    **`derivable ≠ detected`** — _a monitor whose evaluation trigger is the operator's suspicion
+    can only ever confirm what the operator already suspects._
+    The fix is additive and carries **no migration, no new table and no new alert code**: an opt-in
+    Fastify plugin (`alertEvaluatorIntervalMs`, default **0/disabled** so no existing test starts a
+    timer) ticking `listOrganizations → withOrg(SERVICE_ROLE) → derive → reconcile → deliver`, plus
+    a collector-side durable `~/.420ai/fault.json` and a non-zero `watch` exit on a fatal 401. Two
+    decisions worth their own lines. **D-16.6-1 — no expected-machine registry**, though the slice
+    was scoped with one: a server-side registry lives in the **same Postgres that was reset**, so
+    its rows die with the machine rows and it cannot detect the event it exists for — redundant
+    where `machines.status='active'` + `collector.offline` already work, absent where it was
+    wanted. The durable "expected to report" fact belongs on the collector, which is the only party
+    whose memory survived (`credentials.json` + `queue.sqlite` held 159,828 items throughout).
+    **D-16.6-2 — the tick reconciles as the org's OWNER**, because `alert_firings_open_key` is
+    unique on `(user_id, alert_key) WHERE status='open'`: a tick reconciling under a different user
+    than the dashboard opens a SECOND row and sends a second email for one outage.
+    Both halves were measured rather than argued. A negative control replacing the owner lookup
+    with a naive `members[0]` fails **exactly one** test — every other assertion passes either way,
+    because in a single-member org the owner and the oldest member are the same row, which is why
+    the suite carries a deliberately two-rung org whose oldest membership is a `viewer`. A second
+    control swapping `SERVICE_ROLE` for `"viewer"` fails **12 of 15** with Postgres `42501`,
+    confirming the suite is genuinely sensitive to the 15.4 role class rather than theatre. The
+    integration suite runs on the **non-owner app role** with the role-identity assertion first.
+    **The pre-commit review is where this slice earned its keep, and the yield was a shape rather
+    than a list.** Five findings were _tests that could not fail_, each guarding the highest-risk
+    behaviour in its file: two teardown tests (one built its app without a deliverer, so the spy was
+    unreachable and the assertion compared 0 to 0; the other timed `app.close()` on the false theory
+    that a leaked timer makes Fastify hang — it does not, and the plugin `unref()`s anyway), a
+    token-leak assertion searching for a string that never appears, a test named "does not flap on
+    the nine codes" that exercised one, and the exit-1-on-401 behaviour with no test at all.
+    Generalising M15 15.5: **the tests written most anxiously are the likeliest to measure nothing**,
+    because anxiety produces a test that _looks like_ the risk instead of one derived from what would
+    change if the code were wrong. Three real defects came with them — a `setInterval` teardown that
+    cleared the timer but abandoned an in-flight tick against a closing pool; the collector fault
+    clearing itself on an **empty-queue drain that never contacted the archive** (`syncOnce` returns
+    `"ok"` with no POST, so a restart on a quiet machine deleted the record in ~2 s — now the sync
+    callback carries a **delivered count** and the fault clears only on a drain that actually
+    reached the archive); and `since` being overwritten on every WinSW restart, so an eight-day
+    outage reported "20 seconds ago" — the one field the record exists to carry, broken by the
+    restart behaviour the same slice introduced (`saveFault` now preserves the original `since` and
+    moves a separate `lastObservedAt`).
+    The derive-list parity was also made **structural** (`alert-set.ts`, shared by the tick and the
+    route) after review pointed out that a comment enforces less than the file-level grep the repo
+    had already proven insufficient. Full detail, including the residual gaps deliberately NOT fixed
+    (a 401 on the **heartbeat** is still swallowed, which is the natural next increment), in
+    [`.agents/code-reviews/m16-slice6-capture-liveness-detection.md`](./.agents/code-reviews/m16-slice6-capture-liveness-detection.md).
 
 - [ ] **M17–M20 remain committed scope, unsequenced** (§3, PRD §25). Each still needs its own
       deferral-audit + scope conversation before it is executable. (**M20** is Cloud-hosted SaaS,

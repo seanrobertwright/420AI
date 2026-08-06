@@ -1,6 +1,11 @@
-import { describe, it, expect } from "vitest";
-import { drainBeforeExit, pollLoop } from "./capture-engine.js";
+import { describe, it, expect, afterEach } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { drainBeforeExit, pollLoop, runCaptureEngine } from "./capture-engine.js";
 import { QueueStore, type SyncOutcome } from "./queue/queue-store.js";
+import { IngestHttpError } from "./ingest-client.js";
+import type { CaptureFault } from "./fault.js";
 import type { Connector } from "./connectors/connector.js";
 
 /**
@@ -156,5 +161,88 @@ describe("pollLoop (M13 13.7 — poll-mode capture)", () => {
     );
     expect(queue.stats().pending).toBe(0);
     queue.close();
+  });
+});
+
+/**
+ * M16 16.6 — a fatal 401 must leave a REASON behind it.
+ *
+ * INC-2026-07: `runSyncLoop` returned "stop", the engine unwound *normally*, and every layer above
+ * it read that as a clean finish. The engine knew; nothing else did. `onFatal` is the additive
+ * callback that carries the fact out — additive precisely because `cli.ts` types its engine seam as
+ * `runEngine?: typeof runCaptureEngine`, so a widened return type would break at compile time.
+ */
+describe("runCaptureEngine onFatal (M16 16.6 — a 401 is no longer silent)", () => {
+  /**
+   * A token that appears NOWHERE else in the repo, so `not.toContain(SENTINEL_TOKEN)` can only pass
+   * because the record genuinely omits the credential — the discriminating form of the assertion.
+   */
+  const SENTINEL_TOKEN = "tok-SENTINEL-8f3a";
+  const homes: string[] = [];
+  afterEach(() => {
+    for (const h of homes.splice(0)) {
+      try {
+        rmSync(h, { recursive: true, force: true });
+      } catch {
+        /* best effort */
+      }
+    }
+  });
+
+  /**
+   * Run the real engine against an injected `post` that always 401s, over a temp home with one
+   * queued item (an empty queue never POSTs, so it could never reach the 401 path).
+   */
+  async function runUntilFatal(onFatal?: (f: CaptureFault) => void): Promise<CaptureFault[]> {
+    const home = mkdtempSync(join(tmpdir(), "m16-engine-"));
+    homes.push(home);
+    const queuePath = join(home, "queue.sqlite");
+    const seed = new QueueStore(queuePath);
+    seed.enqueue("event", "fp-1", { fingerprint: "fp-1" });
+    seed.close();
+
+    const seen: CaptureFault[] = [];
+    await runCaptureEngine({
+      // A UNIQUE sentinel token (F5). The previous fixture used `token: "revoked"` and asserted the
+      // serialized record did not contain `"revoked-token"` — a string no implementation could ever
+      // emit, so the only end-to-end "no credential leaks" assertion passed vacuously.
+      creds: { url: "https://archive.example", token: SENTINEL_TOKEN, machineId: "m1" },
+      signal: new AbortController().signal,
+      queuePath,
+      home,
+      connectors: [], // no capture surface — the sync loop is the only thing under test
+      gitIntervalMs: 0, // no background git sweep
+      intervalMs: 5,
+      post: async () => {
+        throw new IngestHttpError(401, "unauthorized");
+      },
+      onFatal: (f) => {
+        seen.push(f);
+        onFatal?.(f);
+      },
+    });
+    return seen;
+  }
+
+  it("invokes onFatal exactly once with a token-free auth_revoked record", async () => {
+    const seen = await runUntilFatal();
+    expect(seen.length).toBe(1);
+    expect(seen[0]!.code).toBe("auth_revoked");
+    expect(seen[0]!.url).toBe("https://archive.example");
+    expect(seen[0]!.message).toMatch(/401/);
+    expect(Date.parse(seen[0]!.since)).not.toBeNaN();
+    // The record names the archive, never the credential it rejected.
+    expect(JSON.stringify(seen[0])).not.toContain(SENTINEL_TOKEN);
+    expect(Object.keys(seen[0]!).sort()).toEqual(["code", "message", "since", "url"]);
+  });
+
+  it("a reporter that THROWS does not stop the engine unwinding cleanly (F-16.3-2 shape)", async () => {
+    // Without the try/catch in `onStop` this rejects the sync loop instead of taking the "stop"
+    // path — the observer becoming the outage it was reporting.
+    await expect(
+      runUntilFatal(() => {
+        throw new Error("fault reporter exploded");
+      }),
+    ).resolves.toHaveLength(1);
   });
 });

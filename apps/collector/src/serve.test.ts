@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { PassThrough } from "node:stream";
+import { mkdtempSync, rmSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { runServe, type ServeDeps } from "./serve.js";
+import { faultPathFor, loadFault, saveFault } from "./fault.js";
 import type { CaptureEngineOptions } from "./capture-engine.js";
 import { connectors as defaultConnectors, type Connector } from "./connectors/connector.js";
 import type { ConnectorConfig } from "./connectors/connector-config.js";
@@ -173,7 +177,7 @@ describe("serve control protocol", () => {
 
   it("M13 13.1: a successful sync surfaces a non-null ISO lastSyncAt on status", async () => {
     const runEngine = (opts: CaptureEngineOptions): Promise<void> => {
-      opts.onSyncSuccess?.("2026-07-07T00:00:00.000Z");
+      opts.onSyncSuccess?.("2026-07-07T00:00:00.000Z", 1);
       return new Promise<void>((resolve) => {
         if (opts.signal.aborted) return resolve();
         opts.signal.addEventListener("abort", () => resolve(), { once: true });
@@ -513,5 +517,124 @@ describe("serve custom connectors (M10-S2)", () => {
     expect(seen?.map((c) => c.id)).toEqual(["claude-code"]);
     await h.send({ cmd: "stop" }, (e) => e.type === "stopped");
     await h.done;
+  });
+  /**
+   * M16 16.6 — the desktop must say WHY capture died, not just that it did.
+   *
+   * Before this the `.then()` branch below could only log "capture engine stopped unexpectedly":
+   * the engine knew a 401 had revoked the token and threw the fact away as it unwound. This reuses
+   * the EXISTING `error` ControlEvent (D-16.6-3), so CONTROL_PROTOCOL_VERSION is unchanged.
+   */
+  it("M16 16.6: a fatal 401 emits an error event with the reason and records it durably", async () => {
+    const home = mkdtempSync(join(tmpdir(), "m16-serve-fault-"));
+    try {
+      const fault = {
+        code: "auth_revoked" as const,
+        message: "ingest returned 401 — token revoked. Re-pair needed: `collector pair <code>`.",
+        since: "2026-08-06T12:00:00.000Z",
+        url: "https://archive.example",
+      };
+      // An engine that dies fatally and returns NORMALLY — exactly how INC-2026-07 looked.
+      const runEngine = async (opts: CaptureEngineOptions): Promise<void> => {
+        opts.onFatal?.(fault);
+      };
+      const h = makeHarness({ runEngine, home });
+
+      const err = (await h.send({ cmd: "start" }, (e) => e.type === "error")) as Extract<
+        ControlEvent,
+        { type: "error" }
+      >;
+      expect(err.message).toMatch(/401/);
+      // Durable too: the desktop closing must not erase the only record of the outage.
+      expect(loadFault(faultPathFor(home))).toEqual({ ...fault, lastObservedAt: fault.since });
+      // F14: ONE report per stop — the reason rides the `error` event, not also a duplicate `log`.
+      expect(
+        h.events.filter(
+          (e) =>
+            e.type === "log" &&
+            /capture stopped|stopped unexpectedly/.test((e as { message: string }).message),
+        ),
+      ).toHaveLength(0);
+
+      const st = await h.send({ cmd: "status" }, (e) => e.type === "status");
+      expect(st).toMatchObject({ type: "status", state: "error" });
+
+      await h.send({ cmd: "stop" }, (e) => e.type === "stopped");
+      await h.done;
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * F3 — a stale fault file must not survive forever.
+   *
+   * `startEngine` resets the in-memory `fault` on every start, so clearing only `if (fault)` meant:
+   * run 1 faults and writes the file → the operator re-pairs and restarts → run 2 syncs fine → the
+   * flag is false → the record survives permanently and stops meaning anything. The clear is now
+   * unconditional as to WHO wrote it, and conditional only on the drain having actually delivered.
+   */
+  it("M16 16.6 (F3): a delivering sync clears a fault file THIS run never wrote", async () => {
+    const home = mkdtempSync(join(tmpdir(), "m16-serve-fault-"));
+    try {
+      // A previous run (or the Windows service) left the record; this process starts clean.
+      saveFault(
+        {
+          code: "auth_revoked",
+          message: "ingest returned 401 — token revoked.",
+          since: "2026-08-06T12:00:00.000Z",
+          url: "https://archive.example",
+        },
+        faultPathFor(home),
+      );
+      const runEngine = (opts: CaptureEngineOptions): Promise<void> => {
+        opts.onSyncSuccess?.("2026-08-06T13:00:00.000Z", 4);
+        return new Promise<void>((resolve) => {
+          if (opts.signal.aborted) return resolve();
+          opts.signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      };
+      const h = makeHarness({ runEngine, home });
+
+      await h.send({ cmd: "start" }, (e) => e.type === "status" && e.state === "running");
+      expect(existsSync(faultPathFor(home))).toBe(false);
+
+      await h.send({ cmd: "stop" }, (e) => e.type === "stopped");
+      await h.done;
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  /** F1's half of the same rule: an idle, empty-queue drain proves nothing and clears nothing. */
+  it("M16 16.6 (F1): an empty drain (delivered=0) leaves the fault file in place", async () => {
+    const home = mkdtempSync(join(tmpdir(), "m16-serve-fault-"));
+    try {
+      saveFault(
+        {
+          code: "auth_revoked",
+          message: "ingest returned 401 — token revoked.",
+          since: "2026-08-06T12:00:00.000Z",
+          url: "https://archive.example",
+        },
+        faultPathFor(home),
+      );
+      const runEngine = (opts: CaptureEngineOptions): Promise<void> => {
+        opts.onSyncSuccess?.("2026-08-06T13:00:00.000Z", 0);
+        return new Promise<void>((resolve) => {
+          if (opts.signal.aborted) return resolve();
+          opts.signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      };
+      const h = makeHarness({ runEngine, home });
+
+      await h.send({ cmd: "start" }, (e) => e.type === "status" && e.state === "running");
+      expect(existsSync(faultPathFor(home))).toBe(true);
+
+      await h.send({ cmd: "stop" }, (e) => e.type === "stopped");
+      await h.done;
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });

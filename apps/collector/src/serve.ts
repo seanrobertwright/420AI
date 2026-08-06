@@ -11,6 +11,7 @@ import {
   connectorApprovalsPathFor,
   type Credentials,
 } from "./identity.js";
+import { faultPathFor, saveFault, clearFault, type CaptureFault } from "./fault.js";
 import { QueueStore, type QueueStats } from "./queue/queue-store.js";
 import type { Connector } from "./connectors/connector.js";
 import { loadRegistry } from "./connectors/registry.js";
@@ -164,6 +165,12 @@ export function runServe(deps: ServeDeps = {}): Promise<void> {
   // M13 13.1: updated live by the engine's onSyncSuccess callback (wired in startEngine below)
   // each time the sync loop completes a successful drain — the StatusBar no longer renders "—".
   let lastSyncAt: string | null = null;
+  /**
+   * M16 16.6: the reason the CURRENT engine run died, if it died fatally (a revoked token). Set by
+   * the engine's `onFatal` and consumed by the `.then()` branch below, which already knew the engine
+   * had ended on its own and could only say "unexpectedly".
+   */
+  let fault: CaptureFault | undefined;
   let closed = false;
   // Per-instance teardown; assigned once the Promise executor has rl + the timer.
   let cleanupAndExit: (code: number) => void = () => {};
@@ -215,6 +222,11 @@ export function runServe(deps: ServeDeps = {}): Promise<void> {
     controller = ctrl;
     intent = "running";
     state = "running";
+    // A fresh run carries no fault yet — otherwise a fault from the PREVIOUS run would annotate
+    // this one's stop reason. This is about the IN-MEMORY stop reason only; the file on disk is
+    // cleared by the first drain that actually delivers (see `onSyncSuccess`), which is why that
+    // clear must not be gated on this flag.
+    fault = undefined;
     // Slice 2 + 12.7b: re-read enablement AND approvals at each (re)start and hand the
     // engine the FILTERED registry. The M3/M4 capture core is unchanged — this is the
     // existing `CaptureEngineOptions.connectors` seam (capture-engine.ts). Both filters
@@ -240,8 +252,33 @@ export function runServe(deps: ServeDeps = {}): Promise<void> {
       // and the Windows service cannot disagree about what "enabled" means.
       connectorStates: (reg) =>
         resolveConnectorStates(reg, loadConnectorCfg(), loadApprovals(), home),
-      onSyncSuccess: (at) => {
+      onSyncSuccess: (at, delivered) => {
         lastSyncAt = at;
+        // M16 16.6: a drain that actually DELIVERED resolves the fault — unconditionally as to who
+        // recorded it. Gating on the in-memory `fault` left a stale file forever: `startEngine`
+        // resets `fault = undefined` on every start, so a run that faulted and wrote the file was
+        // followed by a successful run in which the flag was false and the file survived, reading
+        // as a permanent outage. There is no cross-profile hazard to justify the narrower scope
+        // either: `serve`'s home defaults to `homedir()`, the same profile the documented service
+        // install targets with `watch --home C:\Users\YOURNAME` — same machine, same credentials.
+        //
+        // `delivered > 0` is load-bearing: an empty-queue drain returns "ok" every ~2 s without
+        // making a request, so an idle desktop would otherwise erase the record having contacted
+        // nothing.
+        if (delivered > 0) {
+          fault = undefined;
+          clearFault(faultPathFor(home));
+        }
+      },
+      // M16 16.6: capture the fatal reason and make it DURABLE, so the fact survives the desktop
+      // being closed and a server-side DB reset alike.
+      onFatal: (f) => {
+        fault = f;
+        try {
+          saveFault(f, faultPathFor(home));
+        } catch (err) {
+          log("warn", `could not record capture fault: ${(err as Error).message}`);
+        }
       },
     })
       .then(() => {
@@ -252,9 +289,19 @@ export function runServe(deps: ServeDeps = {}): Promise<void> {
         } else if (intent === "stopping") {
           // stop() owns the terminal state + events.
         } else {
-          // Engine ended on its own (e.g. a 401 revoked the token) — surface it.
+          // Engine ended on its own — surface it. M16 16.6: with the REASON when we have one.
+          // Reuses the EXISTING `error` ControlEvent (D-16.6-3) rather than adding a field to
+          // `status`, which would bump CONTROL_PROTOCOL_VERSION and drag the Tauri UI into this
+          // slice for no detection benefit.
           state = "error";
-          log("error", "capture engine stopped unexpectedly");
+          // ONE event per stop: when the reason is known the `error` event carries it, and a `log`
+          // line saying the same words would only duplicate it in the desktop's feed. The `log`
+          // stays for the branch that has no reason to report.
+          if (fault) {
+            emit({ type: "error", message: `capture stopped: ${fault.message}` });
+          } else {
+            log("error", "capture engine stopped unexpectedly");
+          }
           emitStatus();
         }
       })

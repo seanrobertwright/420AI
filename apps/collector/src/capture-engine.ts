@@ -9,6 +9,7 @@ import { FileWatcher } from "./watcher/file-watcher.js";
 import { syncOnce, runSyncLoop } from "./sync/sync-worker.js";
 import { captureGitCommits } from "./discovery/git-capture.js";
 import { postGit } from "./ingest-client.js";
+import type { CaptureFault } from "./fault.js";
 import { runPushServer } from "./push/push-server.js";
 import { loadOrCreatePushToken } from "./push/push-token.js";
 
@@ -79,10 +80,34 @@ export interface CaptureEngineOptions {
   heartbeatIntervalMs?: number;
   /** M10: git-sweep cadence (default 5 min). Set to 0 to disable the background git sweep. */
   gitIntervalMs?: number;
-  /** M13 13.1: called with an ISO timestamp after each successful sync drain (serve.ts wires this to the StatusBar's `lastSyncAt`). */
-  onSyncSuccess?: (at: string) => void;
+  /**
+   * M13 13.1: called with an ISO timestamp after each successful sync drain (serve.ts wires this to
+   * the StatusBar's `lastSyncAt`).
+   *
+   * M16 16.6 (F1): `delivered` is how many queue items the archive accepted on that drain — **0 for
+   * the empty-queue drain that fires every idle tick without making a request**. "We are alive" may
+   * use the timestamp alone; "we have re-reached the archive" must require `delivered > 0`.
+   */
+  onSyncSuccess?: (at: string, delivered: number) => void;
+  /**
+   * M16 16.6: report a FATAL, non-recoverable capture stop — today only a revoked token (401).
+   *
+   * An additive CALLBACK rather than a widened return type, deliberately: `cli.ts` types its engine
+   * seam as `runEngine?: typeof runCaptureEngine`, so changing `Promise<void>` to a result object
+   * would break the injected test double at compile time. A callback has zero blast radius.
+   *
+   * The engine still unwinds exactly as before — this only makes the reason SURVIVE the unwind.
+   * INC-2026-07: the 401 was known here, at this line, for eight days, and went no further.
+   */
+  onFatal?: (fault: CaptureFault) => void;
   /** M14 14.7: push-receiver port override (default `DEFAULT_PUSH_PORT`). Tests pass 0 for ephemeral. */
   pushPort?: number;
+  /**
+   * Injectable ingest client (tests only) — mirrors `runSync`'s `post?` seam in `cli.ts` and
+   * `SyncDeps.post`. Production always leaves it unset and gets the real fetch-based `postIngest`.
+   * Without it the 401 → `onFatal` path could only be exercised against a live HTTP server.
+   */
+  post?: typeof import("./ingest-client.js").postIngest;
   /**
    * M16 16.3: resolve the DECLARED state of every registry connector for one report.
    *
@@ -332,11 +357,30 @@ export async function runCaptureEngine(opts: CaptureEngineOptions): Promise<void
         // against an older archive is the case this exists for.
         onHeartbeatError: (e) =>
           log(`heartbeat failed (capture health not reported): ${String(e)}`),
+        post: opts.post,
         onSync: opts.onSyncSuccess,
         onStop: () => {
-          log(
-            "ingest returned 401 — token revoked. Re-pair needed: `collector pair <code>`. Stopping sync.",
-          );
+          const message =
+            "ingest returned 401 — token revoked. Re-pair needed: `collector pair <code>`. Stopping sync.";
+          log(message);
+          // M16 16.6: leave a DURABLE trace before unwinding. The engine is about to end normally,
+          // which is exactly how INC-2026-07 stayed invisible for eight days.
+          //
+          // The reporter is GUARDED for the same reason `heartbeat.ts` guards its `onError`: it
+          // writes a file, and a throw here would unwind the sync loop through a rejected promise
+          // instead of the clean "stop" path — the F-16.3-2 shape, in the one component whose whole
+          // job is to survive long enough to report a failure.
+          try {
+            opts.onFatal?.({
+              code: "auth_revoked",
+              message,
+              since: new Date().toISOString(),
+              // The URL that rejected the credential — never the credential itself.
+              url: opts.creds.url,
+            });
+          } catch {
+            /* a fault reporter that throws must not become the outage it was reporting */
+          }
           internal.abort();
         },
       },
@@ -416,6 +460,7 @@ export async function runCaptureEngine(opts: CaptureEngineOptions): Promise<void
           url: opts.creds.url,
           token: opts.creds.token,
           timeoutMs,
+          post: opts.post,
         }),
       () => queue.stats().pending,
       { deadlineMs: SHUTDOWN_DRAIN_MS },

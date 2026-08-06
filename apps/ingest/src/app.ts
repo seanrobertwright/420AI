@@ -13,6 +13,7 @@ import {
 } from "@420ai/db";
 import { createMetrics, registerMetricsHook } from "./metrics.js";
 import authPlugin from "./plugins/auth.js";
+import alertEvaluatorPlugin from "./plugins/alert-evaluator.js";
 import authRoutes from "./routes/auth.js";
 import ssoRoutes from "./routes/sso.js";
 import mfaRoutes from "./routes/mfa.js";
@@ -128,6 +129,12 @@ export interface BuildAppOptions {
    * (D-15.7-6 — it is never read from a request body). Omitted → next dev's default origin, the
    * same fallback `mailer.appBaseUrl` uses. */
   appBaseUrl?: string;
+  /** M16 16.6 background alert-evaluator cadence in ms. Omitted or 0 → DISABLED (no timer at all).
+   * Only server.ts passes a real value; every test caller leaves it off, so no existing suite
+   * gains a timer to race `app.close()` with. Same opt-in shape as `alertDeliverer` above — and
+   * the same reason it matters: this is the ONE option whose non-zero default would touch every
+   * `buildApp` caller in the repo. */
+  alertEvaluatorIntervalMs?: number;
 }
 
 /**
@@ -192,6 +199,9 @@ export function buildApp(opts: BuildAppOptions): FastifyInstance {
   // M12 12.6 alert delivery: omitted → null → disabled (no webhook). The monitor route's
   // deliverFirings early-returns when null, so the default no-webhook path adds no query.
   app.decorate("alertDeliverer", opts.alertDeliverer ?? null);
+  // M16 16.6 background evaluator cadence. Decorated BEFORE the plugin registration below, like
+  // every other decoration, so `plugins/alert-evaluator.ts` can read it in its body. 0 = off.
+  app.decorate("alertEvaluatorIntervalMs", opts.alertEvaluatorIntervalMs ?? 0);
   // M15 15.5 identity core. Both decorated BEFORE the route registrations below, like every other
   // decoration, so `app.mailer` / `app.selfSignupEnabled` resolve inside the handlers.
   app.decorate("mailer", opts.mailer ?? null);
@@ -230,6 +240,11 @@ export function buildApp(opts: BuildAppOptions): FastifyInstance {
   }
 
   app.register(authPlugin);
+  // M16 16.6 — a no-op unless `alertEvaluatorIntervalMs > 0`, so registering it unconditionally
+  // here costs the default path nothing. It is a plugin rather than a `server.ts` `setInterval` so
+  // its teardown rides on `app.close()` (the `onClose` hook), which is what stops a vitest run
+  // from hanging on a live timer.
+  app.register(alertEvaluatorPlugin);
   app.register(authRoutes);
   app.register(ssoRoutes);
   app.register(mfaRoutes);

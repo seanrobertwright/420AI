@@ -1,13 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import {
   deriveMachineStatus,
-  deriveAlerts,
-  deriveBacklogTrendAlerts,
-  deriveCatalogAlerts,
-  deriveAuthFailureAlerts,
-  deriveArchiveUnreachableAlerts,
-  deriveConnectorFailureRateAlerts,
-  sortAlerts,
   isBacklogHigh,
   BACKLOG_TREND_WINDOW_MS,
   AUTH_FAILURE_ALERT,
@@ -38,6 +31,7 @@ import {
   type DbClient,
 } from "@420ai/db";
 import { resolvePrincipal, authorized } from "../auth.js";
+import { deriveAlertSet } from "../alert-set.js";
 
 // `ACTIVE_WINDOW_MS` was a local const here until M16 16.2. It moved to `@420ai/shared` because
 // `GET /v1/labels/queue` defines "settled" as the inverse of this same window (D-16.2-2) and the
@@ -116,14 +110,19 @@ async function buildSnapshot(
   };
   // Frozen deriveAlerts (D2) + the sibling backlog-growing + the §20 catalog-approval
   // derivatives, merged + re-sorted. The catalog alert is GLOBAL (no machine/connector).
-  const alerts = sortAlerts([
-    ...deriveAlerts(built),
-    ...deriveBacklogTrendAlerts(machineRows, samplesByMachine),
-    ...deriveCatalogAlerts(pendingCatalogs),
-    ...deriveArchiveUnreachableAlerts(machineRows),
-    ...deriveAuthFailureAlerts(authFailureCount),
-    ...deriveConnectorFailureRateAlerts(windowedConnectors),
-  ]);
+  //
+  // M16 16.6 — the six-call list MOVED to `alert-set.ts` and is now shared with the background
+  // evaluator. Behaviour here is byte-identical (same calls, same order, same `sortAlerts`); what
+  // changed is that there is no longer a second copy able to drift from this one. It has to be
+  // shared rather than merely kept in sync: `reconcileAlertFirings` resolves any open firing whose
+  // key is absent from the derived set, so two lists that disagree make every firing in the
+  // difference flap between the read path and the timer. See `alert-set.ts`.
+  const alerts = deriveAlertSet(built, {
+    samplesByMachine,
+    pendingCatalogs,
+    authFailureCount,
+    windowedConnectors,
+  });
   // The WRITE (D1): reconcile firing state against the derived alerts (route owns `now`).
   //
   // M15 15.4 (audit B.4) — the throttle suppresses the STEADY-STATE write, not a state CHANGE.

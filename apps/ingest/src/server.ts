@@ -81,6 +81,21 @@ const monitorStreamIntervalMs = parsePositiveInt(
   3000,
 );
 
+// M16 16.6 background alert-evaluator cadence (INC-2026-07). This is the ONE caller that turns the
+// evaluator on — `buildApp` defaults it to 0/disabled so no test starts a timer.
+//
+// SHIPPED WITH A REAL VALUE IN `.env.example`, never empty, and that is a trap worth naming: an
+// empty `ALERT_EVALUATOR_INTERVAL_MS=` reaches `parsePositiveInt` as `""`, `Number("")` is `0`,
+// and the guard below THROWS AT BOOT. It is the numeric sibling of the CLAUDE.md `??`-vs-`||` env
+// rule — same class (a shipped-empty key defeating a fallback), different operator. The two
+// existing interval keys (`MONITOR_STREAM_INTERVAL_MS=3000`, `HEARTBEAT_INTERVAL_MS=30000`) both
+// ship populated for exactly this reason; copy them, not the empty-valued secrets.
+const alertEvaluatorIntervalMs = parsePositiveInt(
+  process.env.ALERT_EVALUATOR_INTERVAL_MS,
+  "ALERT_EVALUATOR_INTERVAL_MS",
+  60000,
+);
+
 // M12 12.4b structured-logging level (pino: trace|debug|info|warn|error|fatal).
 const logLevel = process.env.LOG_LEVEL ?? "info";
 
@@ -279,6 +294,7 @@ const app = buildApp({
   analysisProvider: createAnalysisProvider(analysisConfig),
   analysisMaxOutputTokens,
   monitorStreamIntervalMs,
+  alertEvaluatorIntervalMs,
   logLevel,
   rateLimit,
   alertDeliverer,

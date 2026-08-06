@@ -1,0 +1,8 @@
+# M16 16.6 — webhook deliveries captured during manual validation (2026-08-06)
+#
+# Verbatim POST bodies received by the local sink on :9971 while a real apps/ingest
+# server ran with ALERT_EVALUATOR_INTERVAL_MS=5000. No dashboard was ever opened.
+# Renamed from .log because *.log is gitignored (.gitignore:40) and this is evidence.
+
+2026-08-06T19:32:57.105Z POST /hook {"kind":"alert.firing","firing":{"id":"c4302a14-9119-49e1-a4cc-e570f788759e","alertKey":"collector.offline:8a10ecf7-c115-4fa2-a794-09cea62ad332","code":"collector.offline","severity":"critical","message":"Collector \"manual-validation-collector\" is offline (no heartbeat for >5 min)","machineId":"8a10ecf7-c115-4fa2-a794-09cea62ad332","machineName":"manual-validation-collector","connector":null,"since":"2026-08-06T19:22:33.084Z","status":"open","firstFiredAt":"2026-08-06T19:32:57.060Z","lastSeenAt":"2026-08-06T19:32:57.060Z","resolvedAt":null,"ackedAt":null}}
+2026-08-06T19:33:42.157Z POST /hook {"kind":"alert.resolved","firing":{"id":"c4302a14-9119-49e1-a4cc-e570f788759e","alertKey":"collector.offline:8a10ecf7-c115-4fa2-a794-09cea62ad332","code":"collector.offline","severity":"critical","message":"Collector \"manual-validation-collector\" is offline (no heartbeat for >5 min)","machineId":"8a10ecf7-c115-4fa2-a794-09cea62ad332","machineName":"manual-validation-collector","connector":null,"since":"2026-08-06T19:22:33.084Z","status":"resolved","firstFiredAt":"2026-08-06T19:32:57.060Z","lastSeenAt":"2026-08-06T19:33:37.130Z","resolvedAt":"2026-08-06T19:33:42.135Z","ackedAt":null}}

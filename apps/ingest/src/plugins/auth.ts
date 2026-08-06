@@ -49,6 +49,11 @@ declare module "fastify" {
     rateLimitLogin: { max: number; timeWindow: string } | false;
     /** M12 12.6 injected alert deliverer (webhook in server.ts; spy in tests); null = delivery off. */
     alertDeliverer: import("../delivery/alert-deliverer.js").AlertDeliverer | null;
+    /** M16 16.6 background alert-evaluator cadence in ms; 0 = DISABLED (the default, and what every
+     * test caller gets). Read once by `plugins/alert-evaluator.ts`, which starts no timer at 0.
+     * Before 16.6 the only trigger for evaluating alerts was a human opening the dashboard, which
+     * is how INC-2026-07 stayed silent for 8 days — `derivable ≠ detected`. */
+    alertEvaluatorIntervalMs: number;
     /** M15 15.5 transactional mail for invites + password resets; null = no SMTP configured.
      * Callers branch on null ASYMMETRICALLY (D-15.5-10): the admin-gated invite route hands the
      * token back in its response, while the UNAUTHENTICATED reset route 503s — returning a reset

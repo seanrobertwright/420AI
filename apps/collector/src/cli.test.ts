@@ -1,9 +1,17 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseHeartbeatIntervalMs, runIngest, runReport, runWatch } from "./cli.js";
+import {
+  parseHeartbeatIntervalMs,
+  runIngest,
+  runReport,
+  runWatch,
+  watchExitCode,
+  type WatchRunResult,
+} from "./cli.js";
+import { faultPathFor, loadFault, saveFault, type CaptureFault } from "./fault.js";
 import type { CaptureEngineOptions } from "./capture-engine.js";
 import type { ConnectorConfig } from "./connectors/connector-config.js";
 import type { ConnectorApprovals } from "./connectors/connector-approvals.js";
@@ -153,5 +161,169 @@ describe("runWatch connector filtering (F-16.3-1)", () => {
 
     // A withheld connector is withheld from CAPTURE too — both filters compose.
     expect(opts.connectors!.map((c) => c.id)).not.toContain("gemini-cli");
+  });
+});
+
+/**
+ * M16 16.6 — `collector watch` must report a fatal 401 through a channel that is not "success".
+ *
+ * The one-shot sibling `collector sync` learned this as C.11 in M12 (outcome "stop" → stderr +
+ * exit 1). The daemon never did: `process.exit(0)` ran unconditionally after `runWatch`, so a
+ * revoked token looked identical to Ctrl-C — to the operator AND to WinSW, whose `<onfailure>`
+ * restart triggers only on a non-zero exit. These pin the missing half.
+ */
+describe("runWatch fatal fault (M16 16.6 — the C.11 lesson, applied to the daemon)", () => {
+  const watchHomes: string[] = [];
+  afterEach(() => {
+    for (const h of watchHomes.splice(0)) {
+      try {
+        rmSync(h, { recursive: true, force: true });
+      } catch {
+        /* best effort */
+      }
+    }
+  });
+
+  const watch = async (
+    runEngine: (o: CaptureEngineOptions) => Promise<void>,
+  ): Promise<{ home: string; result: WatchRunResult }> => {
+    const home = mkdtempSync(join(tmpdir(), "m16-fault-watch-"));
+    watchHomes.push(home);
+    const result = await runWatch({
+      url: "http://127.0.0.1:1/unreachable", // the catalog pull is best-effort and never throws
+      token: "t",
+      home,
+      signal: new AbortController().signal,
+      loadConnectorConfig: () => ({ version: "test", connectors: {} }),
+      loadConnectorApprovals: () => ({ version: "test", approved: {} }),
+      saveConnectorApprovals: () => {},
+      runEngine,
+    });
+    return { home, result };
+  };
+
+  const fault: CaptureFault = {
+    code: "auth_revoked",
+    message: "ingest returned 401 — token revoked.",
+    since: "2026-08-06T12:00:00.000Z",
+    url: "https://archive.example",
+  };
+
+  it("writes the fault file and reports the fault when the engine fires onFatal", async () => {
+    const { home, result } = await watch(async (o) => {
+      o.onFatal?.(fault);
+    });
+
+    expect(result.fault).toEqual(fault);
+    expect(result.recorded).toBe(true);
+    // Written under the SAME --home as creds + queue, so the Windows service and the desktop read
+    // one profile rather than two (see `faultPathFor`).
+    expect(loadFault(faultPathFor(home))).toEqual({ ...fault, lastObservedAt: fault.since });
+  });
+
+  /**
+   * F4 — a failed write must not be reported as a successful one. The engine's `onStop` swallows
+   * anything thrown by the reporter, so before this the CLI printed "Recorded at <path>" for a file
+   * that was never created (read-only disk / ENOSPC / EPERM are all plausible for a LocalSystem
+   * service). The exit code must survive the failure: `fault` is still set.
+   */
+  it("reports recorded=false — but still a fault — when the fault file cannot be written", async () => {
+    const home = mkdtempSync(join(tmpdir(), "m16-fault-watch-"));
+    watchHomes.push(home);
+    // `.420ai` exists as a FILE, so `saveFault`'s mkdirSync of the parent throws.
+    writeFileSync(join(home, ".420ai"), "not a directory");
+    const logs: string[] = [];
+
+    const result = await runWatch({
+      url: "http://127.0.0.1:1/unreachable",
+      token: "t",
+      home,
+      signal: new AbortController().signal,
+      logger: (m) => logs.push(m),
+      loadConnectorConfig: () => ({ version: "test", connectors: {} }),
+      loadConnectorApprovals: () => ({ version: "test", approved: {} }),
+      saveConnectorApprovals: () => {},
+      runEngine: async (o) => {
+        o.onFatal?.(fault);
+      },
+    });
+
+    expect(result.fault).toEqual(fault); // exit code unaffected by the write failing
+    expect(result.recorded).toBe(false); // …so the entrypoint must not claim it was recorded
+    expect(logs.join("\n")).toMatch(/could not record capture fault/);
+  });
+
+  it("a clean SIGINT-style return reports NO fault (so the entrypoint exits 0)", async () => {
+    const { home, result } = await watch(async () => {});
+
+    expect(result.fault).toBeUndefined();
+    expect(existsSync(faultPathFor(home))).toBe(false);
+  });
+
+  /** Drive a `runWatch` over a home pre-seeded with a fault, firing one `onSyncSuccess` drain. */
+  const watchWithSeededFault = async (delivered: number): Promise<string> => {
+    const home = mkdtempSync(join(tmpdir(), "m16-fault-watch-"));
+    watchHomes.push(home);
+    // A previous process died faulted — the record is on disk before this run starts.
+    saveFault(fault, faultPathFor(home));
+
+    const result = await runWatch({
+      url: "http://127.0.0.1:1/unreachable",
+      token: "t",
+      home,
+      signal: new AbortController().signal,
+      loadConnectorConfig: () => ({ version: "test", connectors: {} }),
+      loadConnectorApprovals: () => ({ version: "test", approved: {} }),
+      saveConnectorApprovals: () => {},
+      runEngine: async (o) => {
+        o.onSyncSuccess?.("2026-08-06T13:00:00.000Z", delivered);
+      },
+    });
+    expect(result.fault).toBeUndefined();
+    return home;
+  };
+
+  it("a DELIVERING sync clears a fault left by an earlier run (self-resolving)", async () => {
+    const home = await watchWithSeededFault(7);
+    expect(existsSync(faultPathFor(home))).toBe(false);
+  });
+
+  /**
+   * F1 — the fault must NOT self-resolve on a drain that never contacted the archive.
+   *
+   * `syncOnce` returns "ok" immediately when the queue is empty, without making a request, and
+   * `runSyncLoop` fires `onSync` on every such tick (~2 s). Clearing on that meant: 401 → exit 1 →
+   * WinSW restart → first idle tick on a quiet machine DELETES `fault.json`, having sent nothing —
+   * the precise opposite of what `service/README.md` tells the operator to trust.
+   */
+  it("an EMPTY drain (delivered=0) leaves the fault on disk — it contacted nothing", async () => {
+    const home = await watchWithSeededFault(0);
+    expect(existsSync(faultPathFor(home))).toBe(true);
+    expect(loadFault(faultPathFor(home))?.code).toBe("auth_revoked");
+  });
+});
+
+/**
+ * F6 — the slice's headline behaviour, finally testable. `main()` is not exported and
+ * `process.exit` is not seamed, so deleting the whole `if (fault)` branch left every test green.
+ * The mapper is extracted for exactly the reason `pairSummary` / `formatCliError` were.
+ */
+describe("watchExitCode (M16 16.6 — exit 1 on a fatal 401, 0 on SIGINT)", () => {
+  const fault: CaptureFault = {
+    code: "auth_revoked",
+    message: "ingest returned 401 — token revoked.",
+    since: "2026-08-06T12:00:00.000Z",
+    url: "https://archive.example",
+  };
+
+  it("exits 1 for a fatal fault, so WinSW's <onfailure> restart actually fires", () => {
+    expect(watchExitCode({ fault, recorded: true })).toBe(1);
+    // …even when the durable record could not be written: the exit code is the other half of the
+    // signal, and losing both is how INC-2026-07 stayed invisible.
+    expect(watchExitCode({ fault, recorded: false })).toBe(1);
+  });
+
+  it("exits 0 for a clean SIGINT-style stop, so a deliberate stop never restart-loops", () => {
+    expect(watchExitCode({})).toBe(0);
   });
 });

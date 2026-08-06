@@ -40,6 +40,7 @@ import {
   NotPairedError,
   type Credentials,
 } from "./identity.js";
+import { faultPathFor, saveFault, clearFault, type CaptureFault } from "./fault.js";
 import { QueueStore, type QueueStats, type SyncOutcome } from "./queue/queue-store.js";
 import { runCaptureEngine } from "./capture-engine.js";
 import { resolveConnectorStates } from "./connectors/connector-info.js";
@@ -180,6 +181,38 @@ function resolveCreds(opts: { url?: string; token?: string; home?: string }): Cr
 }
 
 /**
+ * The outcome of one `collector watch` run.
+ *
+ * M16 16.6: `runWatch` used to return `void`, which gave `main()` nothing to distinguish a
+ * deliberate SIGINT from a token revocation — so it exited 0 for both. `fault` is that missing
+ * distinction, and only the ENTRYPOINT turns it into an exit code (library files never exit).
+ */
+export interface WatchRunResult {
+  /** Set iff capture stopped for a fatal, non-recoverable reason (today: a revoked token). */
+  fault?: CaptureFault;
+  /**
+   * True iff `fault` was successfully written to disk. A LocalSystem service can plausibly fail the
+   * write (read-only disk, ENOSPC, EPERM), and the entrypoint must not then print "Recorded at
+   * <path>" for a file that does not exist — the operator would go looking for it, find nothing,
+   * and distrust the whole mechanism.
+   */
+  recorded?: boolean;
+}
+
+/**
+ * The `collector watch` exit code, extracted from `main()` for the same reason `pairSummary` and
+ * `formatCliError` were: `main()` is not exported and `process.exit` is not seamed, so the slice's
+ * headline behaviour — exit 1 on a fatal 401, exit 0 on SIGINT — was otherwise untestable, and
+ * deleting the branch entirely left every test green.
+ *
+ * Exit 1 ONLY for a fatal fault. WinSW's `<onfailure action="restart"/>` fires on a non-zero exit,
+ * so a deliberate Ctrl-C / `Stop-Service` must stay 0 or the service restart-loops.
+ */
+export function watchExitCode(result: WatchRunResult): number {
+  return result.fault ? 1 : 0;
+}
+
+/**
  * Run the background capture agent: discover + tail Claude sessions, buffer to
  * the durable queue, sync to the archive. Resolves when `signal` aborts (SIGINT)
  * after a graceful final drain. Pure of process concerns except via callbacks.
@@ -207,7 +240,7 @@ export async function runWatch(opts: {
   loadConnectorConfig?: () => ConnectorConfig;
   loadConnectorApprovals?: () => ConnectorApprovals;
   saveConnectorApprovals?: (cfg: ConnectorApprovals) => void;
-}): Promise<void> {
+}): Promise<WatchRunResult> {
   const creds = resolveCreds(opts);
   const home = opts.home ?? homedir();
   // M12 12.7c: best-effort pull of the active signed connector catalog → cache it.
@@ -264,6 +297,14 @@ export async function runWatch(opts: {
     );
   }
 
+  /**
+   * M16 16.6 — the durable fault record, resolved from the SAME `home` as creds + queue (see
+   * `faultPathFor`). A fault written under one profile and read under another is worth nothing.
+   */
+  const faultPath = faultPathFor(home);
+  let fault: CaptureFault | undefined;
+  let recorded = false;
+
   await (opts.runEngine ?? runCaptureEngine)({
     creds,
     signal: opts.signal,
@@ -284,7 +325,35 @@ export async function runWatch(opts: {
     // Config + approvals are read ONCE per report, not once per connector per report; the mapping
     // itself is shared with `serve.ts` so the service and desktop views cannot drift.
     connectorStates: (reg) => resolveConnectorStates(reg, loadCfg(), loadApprovals(), home),
+    // M16 16.6: persist the fatal reason so it survives BOTH this process and a server-side DB
+    // reset, and remember it locally so the entrypoint can exit non-zero (WinSW `<onfailure>` only
+    // fires on a non-zero exit — exit 0 reads to Windows as a deliberate stop).
+    onFatal: (f) => {
+      // The in-memory fault is assigned BEFORE the write, deliberately: a failed write must still
+      // produce exit 1. Losing the exit code as well as the file would restore exactly the silence
+      // this slice exists to end.
+      fault = f;
+      try {
+        saveFault(f, faultPath);
+        recorded = true;
+      } catch (err) {
+        // The engine's `onStop` swallows anything thrown here, so an unguarded failure was invisible
+        // AND the entrypoint went on to print "Recorded at <path>" for a file that never existed.
+        opts.logger?.(`could not record capture fault at ${faultPath}: ${String(err)}`);
+      }
+    },
+    // …and CLEAR it on the next drain that actually DELIVERED, which is what makes the signal
+    // self-resolving. Unconditional as to WHICH process wrote it (the fault may have been left by an
+    // earlier run — the service restarting under `<onfailure>`), but conditional on `delivered > 0`:
+    // an empty-queue drain returns "ok" and fires this callback every ~2 s WITHOUT making a single
+    // request, so clearing on that would delete the record on the first idle tick after a restart,
+    // having never re-contacted the archive. Only bytes accepted by the archive prove it is over.
+    onSyncSuccess: (_at, delivered) => {
+      if (delivered > 0) clearFault(faultPath);
+    },
   });
+
+  return { fault, recorded };
 }
 
 export interface SyncRunResult {
@@ -630,18 +699,40 @@ async function main(argv: string[]): Promise<void> {
     const pushPortFlag = getFlag(args, "--push-port");
     const pushPort =
       pushPortFlag && Number.isFinite(Number(pushPortFlag)) ? Number(pushPortFlag) : undefined;
-    await runWatch({
+    // Resolve the home ONCE and use it for both the run and the fault-path message — the same
+    // footgun `pairSummary` documents: two `resolveHome` calls are two values the compiler cannot
+    // tell apart, and the printed path must be the one actually written to.
+    const home = resolveHome(args);
+    const result = await runWatch({
       url: getFlag(args, "--url"),
       token: getFlag(args, "--token"),
       intervalMs,
-      home: resolveHome(args),
+      home,
       signal: controller.signal,
       logger: (msg) => process.stdout.write(msg + "\n"),
       collectorVersion: readCollectorVersion(),
       heartbeatIntervalMs: parseHeartbeatIntervalMs(heartbeatFlag),
       pushPort,
     });
-    process.exit(0);
+    /**
+     * C.11, applied to the DAEMON (M16 16.6). `collector sync` has exited non-zero on a revoked
+     * token since M12; `watch` exited 0 unconditionally, and INC-2026-07 is what that cost. WinSW's
+     * `<onfailure action="restart"/>` fires only on a NON-ZERO exit, so exit 0 told Windows the
+     * eight-day outage was a deliberate stop — no restart, no Event Log entry, nothing.
+     *
+     * Exit 1 ONLY for a fatal 401. A Ctrl-C or a `Stop-Service` must stay 0, or WinSW restart-loops
+     * the collector every time the operator stops it on purpose.
+     */
+    if (result.fault) {
+      const faultPath = faultPathFor(home);
+      process.stderr.write(
+        `Capture stopped: ${result.fault.message}\n` +
+          (result.recorded
+            ? `Recorded at ${faultPath}\n`
+            : `WARNING: the fault record could NOT be written to ${faultPath}\n`),
+      );
+    }
+    process.exit(watchExitCode(result));
   }
 
   if (command === "sync") {
