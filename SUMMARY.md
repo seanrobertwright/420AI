@@ -284,7 +284,8 @@ through the deferral-audit + scope conversation that produced M12/M13/M14. Full 
   contaminate the <1% duplicate-rate metric) and D-16.0-1…3. Slices: **16.0** ✅ Truth + research
   scaffold · **16.1** ✅ Outcome label model + API · **16.2** ✅ Label capture (desktop) + review (dashboard) ·
   **16.3** ✅ Capture health scorecard · **16.4** ✅ Data-quality audit report · **16.5** ✅ Audit
-  raw-record index (fix) · **16.6** ✅ Capture-liveness detection (INC-2026-07). The §7 P1.6
+  raw-record index (fix) · **16.6** ✅ Capture-liveness detection (INC-2026-07) · **16.7** ⬜
+  Deployment-scoped alert firings (split out of 16.6's triage — needs a migration). The §7 P1.6
   hero-workflow evidence panel is deliberately **not** a slice —
   the hero workflow is selected from evidence in research Phase 2 (weeks 5–8).
   **The 2026-08-05 pre-sign-off pass ran five of the six checklist boxes green** (evidence:
@@ -1105,9 +1106,37 @@ records` and `0 ÷ 4000` are opposite facts. An HTTP test asserts the literal st
     moves a separate `lastObservedAt`).
     The derive-list parity was also made **structural** (`alert-set.ts`, shared by the tick and the
     route) after review pointed out that a comment enforces less than the file-level grep the repo
-    had already proven insufficient. Full detail, including the residual gaps deliberately NOT fixed
-    (a 401 on the **heartbeat** is still swallowed, which is the natural next increment), in
+    had already proven insufficient.
+    **A second triage pass then closed the gap that mattered most**: the first cut wired `onFatal` to
+    exactly ONE of the three places the collector makes an authenticated request. A 401 on the
+    **heartbeat** — which fires every ~30 s regardless of queue state — was swallowed as a log line,
+    so on a quiet machine with an empty queue (therefore no ingest POST ever) a collector could sit
+    for days with a revoked token, write no fault, exit 0 and report nothing. INC-2026-07's exact
+    shape with a smaller queue, left open by the slice built to close it. All three observation
+    points (ingest POST, heartbeat, shutdown drain) now report, with the swallow kept for every
+    non-401 heartbeat error, and a pre-existing fault is announced at startup.
+    Full detail in
     [`.agents/code-reviews/m16-slice6-capture-liveness-detection.md`](./.agents/code-reviews/m16-slice6-capture-liveness-detection.md).
+  - **16.7** ⬜ **PLANNED** — Deployment-scoped alert firings. Split out of 16.6's triage rather than
+    folded in, because it needs a **migration** and 16.6's acceptance criteria state "no migration,
+    no new table, no new alert code". Two findings, one underlying design issue — **global
+    conditions are stored as per-org, per-user rows**. (a) `catalog.update_requires_approval` and
+    `ingest.auth_failure` derive from tables with no `org_id`, so ONE pending catalog opens a firing
+    in EVERY org and sends one notice per org; and because `ensurePersonalOrg` gives every user their
+    own org, org count tracks USER count, so this is not dormant until a second tenant signs up —
+    inviting two teammates is enough. (b) `alert_firings_open_key` is unique on
+    `(user_id, alert_key)`, so a non-owner opening the monitor opens a SECOND row and a second
+    delivery for one condition; 16.6 makes that the default rather than an edge case, because the
+    tick now guarantees the owner's row always exists.
+    **Why it is a slice and not a fix**: the derive list is now shared between the tick and the
+    route (16.6's `alert-set.ts`), so gating the global codes on the tick side alone would make the
+    tick derive fewer codes than the dashboard and reintroduce exactly the flapping the sharing
+    prevents — any fix therefore changes the dashboard's alert semantics too. And re-keying the
+    index to `(org_id, alert_key)` **fails on any deployment already holding two users' open firings
+    for the same key**, so it needs a dedupe/merge data migration first, plus five repository
+    functions, three call sites in `routes/monitor.ts`, three in `alert-evaluator.ts`, the ack route,
+    and a rollback drill. Needs its own decision on whether global alerts get a deployment scope
+    (nullable `org_id` + a partial index) or stay org-scoped and deduplicate at delivery.
 
 - [ ] **M17–M20 remain committed scope, unsequenced** (§3, PRD §25). Each still needs its own
       deferral-audit + scope conversation before it is executable. (**M20** is Cloud-hosted SaaS,

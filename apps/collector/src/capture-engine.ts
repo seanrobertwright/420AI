@@ -8,7 +8,7 @@ import { mapConnectorInfo, toMachineConnectorReport } from "./connectors/connect
 import { FileWatcher } from "./watcher/file-watcher.js";
 import { syncOnce, runSyncLoop } from "./sync/sync-worker.js";
 import { captureGitCommits } from "./discovery/git-capture.js";
-import { postGit } from "./ingest-client.js";
+import { postGit, isUnauthorized } from "./ingest-client.js";
 import type { CaptureFault } from "./fault.js";
 import { runPushServer } from "./push/push-server.js";
 import { loadOrCreatePushToken } from "./push/push-token.js";
@@ -30,12 +30,17 @@ const SHUTDOWN_DRAIN_MS = 5_000;
  * accepting ("ok") and items remain, but STOPS at the deadline so shutdown can never hang on a
  * large backlog or a stalled archive (C.8). Undelivered items stay queued (durable, recovered on
  * next start). Pure with an injectable clock so it is unit-testable without infra.
+ *
+ * M16 16.6 (F2): RETURNS the final `SyncOutcome`. It used to swallow it — the `while` merely stopped
+ * on anything that was not "ok" — so a 401 first observed HERE (a token revoked while the operator
+ * happened to be restarting the machine) produced no fault record, no stderr line and exit 0. The
+ * drain is a real authenticated request; a 401 on it is exactly the evidence the sync loop's is.
  */
 export async function drainBeforeExit(
   sync: (timeoutMs: number) => Promise<SyncOutcome>,
   pending: () => number,
   opts: { deadlineMs: number; now?: () => number },
-): Promise<void> {
+): Promise<SyncOutcome> {
   const now = opts.now ?? ((): number => Date.now());
   const deadline = now() + opts.deadlineMs;
   // Give EACH call only the budget left until the deadline, so even one stalled call can't run past
@@ -47,6 +52,7 @@ export async function drainBeforeExit(
   while (outcome === "ok" && pending() > 0 && (remaining = deadline - now()) > 0) {
     outcome = await sync(remaining);
   }
+  return outcome;
 }
 
 /**
@@ -108,6 +114,14 @@ export interface CaptureEngineOptions {
    * Without it the 401 → `onFatal` path could only be exercised against a live HTTP server.
    */
   post?: typeof import("./ingest-client.js").postIngest;
+  /**
+   * Injectable heartbeat client (tests only) — the sibling of `post`, threaded to `runSyncLoop`.
+   *
+   * M16 16.6 (F1) made the HEARTBEAT a fatal-401 detector, and without this seam that path could
+   * only be exercised against a live HTTP server answering 401 — i.e. it would have shipped with the
+   * same "no test can fail here" shape the 16.6 review found four times.
+   */
+  postHeartbeat?: typeof import("./ingest-client.js").postHeartbeat;
   /**
    * M16 16.3: resolve the DECLARED state of every registry connector for one report.
    *
@@ -342,6 +356,40 @@ export async function runCaptureEngine(opts: CaptureEngineOptions): Promise<void
     const onExternalAbort = () => internal.abort();
     opts.signal.addEventListener("abort", onExternalAbort, { once: true });
 
+    /**
+     * M16 16.6: report a FATAL capture stop exactly once, from whichever of the THREE authenticated
+     * paths observes it first — the sync loop's ingest POST, the heartbeat (F1), or the shutdown
+     * drain (F2). All three carry the same evidence (this machine's credential was rejected), and
+     * before F1/F2 only the first of them could produce a fault record, an exit code or a word of
+     * output.
+     *
+     * `reported` is the de-duplication: a persistent 401 is normally seen by two of the three in one
+     * run (the sync loop, then the drain re-POSTing the items it released), and a second `onFatal`
+     * would double-report to the desktop and re-enter `saveFault` for no new information.
+     *
+     * The callback is GUARDED for the same reason `heartbeat.ts` guards its `onError`: it writes a
+     * file, and a throw here would unwind the engine through a rejected promise instead of the clean
+     * "stop" path — the F-16.3-2 shape, in the one component whose whole job is to survive long
+     * enough to report a failure.
+     */
+    let reported = false;
+    const reportFatal = (message: string): void => {
+      if (reported) return;
+      reported = true;
+      log(message);
+      try {
+        opts.onFatal?.({
+          code: "auth_revoked",
+          message,
+          since: new Date().toISOString(),
+          // The URL that rejected the credential — never the credential itself.
+          url: opts.creds.url,
+        });
+      } catch {
+        /* a fault reporter that throws must not become the outage it was reporting */
+      }
+    };
+
     const watcherLoop = watcher.runLoop(internal.signal, opts.intervalMs);
     const syncLoop = runSyncLoop(
       {
@@ -355,32 +403,36 @@ export async function runCaptureEngine(opts: CaptureEngineOptions): Promise<void
         connectorReports,
         // D-16.3-6: the send failure stays swallowed, but is no longer SILENT. A newer collector
         // against an older archive is the case this exists for.
-        onHeartbeatError: (e) =>
-          log(`heartbeat failed (capture health not reported): ${String(e)}`),
+        //
+        // M16 16.6 (F1) — EXCEPT for a 401, which is not a transient send failure at all. The
+        // heartbeat makes a real authenticated request every ~30 s REGARDLESS of queue state, so on
+        // a quiet machine (empty queue ⇒ the sync loop never POSTs) it is the ONLY thing that ever
+        // talks to the archive. Leaving its 401 as a log line meant a collector could sit for days
+        // with a revoked credential, write no fault, exit 0 and report nothing — INC-2026-07's exact
+        // shape with a smaller queue. Uses the SAME `isUnauthorized` predicate the sync worker
+        // branches on; a second predicate is a second thing to drift.
+        //
+        // Every OTHER heartbeat error keeps the swallow (residual risk e): a network blip or an
+        // older archive that 404s the endpoint must never stop capture.
+        onHeartbeatError: (e) => {
+          if (isUnauthorized(e)) {
+            reportFatal(
+              "heartbeat returned 401 — token revoked. Re-pair needed: `collector pair <code>`. Stopping capture.",
+            );
+            internal.abort();
+            return;
+          }
+          log(`heartbeat failed (capture health not reported): ${String(e)}`);
+        },
         post: opts.post,
+        postHeartbeat: opts.postHeartbeat,
         onSync: opts.onSyncSuccess,
         onStop: () => {
-          const message =
-            "ingest returned 401 — token revoked. Re-pair needed: `collector pair <code>`. Stopping sync.";
-          log(message);
           // M16 16.6: leave a DURABLE trace before unwinding. The engine is about to end normally,
           // which is exactly how INC-2026-07 stayed invisible for eight days.
-          //
-          // The reporter is GUARDED for the same reason `heartbeat.ts` guards its `onError`: it
-          // writes a file, and a throw here would unwind the sync loop through a rejected promise
-          // instead of the clean "stop" path — the F-16.3-2 shape, in the one component whose whole
-          // job is to survive long enough to report a failure.
-          try {
-            opts.onFatal?.({
-              code: "auth_revoked",
-              message,
-              since: new Date().toISOString(),
-              // The URL that rejected the credential — never the credential itself.
-              url: opts.creds.url,
-            });
-          } catch {
-            /* a fault reporter that throws must not become the outage it was reporting */
-          }
+          reportFatal(
+            "ingest returned 401 — token revoked. Re-pair needed: `collector pair <code>`. Stopping sync.",
+          );
           internal.abort();
         },
       },
@@ -450,7 +502,7 @@ export async function runCaptureEngine(opts: CaptureEngineOptions): Promise<void
     // Best-effort final drain of anything captured but not yet sent — bounded by SHUTDOWN_DRAIN_MS
     // so a huge backlog or a stalled archive can never hang exit (C.8). Leftover items stay queued.
     log("draining queue before exit…");
-    await drainBeforeExit(
+    const drainOutcome = await drainBeforeExit(
       // Each drain POST is bounded by the budget REMAINING until the deadline, so even a single
       // stalled archive connection can't outlast it (the between-calls check alone can't interrupt a
       // hung fetch — C.8).
@@ -465,6 +517,17 @@ export async function runCaptureEngine(opts: CaptureEngineOptions): Promise<void
       () => queue.stats().pending,
       { deadlineMs: SHUTDOWN_DRAIN_MS },
     );
+    // M16 16.6 (F2): the drain is the LAST authenticated request the collector makes, and on the
+    // realistic path — the operator restarts the machine, the token having been revoked meanwhile —
+    // it is the FIRST to see the 401: SIGINT ends the sync loop through the "aborted" branch before
+    // it ever POSTs. Discarding this outcome meant that run wrote no fault record and exited 0, so
+    // WinSW read it as a deliberate stop. De-duplicated by `reported`, because the ordinary
+    // persistent-401 run reaches here having already reported through `onStop`.
+    if (drainOutcome === "stop") {
+      reportFatal(
+        "ingest returned 401 while draining the queue on shutdown — token revoked. Re-pair needed: `collector pair <code>`.",
+      );
+    }
     const remaining = queue.stats().pending;
     log(remaining === 0 ? "queue drained." : `stopped with ${remaining} item(s) still queued.`);
   } finally {

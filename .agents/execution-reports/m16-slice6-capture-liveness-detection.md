@@ -177,19 +177,55 @@ written most anxiously are the likeliest to measure nothing.** Five findings wer
 not fail, each guarding the highest-risk behaviour in its file — because anxiety produces a test that
 *looks like* the risk instead of one derived from what would change if the code were wrong.
 
+## The Second Triage Pass — all three 401 observation points now watched
+
+The first cut wired `onFatal` to exactly one of the three places the collector makes an
+authenticated request. At the post-execute triage gate the maintainer elected to close the rest,
+and the most important one was not a polish item:
+
+- **A 401 on the HEARTBEAT was swallowed as a log line.** The heartbeat makes a real authenticated
+  request every ~30 s **regardless of queue state**, so on a quiet machine — empty queue, therefore
+  no ingest POST ever — a collector could sit for days with a revoked token, write no fault, exit 0
+  and report nothing. INC-2026-07's exact shape with a smaller queue, left open by the slice built
+  to close it. Now routed into the same fault path, with the swallow kept for every OTHER heartbeat
+  error (a transient blip must stay non-fatal). Pinned by a test over an *empty* queue, so the
+  ingest path provably cannot be the reporter, with a 503 negative control.
+- **A 401 during the shutdown drain** produced no record and exit 0 — the realistic shape of a token
+  revoked while the operator restarts the machine. `drainBeforeExit` now surfaces its outcome,
+  de-duplicated against the sync-loop path.
+- **`loadFault` had no production caller**, so a fault recorded by an earlier run was invisible after
+  a restart in which the archive was merely *unreachable*. Now announced at startup by both
+  entrypoints.
+- **`ALERT_EVALUATOR_INTERVAL_MS=0`** is now an explicit off switch with a loud boot warning; an
+  EMPTY value still throws, because `""` is a misconfiguration and `"0"` is an intention.
+- **`process.exit` could truncate the stderr notice on a pipe** — now `fs.writeSync(2, …)`. The test
+  asserts the mechanism rather than attempting a reproduction, because pipe-flush timing is
+  platform-dependent and a reproduction test would have passed regardless of the fix — which is
+  precisely the "test that cannot fail" this slice's review found four times.
+
+## Deferred to slice 16.7 — with a destination
+
+Two findings are the **same underlying design issue** — global conditions stored as per-org,
+per-user rows — and were split out at the triage gate rather than folded in, because the fix needs a
+migration and this slice's acceptance criteria state "no migration, no new table, no new alert code".
+
+- The two GLOBAL alert codes (`catalog.update_requires_approval`, `ingest.auth_failure`) fan out per
+  org, and `ensurePersonalOrg` makes org count track USER count, so this is not dormant.
+- Firings keyed `(user_id, alert_key)` mean a non-owner opening the monitor opens a second row and a
+  second delivery for one condition.
+
+**Why it cannot be a small fix:** the derive list is now shared with the route, so gating the global
+codes on the tick side alone would make the tick derive fewer codes than the dashboard and
+reintroduce the flapping the sharing exists to prevent. Any fix therefore changes the dashboard's
+semantics too. And the index change (`(user_id, alert_key)` → `(org_id, alert_key)`) **fails on any
+deployment already holding two users' open firings for the same key**, so it needs a dedupe/merge
+data migration first, plus five repository functions, six call sites, the ack route and a rollback
+drill.
+
 ## Known Residual Gaps
 
-Stated rather than quietly absorbed:
-
-- **A 401 on the HEARTBEAT is still swallowed** as a log line. The only path to `onFatal` is an
-  ingest POST 401, but the heartbeat makes a real authenticated request every 30 s regardless of
-  queue state — so a collector on a quiet machine can sit for days with a dead credential and report
-  nothing. **This is the most significant remaining hole and the natural next increment.**
-- **A 401 first observed during the shutdown drain** produces no fault record and exit 0.
-- **`loadFault` has no production caller** — nothing surfaces a pre-existing fault at startup.
-- **Level 4 items 2 and 3 were not exercised end to end** — proving the WinSW restart and Event Log
-  entry needs a paired collector, a revoked machine row and a service install on a real machine.
-- **The two GLOBAL alert codes fan out per org**, and `ensurePersonalOrg` makes org count track USER
-  count, so this is not dormant until a second tenant exists.
+- **Level 4 items 2 and 3 were not exercised end to end** — proving the WinSW restart and the
+  Windows Event Log entry needs a paired collector, a revoked machine row and a service install on a
+  real machine. The behaviour is unit-covered at all three 401 observation points.
 - **M16's remaining open box is unchanged**: four consecutive weekly scorecards in
   `.agents/research/weekly/`, blocked by the calendar (earliest close: late August 2026).

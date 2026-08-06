@@ -66,6 +66,27 @@ describe("drainBeforeExit (C.8 — bounded shutdown drain)", () => {
     await drainBeforeExit(sync, () => 5, { deadlineMs: 60_000, now: () => 0 });
     expect(calls).toBe(1);
   });
+
+  /**
+   * M16 16.6 F2 — the outcome must reach the caller. It used to be swallowed, which is why a 401
+   * first seen on the shutdown drain produced no fault record and exit 0.
+   */
+  it("RETURNS the final outcome, so a drain-only 401 is visible to the engine", async () => {
+    await expect(
+      drainBeforeExit(
+        async () => "stop",
+        () => 5,
+        { deadlineMs: 60_000, now: () => 0 },
+      ),
+    ).resolves.toBe("stop");
+    await expect(
+      drainBeforeExit(
+        async () => "ok",
+        () => 0,
+        { deadlineMs: 60_000, now: () => 0 },
+      ),
+    ).resolves.toBe("ok");
+  });
 });
 
 /**
@@ -244,5 +265,174 @@ describe("runCaptureEngine onFatal (M16 16.6 — a 401 is no longer silent)", ()
         throw new Error("fault reporter exploded");
       }),
     ).resolves.toHaveLength(1);
+  });
+});
+
+/**
+ * M16 16.6 F1 — a 401 on the HEARTBEAT is the same evidence as a 401 on ingest.
+ *
+ * The ONLY path to `onFatal` was an ingest POST 401. But `syncOnce` returns "ok" without making a
+ * request when the queue is empty, so on a QUIET machine the sync loop never talks to the archive at
+ * all — while the heartbeat makes a real authenticated request every ~30 s regardless. A 401 there
+ * landed in `onHeartbeatError` → `log(…)` and went no further: no fault file, no exit code, nothing.
+ * That is INC-2026-07's exact shape with a smaller queue.
+ *
+ * The paired negative is the point of the fix, not decoration: every OTHER heartbeat failure must
+ * stay swallowed (residual risk e), or a network blip becomes an outage.
+ */
+describe("runCaptureEngine heartbeat 401 (M16 16.6 F1)", () => {
+  const homes: string[] = [];
+  afterEach(() => {
+    for (const h of homes.splice(0)) {
+      try {
+        rmSync(h, { recursive: true, force: true });
+      } catch {
+        /* best effort */
+      }
+    }
+  });
+
+  /** An engine over an EMPTY queue, so the ingest path can never be the one that reports. */
+  function engineOpts(
+    postHeartbeat: () => Promise<never>,
+    signal: AbortSignal,
+    seen: CaptureFault[],
+    logs: string[],
+  ): Parameters<typeof runCaptureEngine>[0] {
+    const home = mkdtempSync(join(tmpdir(), "m16-hb-"));
+    homes.push(home);
+    return {
+      creds: { url: "https://archive.example", token: "tok-hb", machineId: "m1" },
+      signal,
+      queuePath: join(home, "queue.sqlite"),
+      home,
+      connectors: [],
+      gitIntervalMs: 0,
+      intervalMs: 5,
+      collectorVersion: "9.9.9",
+      heartbeatIntervalMs: 1,
+      // The queue is empty, so this must never be called; if it ever is, fail loudly rather than
+      // let the ingest path quietly become the thing under test.
+      post: async () => {
+        throw new Error("the ingest path must not be exercised by a heartbeat test");
+      },
+      postHeartbeat,
+      logger: (m) => logs.push(m),
+      onFatal: (f) => seen.push(f),
+    };
+  }
+
+  it("reports a fatal auth_revoked fault and stops capture", async () => {
+    const seen: CaptureFault[] = [];
+    const logs: string[] = [];
+    await runCaptureEngine(
+      engineOpts(
+        async () => {
+          throw new IngestHttpError(401, "unauthorized");
+        },
+        new AbortController().signal,
+        seen,
+        logs,
+      ),
+    );
+
+    // Without the fix this is 0: the engine idles forever and the test times out instead.
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.code).toBe("auth_revoked");
+    expect(seen[0]!.url).toBe("https://archive.example");
+    expect(seen[0]!.message).toMatch(/heartbeat returned 401/);
+    expect(JSON.stringify(seen[0])).not.toContain("tok-hb");
+  });
+
+  it("keeps swallowing every NON-401 heartbeat failure (a blip must not stop capture)", async () => {
+    const seen: CaptureFault[] = [];
+    const logs: string[] = [];
+    const ctrl = new AbortController();
+    let sawCall!: () => void;
+    const called = new Promise<void>((r) => (sawCall = r));
+
+    const engine = runCaptureEngine(
+      engineOpts(
+        async () => {
+          sawCall();
+          throw new IngestHttpError(503, "service unavailable");
+        },
+        ctrl.signal,
+        seen,
+        logs,
+      ),
+    );
+    await called;
+    // Let the swallow + log land before stopping the engine ourselves.
+    await new Promise((r) => setTimeout(r, 20));
+    ctrl.abort();
+    await engine;
+
+    expect(seen).toHaveLength(0); // a 503 is NOT a revoked credential
+    expect(logs.join("\n")).toMatch(/heartbeat failed \(capture health not reported\)/);
+  });
+});
+
+/**
+ * M16 16.6 F2 — a 401 first observed during the SHUTDOWN DRAIN.
+ *
+ * The drain called `syncOnce` directly with no `onStop`/`onFatal` wiring and DISCARDED the outcome
+ * (the `while` merely stopped on anything that was not "ok"). Realistic shape, and the one this test
+ * reproduces: the operator restarts the machine, so SIGINT cancels the in-flight POST and the sync
+ * loop unwinds through its "aborted" branch having reported nothing — then the drain re-POSTs the
+ * released items and gets the 401. Before the fix that run wrote no fault record and exited 0, which
+ * WinSW reads as a deliberate stop.
+ */
+describe("runCaptureEngine shutdown-drain 401 (M16 16.6 F2)", () => {
+  const homes: string[] = [];
+  afterEach(() => {
+    for (const h of homes.splice(0)) {
+      try {
+        rmSync(h, { recursive: true, force: true });
+      } catch {
+        /* best effort */
+      }
+    }
+  });
+
+  it("reports the fault the drain observed, instead of exiting silently", async () => {
+    const home = mkdtempSync(join(tmpdir(), "m16-drain-"));
+    homes.push(home);
+    const queuePath = join(home, "queue.sqlite");
+    const seed = new QueueStore(queuePath);
+    seed.enqueue("event", "fp-drain", { fingerprint: "fp-drain" });
+    seed.close();
+
+    const ctrl = new AbortController();
+    const seen: CaptureFault[] = [];
+    await runCaptureEngine({
+      creds: { url: "https://archive.example", token: "tok-drain", machineId: "m1" },
+      signal: ctrl.signal,
+      queuePath,
+      home,
+      connectors: [],
+      gitIntervalMs: 0,
+      intervalMs: 5,
+      post: async (_url, _token, _batch, o) => {
+        if (o?.signal) {
+          // The SYNC LOOP's call — it always threads the loop's abort signal. Simulate Ctrl-C
+          // cancelling the in-flight POST: `syncOnce` releases the claim with no backoff and
+          // returns "retry", and the loop breaks on `signal.aborted` WITHOUT ever seeing a 401.
+          ctrl.abort();
+          const err = new Error("aborted");
+          err.name = "AbortError";
+          throw err;
+        }
+        // The SHUTDOWN DRAIN's call (bounded by a timeout, no external signal) — the token was
+        // revoked while the machine was being restarted.
+        throw new IngestHttpError(401, "unauthorized");
+      },
+      onFatal: (f) => seen.push(f),
+    });
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.code).toBe("auth_revoked");
+    expect(seen[0]!.message).toMatch(/draining the queue on shutdown/);
+    expect(JSON.stringify(seen[0])).not.toContain("tok-drain");
   });
 });

@@ -76,7 +76,18 @@ Now:
 - A **fatal 401** (the archive rejected this machine's token — usually a re-paired, deleted, or
   reset archive) makes `collector watch` write the reason to stderr and exit **1**. WinSW restarts
   per `<onfailure>` and Windows records a service failure in the Event Log.
+- The 401 is detected on **any** of the three authenticated requests the collector makes, not just
+  the queue upload: the ingest POST, the ~30 s **heartbeat**, and the final **shutdown drain**. The
+  heartbeat one matters most on a quiet machine — with an empty queue the collector never uploads
+  anything, so the heartbeat is the only thing talking to the archive, and a revoked token would
+  otherwise go unreported for as long as the machine stayed idle.
+- Any **other** heartbeat failure (archive down, network blip, an older archive) is still swallowed
+  and capture continues — only a 401 is fatal.
 - A **Ctrl-C, `stop`, or `restart`** still exits **0**, so a deliberate stop never restart-loops.
+- On **start**, if `fault.json` is already present the collector says so in
+  `420ai-collector.out.log` (and the desktop shows it as an error) — so a fault recorded before a
+  reboot is not invisible just because the archive is now merely unreachable rather than rejecting
+  the token.
 - The durable record is `~\.420ai\fault.json` — under the **same profile as `--home`**, i.e.
   `C:\Users\YOURNAME\.420ai\fault.json` for the LocalSystem install above, not the service profile:
 

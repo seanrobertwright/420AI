@@ -301,6 +301,62 @@ describe("runWatch fatal fault (M16 16.6 — the C.11 lesson, applied to the dae
     expect(existsSync(faultPathFor(home))).toBe(true);
     expect(loadFault(faultPathFor(home))?.code).toBe("auth_revoked");
   });
+
+  /**
+   * F3 — `loadFault` had NO production caller: the record was written and never read back.
+   *
+   * The case that costs: the collector restarts while the archive is merely UNREACHABLE (network
+   * down, containers not up) rather than 401. Capture runs happily, nothing delivers, nothing
+   * clears the file — and the operator is told nothing at all unless they think to open
+   * `fault.json` by hand, which is exactly the "you must suspect it first" trigger this slice
+   * exists to remove.
+   */
+  it("F3: reports a fault recorded by an EARLIER run through the logger at startup", async () => {
+    const home = mkdtempSync(join(tmpdir(), "m16-fault-watch-"));
+    watchHomes.push(home);
+    saveFault(fault, faultPathFor(home));
+    // …and a second observation, so `lastObservedAt` differs from `since` and the reported pair is
+    // actually the outage's duration rather than the same instant twice.
+    saveFault({ ...fault, since: "2026-08-14T09:31:04.220Z" }, faultPathFor(home));
+    const logs: string[] = [];
+
+    await runWatch({
+      url: "http://127.0.0.1:1/unreachable",
+      token: "t",
+      home,
+      signal: new AbortController().signal,
+      logger: (m) => logs.push(m),
+      loadConnectorConfig: () => ({ version: "test", connectors: {} }),
+      loadConnectorApprovals: () => ({ version: "test", approved: {} }),
+      saveConnectorApprovals: () => {},
+      // A clean run that neither faults nor delivers — the archive is simply unreachable.
+      runEngine: async () => {},
+    });
+
+    const line = logs.find((m) => m.includes("capture fault is on record"));
+    expect(line, logs.join("\n")).toBeDefined();
+    expect(line).toContain(faultPathFor(home));
+    expect(line).toContain("since 2026-08-06T12:00:00.000Z"); // when the outage STARTED
+    expect(line).toContain("last observed 2026-08-14T09:31:04.220Z");
+  });
+
+  it("F3: says nothing when there is no fault on record", async () => {
+    const logs: string[] = [];
+    const home = mkdtempSync(join(tmpdir(), "m16-fault-watch-"));
+    watchHomes.push(home);
+    await runWatch({
+      url: "http://127.0.0.1:1/unreachable",
+      token: "t",
+      home,
+      signal: new AbortController().signal,
+      logger: (m) => logs.push(m),
+      loadConnectorConfig: () => ({ version: "test", connectors: {} }),
+      loadConnectorApprovals: () => ({ version: "test", approved: {} }),
+      saveConnectorApprovals: () => {},
+      runEngine: async () => {},
+    });
+    expect(logs.join("\n")).not.toMatch(/capture fault is on record/);
+  });
 });
 
 /**

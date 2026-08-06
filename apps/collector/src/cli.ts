@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync, realpathSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, realpathSync, writeSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { hostname as osHostname, homedir } from "node:os";
 import { parseClaudeCodeSession } from "./connectors/claude-code.js";
@@ -40,7 +40,7 @@ import {
   NotPairedError,
   type Credentials,
 } from "./identity.js";
-import { faultPathFor, saveFault, clearFault, type CaptureFault } from "./fault.js";
+import { faultPathFor, saveFault, loadFault, clearFault, type CaptureFault } from "./fault.js";
 import { QueueStore, type QueueStats, type SyncOutcome } from "./queue/queue-store.js";
 import { runCaptureEngine } from "./capture-engine.js";
 import { resolveConnectorStates } from "./connectors/connector-info.js";
@@ -302,6 +302,28 @@ export async function runWatch(opts: {
    * `faultPathFor`). A fault written under one profile and read under another is worth nothing.
    */
   const faultPath = faultPathFor(home);
+  /**
+   * M16 16.6 (F3): SURFACE a pre-existing fault at startup.
+   *
+   * `loadFault` had no production caller at all — the record was written and never read back, so
+   * after a restart in which the archive is merely UNREACHABLE (network down, containers not up)
+   * rather than 401, the collector ran happily and the operator got no signal that a fault had ever
+   * been recorded. They would only find it by reading the file by hand, which is precisely the
+   * "you have to suspect it first" trigger this slice exists to remove.
+   *
+   * Reported through the LOGGER, not stdout: `runWatch` is called by both `cli.ts` (which prints)
+   * and tests. `since` + `lastObservedAt` are included because together they are the outage
+   * duration, which is the number the record exists to answer.
+   */
+  const existingFault = loadFault(faultPath);
+  if (existingFault) {
+    opts.logger?.(
+      `a capture fault is on record at ${faultPath}: ${existingFault.message} ` +
+        `(since ${existingFault.since}` +
+        (existingFault.lastObservedAt ? `, last observed ${existingFault.lastObservedAt}` : "") +
+        `). It clears on the next sync that actually delivers.`,
+    );
+  }
   let fault: CaptureFault | undefined;
   let recorded = false;
 
@@ -519,6 +541,27 @@ export async function runProjects(opts: {
 
 // --- CLI plumbing (the ONLY place allowed to log / exit / write files) ---
 
+/**
+ * Write to stderr with a write that CANNOT be lost to a pending flush (M16 16.6 F4).
+ *
+ * `process.stderr.write` is asynchronous for some stdio targets, and `process.exit` does not flush
+ * pending asynchronous writes — so `process.stderr.write(msg); process.exit(1)` can truncate or drop
+ * the message entirely when stderr is a pipe (`collector watch … | tee log.txt`). That is the one
+ * human-readable notice this feature adds, on the one path where the process is deliberately about
+ * to die. `fs.writeSync` on fd 2 is unconditionally synchronous: the bytes are gone before `exit`
+ * can be reached.
+ *
+ * The fallback exists because a raw `writeSync` on a non-blocking fd can throw `EAGAIN`; losing the
+ * message to an exception would be worse than losing it to a flush.
+ */
+export function writeStderrSync(msg: string): void {
+  try {
+    writeSync(2, msg);
+  } catch {
+    process.stderr.write(msg);
+  }
+}
+
 function getFlag(args: string[], name: string): string | undefined {
   const i = args.indexOf(name);
   return i >= 0 ? args[i + 1] : undefined;
@@ -725,7 +768,9 @@ async function main(argv: string[]): Promise<void> {
      */
     if (result.fault) {
       const faultPath = faultPathFor(home);
-      process.stderr.write(
+      // F4: written SYNCHRONOUSLY — `process.exit` two lines below does not flush a pending async
+      // stderr write, so on a pipe this notice could vanish exactly when it matters.
+      writeStderrSync(
         `Capture stopped: ${result.fault.message}\n` +
           (result.recorded
             ? `Recorded at ${faultPath}\n`
@@ -870,7 +915,9 @@ function isMain(): boolean {
 
 if (isMain()) {
   main(process.argv).catch((error) => {
-    process.stderr.write(`${formatCliError(error)}\n`);
+    // Same exposure as the `watch` fault notice above: this write is immediately followed by
+    // `process.exit`, so it must not be left in an unflushed async buffer.
+    writeStderrSync(`${formatCliError(error)}\n`);
     process.exit(1);
   });
 }

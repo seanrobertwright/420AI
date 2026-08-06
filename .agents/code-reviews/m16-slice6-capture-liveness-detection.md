@@ -329,38 +329,93 @@ interval callback, and close-awaits-in-flight.
   does not exist. Rewritten against the typed schema — which is what the 15.1 explicit-column-list
   habit exists to prevent.
 
-## Accepted, NOT fixed — stated rather than quietly absorbed
+## Second triage pass — the maintainer elected to fix the deferred set
 
-These are real and were deliberately left, because each changes behaviour beyond the slice's stated
-scope ("no migration, no new table, no new alert code"). They are recorded here and in the code so
-the next reader inherits the measurement rather than rediscovering it.
+The findings below were initially deferred by the author. At the post-execute triage gate the
+maintainer chose to fix them, and five were closed. Each is pinned by a test measured **red on
+revert** — the fix was removed, the test confirmed failing, the fix restored.
 
-- **A 401 first observed during the SHUTDOWN DRAIN produces no fault record and exit 0.** The drain
-  calls `syncOnce` directly with no `onFatal` wiring and discards the outcome. Realistic shape: a
-  token revoked while the operator happens to be restarting the machine.
-- **A 401 on the HEARTBEAT is swallowed as a log line.** The only path to `onFatal` is an ingest
-  POST 401, but the heartbeat makes a real authenticated request every 30 s regardless of queue
-  state. On a quiet machine the collector can sit for days with a dead credential and report
-  nothing — INC-2026-07's exact shape with a smaller queue. **This is the most significant residual
-  gap in the slice** and the natural next increment; it would also give the fault-clearing predicate
-  a positive "the credential is confirmed good" signal.
-- **`loadFault` has no production caller** — nothing surfaces a pre-existing fault at startup, so
-  after a restart in which the archive is merely unreachable the operator gets no signal unless they
-  read the file by hand.
-- **The two GLOBAL alert codes fan out per org**, and because `ensurePersonalOrg` gives every user
-  their own org, org count tracks USER count. One pending catalog opens a firing in every org. The
-  earlier code comment defended this as "the dashboard already does exactly this", which is false
-  for auto-created personal orgs nobody ever opens; the comment has been corrected.
-- **Firings are keyed `(user_id, alert_key)`**, so a non-owner opening the monitor still opens a
-  second row and a second delivery. Predates 16.6, but the tick now guarantees the owner's row
-  always exists, which turns an edge case into the default for any non-owner viewer.
-- **`ALERT_EVALUATOR_INTERVAL_MS=0` is rejected** by `parsePositiveInt`, so an operator cannot
-  disable the evaluator by setting it to zero — they must unset the key, which falls through to the
-  60 s default, i.e. the opposite of what they intended.
-- **`process.exit(1)` immediately after `process.stderr.write`** can truncate on a pipe (Node's
-  stdio is async for pipes on Windows). WinSW captures via file handles so the service path is safe;
-  `collector watch … | tee` may lose the line. The pre-existing `process.exit(0)` has the same
-  exposure, so this is not new.
+### 16. A 401 on the HEARTBEAT was swallowed as a log line — FIXED
+
+```
+severity: medium (consequence: the slice's own failure mode, unclosed)
+file: apps/collector/src/capture-engine.ts
+```
+
+The only path to `onFatal` was an ingest POST 401. But the heartbeat makes a real authenticated
+request every ~30 s **regardless of queue state**, so on a quiet machine — empty queue, therefore no
+ingest POST ever — a collector could sit for days with a revoked token, write no fault, exit 0 and
+report nothing. That is INC-2026-07's exact shape with a smaller queue, left open by the slice built
+to close it.
+
+Fixed by routing `isUnauthorized` heartbeat errors into the same `reportFatal` + `abort` path (the
+existing predicate, not a second one), while **keeping the swallow for every other heartbeat error**
+— a transient blip or an older archive must stay non-fatal.
+
+**verified:** two tests over an *empty* queue, so the ingest path provably cannot be the reporter
+(its injected `post` throws if called). Stubbing the branch out makes the fatal test hang to a 5 s
+timeout — the engine idles forever, which is the real pre-fix behaviour. A 503 heartbeat is the
+negative control and stays green in both states.
+
+### 17. A 401 during the SHUTDOWN DRAIN produced no fault and exit 0 — FIXED
+
+The drain called `syncOnce` directly with no `onFatal` wiring and discarded the outcome, so a token
+revoked while the operator restarts the machine was silently ignored. `drainBeforeExit` now returns
+its `SyncOutcome` and a `"stop"` reports the fault, de-duplicated against the sync-loop path by a
+shared `reported` flag.
+
+**verified:** disabling the branch fails only that test (`expected [] to have a length of 1`).
+
+### 18. `loadFault` had no production caller — FIXED
+
+Nothing surfaced a pre-existing fault at startup, so after a restart in which the archive was merely
+*unreachable* (rather than 401) the operator got no signal at all. Now reported through the logger
+in `runWatch` and emitted as the existing `error` ControlEvent in `serve`'s `startEngine`.
+`CONTROL_PROTOCOL_VERSION` untouched.
+
+**One deliberate deviation:** `serve` emits the event **only**, not an event plus a log line —
+because in `serve` the logger *is* a control-protocol event, so doing both would reintroduce
+verbatim the duplicate-report defect finding 14 above just fixed.
+
+### 19. `ALERT_EVALUATOR_INTERVAL_MS=0` was rejected, leaving no off switch — FIXED
+
+`parsePositiveInt` rejects `0`, so an operator could not disable the evaluator by setting it to
+zero; they had to unset the key, which falls through to the 60 s default — the opposite of the
+intent, silently. `0` is now accepted as an explicit off switch, with a loud boot warning naming
+the consequence. An EMPTY value still throws: `""` is a misconfiguration, `"0"` is an intention.
+
+### 20. `process.exit` could truncate the stderr notice on a pipe — FIXED
+
+Node's stdio is async for pipes on some platforms and `process.exit` does not flush pending async
+writes, so `collector watch … | tee` could lose the one human-readable notice this feature adds.
+Now written with `fs.writeSync(2, …)`.
+
+**Note the test asserts the MECHANISM, not a reproduction** — whether a pipe flushes in time is
+platform-dependent, so a reproduction test would have passed on this machine regardless of the fix.
+That is precisely the "test that cannot fail" this review found four times, avoided on purpose.
+
+## Deferred to slice 16.7 — with a destination, not a label
+
+Two findings are the **same underlying design issue** and were split out at the triage gate, because
+fixing them requires a migration and this slice's acceptance criteria state "no migration, no new
+table, no new alert code".
+
+- **The two GLOBAL alert codes fan out per org.** `catalog.update_requires_approval` and
+  `ingest.auth_failure` derive from tables with no `org_id`, so one pending catalog opens a firing in
+  EVERY org and sends one notice per org. Not dormant: `ensurePersonalOrg` makes org count track
+  USER count, so inviting two teammates makes this a 3–4 org deployment. **The fix cannot live on
+  the tick side alone** — the derive list is now shared with the route, so gating there would make
+  the tick derive fewer codes than the dashboard and reintroduce the flapping the sharing prevents.
+  Any fix therefore changes the dashboard's alert semantics too.
+- **Firings are keyed `(user_id, alert_key)`**, so a non-owner opening the monitor opens a second
+  row and a second delivery for one condition. Predates 16.6, but the tick now guarantees the
+  owner's row always exists, turning an edge case into the default for every non-owner viewer.
+
+Measured cost of the combined fix, which is why it is its own slice: a migration changing
+`alert_firings_open_key` from `(user_id, alert_key)` to `(org_id, alert_key)` — **which fails on any
+deployment already holding two users' open firings for the same key**, so it needs a dedupe/merge
+data migration first — plus five repository functions, three call sites in `routes/monitor.ts`,
+three in `alert-evaluator.ts`, the ack route, and a rollback drill.
 
 ## Verdict
 
@@ -369,4 +424,6 @@ The slice's core design held up under both passes: transaction and connection di
 `SERVICE_ROLE` choice, per-org error isolation, and the library/entrypoint logging boundary were
 each verified call site by call site and needed no change. What needed work was the *evidence* — four
 tests that could not fail, two comments asserting mechanisms that do not exist, and one genuine
-teardown leak. All fixed and re-verified by reverting each fix.
+teardown leak — plus, after the maintainer's triage, the three remaining 401 observation points that
+the first cut left unwatched.
+

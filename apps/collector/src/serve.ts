@@ -11,7 +11,7 @@ import {
   connectorApprovalsPathFor,
   type Credentials,
 } from "./identity.js";
-import { faultPathFor, saveFault, clearFault, type CaptureFault } from "./fault.js";
+import { faultPathFor, saveFault, loadFault, clearFault, type CaptureFault } from "./fault.js";
 import { QueueStore, type QueueStats } from "./queue/queue-store.js";
 import type { Connector } from "./connectors/connector.js";
 import { loadRegistry } from "./connectors/registry.js";
@@ -227,6 +227,29 @@ export function runServe(deps: ServeDeps = {}): Promise<void> {
     // cleared by the first drain that actually delivers (see `onSyncSuccess`), which is why that
     // clear must not be gated on this flag.
     fault = undefined;
+    /**
+     * M16 16.6 (F3): announce a fault recorded EARLIER — by a previous desktop run or by the
+     * Windows service under the same profile — so the operator sees it on launch instead of only
+     * ever discovering it by reading `fault.json` by hand. `loadFault` previously had no production
+     * caller at all, which made the durable record write-only.
+     *
+     * Reuses the EXISTING `{ type: "error"; message }` ControlEvent (D-16.6-3), so
+     * CONTROL_PROTOCOL_VERSION stays `m12-control-v3` and the Tauri UI is untouched.
+     *
+     * ONE event, not an event plus a `log` line saying the same words: `log()` here IS a protocol
+     * event, and the duplicate-report defect the 16.6 review fixed on the fatal-stop path would be
+     * reintroduced verbatim by emitting both.
+     */
+    const priorFault = loadFault(faultPathFor(home));
+    if (priorFault) {
+      emit({
+        type: "error",
+        message:
+          `a capture fault is on record: ${priorFault.message} (since ${priorFault.since}` +
+          (priorFault.lastObservedAt ? `, last observed ${priorFault.lastObservedAt}` : "") +
+          `). It clears on the next sync that actually delivers.`,
+      });
+    }
     // Slice 2 + 12.7b: re-read enablement AND approvals at each (re)start and hand the
     // engine the FILTERED registry. The M3/M4 capture core is unchanged — this is the
     // existing `CaptureEngineOptions.connectors` seam (capture-engine.ts). Both filters

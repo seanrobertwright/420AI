@@ -606,6 +606,49 @@ describe("serve custom connectors (M10-S2)", () => {
     }
   });
 
+  /**
+   * F3 — the desktop must surface a fault recorded EARLIER (by a previous run, or by the Windows
+   * service under the same profile) at launch. `loadFault` had no production caller at all, so the
+   * durable record was write-only: after a restart in which the archive is merely unreachable, the
+   * operator saw a perfectly healthy-looking desktop.
+   *
+   * Reuses the EXISTING `error` ControlEvent (D-16.6-3) — CONTROL_PROTOCOL_VERSION is untouched.
+   */
+  it("M16 16.6 (F3): start surfaces a pre-existing fault as an error event", async () => {
+    const home = mkdtempSync(join(tmpdir(), "m16-serve-fault-"));
+    try {
+      saveFault(
+        {
+          code: "auth_revoked",
+          message: "ingest returned 401 — token revoked.",
+          since: "2026-08-06T12:00:00.000Z",
+          url: "https://archive.example",
+        },
+        faultPathFor(home),
+      );
+      // An engine that runs perfectly well — the archive is simply unreachable, so nothing ever
+      // delivers and nothing ever clears the record. Without F3 this start is completely silent.
+      const runEngine = (opts: CaptureEngineOptions): Promise<void> =>
+        new Promise<void>((resolve) => {
+          if (opts.signal.aborted) return resolve();
+          opts.signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      const h = makeHarness({ runEngine, home });
+
+      const err = (await h.send({ cmd: "start" }, (e) => e.type === "error")) as Extract<
+        ControlEvent,
+        { type: "error" }
+      >;
+      expect(err.message).toContain("capture fault is on record");
+      expect(err.message).toContain("since 2026-08-06T12:00:00.000Z");
+
+      await h.send({ cmd: "stop" }, (e) => e.type === "stopped");
+      await h.done;
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   /** F1's half of the same rule: an idle, empty-queue drain proves nothing and clears nothing. */
   it("M16 16.6 (F1): an empty drain (delivered=0) leaves the fault file in place", async () => {
     const home = mkdtempSync(join(tmpdir(), "m16-serve-fault-"));
