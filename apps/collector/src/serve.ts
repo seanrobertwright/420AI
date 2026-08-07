@@ -242,10 +242,16 @@ export function runServe(deps: ServeDeps = {}): Promise<void> {
      */
     const priorFault = loadFault(faultPathFor(home));
     if (priorFault) {
+      // M16 16.7: NAME WHICH KIND, mirroring `cli.ts`. The two codes mean opposite things about
+      // whether capture kept running, and this line is the operator's only report of it.
+      const kind =
+        priorFault.code === "archive_unreachable"
+          ? "a DEGRADED capture fault (capture kept running; the archive was unreachable)"
+          : "a FATAL capture fault (capture had stopped)";
       emit({
         type: "error",
         message:
-          `a capture fault is on record: ${priorFault.message} (since ${priorFault.since}` +
+          `${kind} is on record: ${priorFault.message} (since ${priorFault.since}` +
           (priorFault.lastObservedAt ? `, last observed ${priorFault.lastObservedAt}` : "") +
           `). It clears on the next sync that actually delivers.`,
       });
@@ -302,6 +308,18 @@ export function runServe(deps: ServeDeps = {}): Promise<void> {
         } catch (err) {
           log("warn", `could not record capture fault: ${(err as Error).message}`);
         }
+      },
+      // M16 16.7: the DEGRADED record. Deliberately does NOT assign `fault` — that variable is the
+      // engine's STOP reason, consumed by the `.then()` branch below to explain why capture ended.
+      // An unreachable archive does not end capture, so annotating a later stop with it would
+      // misreport the cause. It writes the file and surfaces one event; capture keeps running.
+      onDegraded: (f) => {
+        try {
+          saveFault(f, faultPathFor(home));
+        } catch (err) {
+          log("warn", `could not record capture fault: ${(err as Error).message}`);
+        }
+        emit({ type: "error", message: f.message });
       },
     })
       .then(() => {

@@ -1,5 +1,9 @@
 import { homedir } from "node:os";
-import { toRawRecordPayload, toEventPayload } from "@420ai/shared";
+import {
+  toRawRecordPayload,
+  toEventPayload,
+  ARCHIVE_UNREACHABLE_MIN_FAILURES,
+} from "@420ai/shared";
 import { QUEUE_PATH, type Credentials } from "./identity.js";
 import { QueueStore, type SyncOutcome } from "./queue/queue-store.js";
 import { connectors as defaultConnectors } from "./connectors/connector.js";
@@ -24,6 +28,19 @@ const DEFAULT_GIT_INTERVAL_MS = 5 * 60_000;
  * hanging exit for minutes and holding the SQLite handle ("locks the database").
  */
 const SHUTDOWN_DRAIN_MS = 5_000;
+
+/**
+ * M16 16.7 — how many FURTHER consecutive sync failures between re-stamps of the degraded fault
+ * record's `lastObservedAt`, after the initial threshold crossing has written it.
+ *
+ * `runSyncLoop`'s `retryMs` defaults to 1000, so this is ≈ once a minute during an outage. The
+ * number exists because `saveFault` is a read-modify-write of a file on disk: re-stamping on every
+ * failed drain would be a file write per second for as long as the archive is down, which is a
+ * fault reporter becoming a second fault. `since` is preserved across every re-stamp by
+ * `saveFault`'s `(code, url)` continuity, so a sparse `lastObservedAt` costs at most a minute of
+ * precision on a number whose unit is hours or days.
+ */
+const DEGRADED_RESTAMP_EVERY = 60;
 
 /**
  * Best-effort queue drain bounded by a wall-clock deadline. Drains while the archive keeps
@@ -111,6 +128,23 @@ export interface CaptureEngineOptions {
    * INC-2026-07: the 401 was known here, at this line, for eight days, and went no further.
    */
   onFatal?: (fault: CaptureFault) => void;
+  /**
+   * M16 16.7: report a DEGRADED capture state — today only "the archive has been unreachable for
+   * `ARCHIVE_UNREACHABLE_MIN_FAILURES` consecutive drains". The sibling of `onFatal`, and separate
+   * from it deliberately.
+   *
+   * `cli.ts` turns `onFatal` into `WatchRunResult.fault`, which `watchExitCode` turns into exit 1,
+   * which WinSW's `<onfailure action="restart"/>` turns into a restart. Restarting does not make an
+   * unreachable archive reachable, so routing this through `onFatal` would produce a restart loop
+   * exactly while the durable queue is the only thing preserving the data. So this callback writes
+   * the fault file and changes nothing else: capture keeps running, the queue keeps growing, and
+   * the process still exits 0 on Ctrl-C. `result.fault` keeps its meaning, "capture STOPPED".
+   *
+   * Called on the THRESHOLD CROSSING and then sparsely (see the wiring below) — `saveFault` is a
+   * read-modify-write of a file and the retry delay is ~1 s, so "write it on every failed drain"
+   * would be a file write per second for as long as the outage lasts.
+   */
+  onDegraded?: (fault: CaptureFault) => void;
   /** M14 14.7: push-receiver port override (default `DEFAULT_PUSH_PORT`). Tests pass 0 for ephemeral. */
   pushPort?: number;
   /**
@@ -395,6 +429,56 @@ export async function runCaptureEngine(opts: CaptureEngineOptions): Promise<void
       }
     };
 
+    /**
+     * M16 16.7 — report a DEGRADED (non-fatal) unreachable archive, on the threshold CROSSING and
+     * then sparsely.
+     *
+     * THE THRESHOLD IS `ARCHIVE_UNREACHABLE_MIN_FAILURES` FROM `@420ai/shared`, not a local
+     * constant: it is the SAME number the server-side `archive.unreachable` alert derives from
+     * (`deriveArchiveUnreachableAlerts`), so the local record and the server alert cannot disagree
+     * about when an archive counts as unreachable. Two spellings of one threshold is two things to
+     * drift.
+     *
+     * THE RE-STAMP IS SPARSE. `saveFault` reads, merges and rewrites a file; `runSyncLoop`'s
+     * `retryMs` defaults to 1000, so re-stamping on every failed drain is one file write per second
+     * for the entire outage. Writing on the crossing and then every 60th failure (≈ once a minute
+     * at the default cadence) keeps `lastObservedAt` fresh enough to be the "duration" half of the
+     * record while making the write rate negligible. `saveFault`'s existing `(code, url)` continuity
+     * preserves `since` across every re-stamp AND across process restarts, unchanged.
+     *
+     * IT MUST NOT `internal.abort()` AND MUST NOT SET `reported`. Aborting would stop capture for a
+     * condition capture is designed to ride out. Consuming the fatal `reported` guard would be
+     * worse and subtler: an archive that is unreachable NOW and 401s once it comes back must still
+     * be able to report the 401, which is the fatal one.
+     */
+    let failuresSinceStamp = 0;
+    const reportDegraded = (consecutive: number): void => {
+      if (consecutive < ARCHIVE_UNREACHABLE_MIN_FAILURES) return;
+      // The crossing itself, then every 60th subsequent failure.
+      const crossing = consecutive === ARCHIVE_UNREACHABLE_MIN_FAILURES;
+      if (!crossing) {
+        failuresSinceStamp += 1;
+        if (failuresSinceStamp < DEGRADED_RESTAMP_EVERY) return;
+      }
+      failuresSinceStamp = 0;
+      const message =
+        `cannot reach the archive (${consecutive} consecutive sync failures). ` +
+        `Capture is STILL RUNNING and the queue is buffering; this clears on the next sync that ` +
+        `actually delivers.`;
+      if (crossing) log(message);
+      try {
+        opts.onDegraded?.({
+          code: "archive_unreachable",
+          message,
+          since: new Date().toISOString(),
+          // The URL that could not be reached — never the credential.
+          url: opts.creds.url,
+        });
+      } catch {
+        /* a fault reporter that throws must not become the outage it was reporting */
+      }
+    };
+
     const watcherLoop = watcher.runLoop(internal.signal, opts.intervalMs);
     const syncLoop = runSyncLoop(
       {
@@ -432,6 +516,8 @@ export async function runCaptureEngine(opts: CaptureEngineOptions): Promise<void
         post: opts.post,
         postHeartbeat: opts.postHeartbeat,
         onSync: opts.onSyncSuccess,
+        // M16 16.7: the streak the heartbeat could never deliver during an outage of the archive.
+        onSyncFailure: reportDegraded,
         onStop: () => {
           // M16 16.6: leave a DURABLE trace before unwinding. The engine is about to end normally,
           // which is exactly how INC-2026-07 stayed invisible for eight days.

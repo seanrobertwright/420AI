@@ -364,3 +364,218 @@ describe("syncOnce (real node:http round-trip)", () => {
     }
   });
 });
+
+/**
+ * M16 16.7 — `onSyncFailure`: the streak the heartbeat could never deliver.
+ *
+ * `consecutiveSyncFailures` existed since 12.6 but was reported ONLY through the heartbeat — the
+ * one channel that by definition cannot arrive when the archive is what is down. A 500 /
+ * ECONNREFUSED loop therefore grew the queue without bound, wrote nothing anywhere, and exited 0.
+ * This callback is what lets the engine leave a durable local record instead.
+ */
+describe("runSyncLoop (M16 16.7 — onSyncFailure reports the unreachable-archive streak)", () => {
+  it("fires with an INCREASING count on consecutive failures", async () => {
+    const queue = tmpQueue();
+    const post = vi.fn().mockRejectedValue(new IngestHttpError(503, "down"));
+    const counts: number[] = [];
+    const controller = new AbortController();
+    try {
+      queue.enqueue("raw", "r1", { a: 1 });
+      await runSyncLoop(
+        {
+          queue,
+          url: "http://x",
+          token: "t",
+          post,
+          onSyncFailure: (n) => {
+            counts.push(n);
+            if (counts.length >= 3) controller.abort();
+          },
+          idleMs: 1,
+          retryMs: 1,
+        },
+        controller.signal,
+      );
+      expect(counts).toEqual([1, 2, 3]);
+    } finally {
+      queue.close();
+    }
+  });
+
+  // Reaching the second failure crosses the 1 s backoff, hence the raised bound.
+  it(
+    "RESETS the streak on a drain that DELIVERED — a recovered archive starts from zero",
+    { timeout: 15_000 },
+    async () => {
+      const queue = tmpQueue();
+      // Fail twice, then succeed, then fail again. The count after recovery must be 1, not 3: the
+      // engine's threshold compares against this number, so a counter that never reset would record
+      // a fault for an archive that had been reachable in between.
+      let calls = 0;
+      const post = vi.fn().mockImplementation(() => {
+        calls += 1;
+        if (calls <= 2) return Promise.reject(new IngestHttpError(503, "down"));
+        if (calls === 3) return Promise.resolve({ recordsInserted: 1, eventsUpserted: 0 });
+        return Promise.reject(new IngestHttpError(503, "down"));
+      });
+      const counts: number[] = [];
+      const controller = new AbortController();
+      try {
+        queue.enqueue("raw", "r1", { a: 1 });
+        await runSyncLoop(
+          {
+            queue,
+            url: "http://x",
+            token: "t",
+            post,
+            onSyncFailure: (n) => {
+              counts.push(n);
+              if (counts.length >= 3) controller.abort();
+            },
+            // The successful drain empties the queue, so give the loop something to fail on again —
+            // otherwise there is no fourth POST and the streak has nothing to report. Enqueued from
+            // the success callback rather than up front so the recovery drain is genuinely the one
+            // that clears the backlog.
+            onSync: (_at, delivered) => {
+              if (delivered > 0) queue.enqueue("raw", "r2", { a: 2 });
+            },
+            idleMs: 1,
+            retryMs: 1,
+          },
+          controller.signal,
+        );
+        // 1, 2 before the delivering drain; back to 1 after it.
+        expect(counts).toEqual([1, 2, 1]);
+      } finally {
+        queue.close();
+      }
+    },
+  );
+
+  it("a THROWING onSyncFailure does not unwind the loop (the F-16.3-2 shape)", async () => {
+    // The callback writes a FILE. An unguarded throw would unwind the sync loop through a rejected
+    // promise, turning "the archive is down" into "capture stopped" — in the component whose job is
+    // to keep queueing until it comes back.
+    const queue = tmpQueue();
+    const post = vi.fn().mockRejectedValue(new IngestHttpError(503, "down"));
+    let fired = 0;
+    const controller = new AbortController();
+    try {
+      queue.enqueue("raw", "r1", { a: 1 });
+      const reason = await runSyncLoop(
+        {
+          queue,
+          url: "http://x",
+          token: "t",
+          post,
+          onSyncFailure: () => {
+            fired += 1;
+            if (fired >= 2) controller.abort();
+            throw new Error("disk full");
+          },
+          idleMs: 1,
+          retryMs: 1,
+        },
+        controller.signal,
+      );
+      // It survived TWO throws and ended for the ordinary reason.
+      expect(reason).toBe("aborted");
+      expect(fired).toBe(2);
+    } finally {
+      queue.close();
+    }
+  });
+
+  it("is NOT called for a 401 — that is the fatal path, which has onStop", async () => {
+    const queue = tmpQueue();
+    const post = vi.fn().mockRejectedValue(new IngestHttpError(401, "revoked"));
+    const counts: number[] = [];
+    const stops: number[] = [];
+    const controller = new AbortController();
+    try {
+      queue.enqueue("raw", "r1", { a: 1 });
+      const reason = await runSyncLoop(
+        {
+          queue,
+          url: "http://x",
+          token: "t",
+          post,
+          onSyncFailure: (n) => counts.push(n),
+          onStop: () => stops.push(1),
+          idleMs: 1,
+          retryMs: 1,
+        },
+        controller.signal,
+      );
+      expect(reason).toBe("stop");
+      expect(stops).toHaveLength(1);
+      expect(counts).toEqual([]);
+    } finally {
+      queue.close();
+    }
+  });
+});
+
+/**
+ * M16 16.7 — THE COUNTER MUST BE ABLE TO COUNT.
+ *
+ * `consecutiveSyncFailures` reset on EVERY `"ok"` outcome, including the empty-queue drain that
+ * makes no request at all. Combined with the queue's exponential backoff (a failed item is unclaim-
+ * able for 1 s → 2 s → … → 30 s while `retryMs` stays at 1 s), that meant the streak oscillated
+ * 1 → 0 → 1 → 0 during a sustained outage and NEVER reached
+ * `ARCHIVE_UNREACHABLE_MIN_FAILURES` = 3.
+ *
+ * So both consumers of the counter were detectors that could not fire: the server-side
+ * `archive.unreachable` alert (fed by the heartbeat) and 16.7's own collector fault record. This
+ * test drives the real backoff rather than mocking it, because the backoff IS the mechanism that
+ * produced the interleaved no-op drains — a test that only failed `syncOnce` back-to-back would
+ * have passed against the broken code.
+ */
+describe("runSyncLoop (M16 16.7 — the failure streak survives no-op drains)", () => {
+  // The real backoff is 1 s → 2 s → 4 s, so reaching the threshold takes ~3 s of wall clock. That
+  // is deliberately NOT mocked away: the interleaved no-op drains the backoff produces ARE the
+  // regression, and a test that failed `syncOnce` back-to-back would pass against the broken code.
+  it(
+    "keeps counting across the empty drains the backoff interleaves",
+    { timeout: 15_000 },
+    async () => {
+      const queue = tmpQueue();
+      const post = vi.fn().mockRejectedValue(new IngestHttpError(503, "down"));
+      const counts: number[] = [];
+      const oks: number[] = [];
+      const controller = new AbortController();
+      try {
+        queue.enqueue("raw", "r1", { a: 1 });
+        await runSyncLoop(
+          {
+            queue,
+            url: "http://x",
+            token: "t",
+            post,
+            onSyncFailure: (n) => {
+              counts.push(n);
+              // Abort once we REACH the alert threshold — the property that was unreachable before.
+              if (n >= 3) controller.abort();
+            },
+            // `delivered` is 0 on every one of these: the archive is down, so no drain delivers.
+            onSync: (_at, delivered) => oks.push(delivered),
+            idleMs: 1,
+            // Shorter than the very first backoff (1 s), so the loop MUST hit empty claims between
+            // real POST attempts. That interleaving is the exact shape that zeroed the counter.
+            retryMs: 1,
+          },
+          controller.signal,
+        );
+        // Monotonic, and it got past the threshold.
+        expect(counts).toEqual([...counts].sort((a, b) => a - b));
+        expect(counts.at(-1)).toBeGreaterThanOrEqual(3);
+        // Proof the interleaving really happened — these are the no-op "ok" drains that used to
+        // reset the streak. If this is empty the test is not exercising the regression.
+        expect(oks.length).toBeGreaterThan(0);
+        expect(oks.every((d) => d === 0)).toBe(true);
+      } finally {
+        queue.close();
+      }
+    },
+  );
+});

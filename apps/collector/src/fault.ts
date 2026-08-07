@@ -19,9 +19,38 @@ import { COLLECTOR_HOME, collectorHomeFor } from "./identity.js";
  * file is written by an unattended daemon, is not encrypted, and its whole purpose is to be pasted
  * into a bug report or a weekly scorecard by a human.
  */
+/**
+ * M16 16.7 — the fault kinds, and they are NOT equally severe.
+ *
+ * `auth_revoked` is FATAL: the archive answered 401 to an authenticated request, capture stops, and
+ * the entrypoint exits 1 so WinSW's `<onfailure action="restart"/>` fires.
+ *
+ * `archive_unreachable` is DEGRADED: the archive is down or unreachable (5xx / ECONNREFUSED /
+ * timeout) for `ARCHIVE_UNREACHABLE_MIN_FAILURES` consecutive drains. Capture KEEPS RUNNING, the
+ * durable queue keeps growing (which is correct — that is the queue doing its job), and the process
+ * still exits 0 on Ctrl-C.
+ *
+ * The distinction is load-bearing rather than descriptive: restarting a collector does not make an
+ * unreachable archive reachable, so routing this through the fatal path would produce a WinSW
+ * restart loop — the collector thrashing precisely while its queue is the only thing preserving the
+ * data. So `archive_unreachable` never reaches `WatchRunResult.fault` and never changes the exit
+ * code; it only writes this file.
+ *
+ * Why it needs a durable record at all: `consecutiveSyncFailures` is reported ONLY through the
+ * heartbeat — the one channel that by definition cannot arrive when the archive is what is down. A
+ * 500/ECONNREFUSED loop therefore grew the queue without bound, wrote nothing, exited 0 and left
+ * WinSW seeing a healthy service. That is INC-2026-07's observable symptom reached by a different
+ * cause, and the server-side `archive.unreachable` alert cannot cover it because it derives from
+ * heartbeat rows that have stopped arriving.
+ */
+export type CaptureFaultCode = "auth_revoked" | "archive_unreachable";
+
+/** Every valid `CaptureFault.code`. The single source `loadFault`'s validator checks against. */
+const FAULT_CODES: readonly CaptureFaultCode[] = ["auth_revoked", "archive_unreachable"];
+
 export interface CaptureFault {
-  /** The only fault kind that exists today: the archive answered 401 to an ingest POST. */
-  code: "auth_revoked";
+  /** Which fault this is, and how severe — see `CaptureFaultCode`. */
+  code: CaptureFaultCode;
   /** Operator-facing explanation, including the remedy. Never contains a token. */
   message: string;
   /**
@@ -110,7 +139,14 @@ export function loadFault(path = FAULT_PATH): CaptureFault | undefined {
   // runtime value was a number. Optional here means "absent or a string", never "anything".
   if (typeof parsed !== "object" || parsed === null) return undefined;
   const rec = parsed as Partial<CaptureFault>;
-  if (rec.code !== "auth_revoked") return undefined;
+  // M16 16.7 — a SET MEMBERSHIP check, not an equality against one literal. This line read
+  // `rec.code !== "auth_revoked"` when `auth_revoked` was the only code, and leaving it that way
+  // while adding a second would have made every `archive_unreachable` record read back as a CORRUPT
+  // FILE: `saveFault` would write it, `loadFault` would return undefined, the startup announcement
+  // would say nothing, `saveFault`'s continuity would restart the `since` clock on every
+  // observation — i.e. the whole feature would silently do nothing while every test that writes and
+  // never reads stayed green. Derived from `FAULT_CODES` so a third code cannot repeat the trap.
+  if (typeof rec.code !== "string" || !FAULT_CODES.includes(rec.code)) return undefined;
   if (typeof rec.message !== "string" || typeof rec.since !== "string") return undefined;
   if (typeof rec.url !== "string") return undefined;
   if (rec.lastObservedAt !== undefined && typeof rec.lastObservedAt !== "string") return undefined;

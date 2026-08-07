@@ -229,7 +229,35 @@ describe.skipIf(!TEST_URL)("migration rollback (rollbackLast, integration)", () 
     return r.rowCount === 1;
   }
 
-  it("rolls back the latest migration (0026 raw-record index) and a re-migrate restores it", async () => {
+  /** The `alert_firings` indexes, sorted — the 16.7 shape lives here. */
+  async function alertFiringIndexes(): Promise<string[]> {
+    const r = await pool.query(
+      `select indexname from pg_indexes where schemaname = 'public'
+         and tablename = 'alert_firings' order by indexname`,
+    );
+    return (r.rows as { indexname: string }[]).map((x) => x.indexname);
+  }
+
+  /** Whether `alert_firings.org_id` is nullable — the property 0027 exists to create. */
+  async function alertFiringsOrgIdNullable(): Promise<boolean> {
+    const r = await pool.query(
+      `select is_nullable from information_schema.columns
+         where table_name = 'alert_firings' and column_name = 'org_id'`,
+    );
+    return (r.rows[0] as { is_nullable: string }).is_nullable === "YES";
+  }
+
+  /** Whether the org policy admits the deployment scope (`OR org_id IS NULL`). */
+  async function alertFiringsPolicyAdmitsDeployment(): Promise<boolean> {
+    const r = await pool.query(
+      `select qual from pg_policies where tablename = 'alert_firings'
+         and policyname = 'alert_firings_org_isolation'`,
+    );
+    const qual = (r.rows[0] as { qual: string } | undefined)?.qual ?? "";
+    return /org_id IS NULL/i.test(qual);
+  }
+
+  it("rolls back the latest migration (0027 deployment-scoped alert firings) and a re-migrate restores it", async () => {
     // M15 D-M15-13 drill, run in CI rather than by hand. `rollbackLast` reverses THE LATEST
     // migration, so this test retargets with every slice that adds one — 15.5's version named 0017,
     // 15.6's named 0018, 15.7's named 0019 and 15.8's named 0020. The assertions those made survive
@@ -284,9 +312,37 @@ describe.skipIf(!TEST_URL)("migration rollback (rollbackLast, integration)", () 
     // 446,378,008, no result in seven minutes), so the endpoint hangs, writes nothing, logs nothing,
     // and the operator sees a spinner. A rollback of 0026 is therefore SILENT in production, which
     // is precisely why it is pinned here — this drill is the only place that can notice.
-    expect(await trackedCount()).toBe(27);
-    expect(await policyCount()).toBe(72); // UNMOVED by 0026 — index-only, no policy
-    expect(await restrictivePolicyCount()).toBe(51); // likewise unmoved
+    //
+    // M16 16.7 RETARGETS THE DRILL TO 0027, and it is the first retarget whose down-migration
+    // ORDER is the hazard rather than its content. `alert_firings.org_id` becomes NULLABLE, and
+    // `ALTER COLUMN … SET NOT NULL` FAILS while any NULL row exists — at the END of the down
+    // script, after the indexes have already been swapped. So the deployment rows must be disposed
+    // of FIRST. Nothing in `tsc` or in any other suite can notice a mis-ordered down script; this
+    // drill is the only place that runs one.
+    //
+    // The POLICY COUNT DOES NOT MOVE (72/51 both ways) even though 0027 does touch a policy, and
+    // that is the interesting number: 0027 DROPs and re-CREATEs `alert_firings_org_isolation`
+    // rather than adding one, so the count is unchanged while the QUAL is not. A count-only
+    // assertion would therefore have passed against a migration that never ran — hence
+    // `alertFiringsPolicyAdmitsDeployment()` beside it, which reads the qual.
+    //
+    // The DATA LOSS is real, deliberate and bounded: rolling back deletes the open deployment-
+    // scoped firings, because the pre-16.7 schema has no honest place to put them (`org_id` is NOT
+    // NULL there, and re-homing them onto an arbitrary org recreates the very defect 0027 removed).
+    // `alert_firings` is a re-derivable projection of a projection, so the next reconcile re-opens
+    // the condition within one tick; what is lost is the `first_fired_at` of at most two rows.
+    expect(await trackedCount()).toBe(28);
+    expect(await policyCount()).toBe(72); // UNMOVED by 0027 — it REPLACES a policy, not adds one
+    expect(await restrictivePolicyCount()).toBe(51); // likewise unmoved (the role policies stay)
+    expect(await alertFiringsOrgIdNullable()).toBe(true);
+    expect(await alertFiringsPolicyAdmitsDeployment()).toBe(true);
+    expect(await alertFiringIndexes()).toEqual([
+      "alert_firings_by_org",
+      "alert_firings_by_org_status",
+      "alert_firings_open_global_key",
+      "alert_firings_open_key",
+      "alert_firings_pkey",
+    ]);
     expect(await rawRecordIndexExists()).toBe(true);
     expect(await machineConnectorsTableExists()).toBe(true);
     expect(await machineConnectorPolicyShape()).toEqual([
@@ -320,14 +376,26 @@ describe.skipIf(!TEST_URL)("migration rollback (rollbackLast, integration)", () 
     expect(await mixedCaseEmailCount()).toBe(0);
 
     const result = await rollbackLast(TEST_URL!, { downDir, journalPath });
-    expect(result).toEqual({ rolledBack: "0026_living_loners" });
-    expect(await trackedCount()).toBe(26);
-    // THE INDEX IS GONE AND NOTHING ELSE IS. No rows were lost, because an index holds none — the
-    // lossless case 0022 established, now confirmed for a second index-only migration. And unlike
-    // every destructive down above, NOTHING BREAKS LOUDLY: every query still returns exactly the
-    // same rows. Only the audit endpoint stops completing, silently. That asymmetry is the reason
-    // this assertion exists.
-    expect(await rawRecordIndexExists()).toBe(false);
+    expect(result).toEqual({ rolledBack: "0027_strange_white_queen" });
+    expect(await trackedCount()).toBe(27);
+    // THE DEPLOYMENT SCOPE IS GONE, and the schema is genuinely back to its pre-16.7 shape. The
+    // ORDER assertion is implicit but total: if the down script had restored the indexes or the
+    // policy before disposing of the NULL-org rows, `SET NOT NULL` would have raised
+    // `column "org_id" ... contains null values` and `rollbackLast` above would have thrown.
+    expect(await alertFiringsOrgIdNullable()).toBe(false);
+    expect(await alertFiringsPolicyAdmitsDeployment()).toBe(false); // strict again
+    expect(await alertFiringIndexes()).toEqual([
+      "alert_firings_by_org",
+      "alert_firings_by_user_status",
+      "alert_firings_open_key",
+      "alert_firings_pkey",
+    ]);
+    // The policy was REPLACED, not dropped — so the counts are the same on both sides of the
+    // rollback while the behaviour is not. This is why the qual assertion above exists.
+    expect(await policyCount()).toBe(72);
+    expect(await restrictivePolicyCount()).toBe(51);
+    // 0026's index is UNTOUCHED — 0027 names `events` nowhere.
+    expect(await rawRecordIndexExists()).toBe(true);
     // 0025's table and all four of its policies are UNTOUCHED — 0026 names them nowhere — so the
     // counts that moved for 0025 stay put. An index-only migration must not disturb them.
     expect(await machineConnectorsTableExists()).toBe(true);
@@ -383,11 +451,30 @@ describe.skipIf(!TEST_URL)("migration rollback (rollbackLast, integration)", () 
     // the migration FILE (not `db:generate`) is the source of truth for it — the property 0023
     // established and 0024 confirmed, now checked for a THIRD hand-edited migration.
     await runMigrations(TEST_URL!);
-    expect(await trackedCount()).toBe(27);
-    // 0026 comes back. There is no "…but the rows are gone" caveat to make here for the first time
-    // in the file — an index has no rows to lose, so for THIS migration the round trip really is
-    // total. Said explicitly because every other re-apply above is followed by an emptiness
-    // assertion, and a reader skimming for the pattern should see why this one has none.
+    expect(await trackedCount()).toBe(28);
+    // 0027 comes back, WHOLE — the nullable column, BOTH partial unique indexes, the re-keyed
+    // status index and the amended policy. This is the forward half of the D-M15-13 drill and the
+    // acceptance criterion the 16.7 plan calls "run it, forward and back, with matching schema":
+    // the index list and the policy qual here are byte-identical to the pre-rollback assertions
+    // above.
+    //
+    // …but the deployment-scoped ROWS do not come back, which the down script deleted on purpose.
+    // For this table that is benign (the next reconcile re-opens the condition within a tick), and
+    // it is asserted rather than assumed for the same reason every other re-apply in this file
+    // asserts emptiness: "the rollback round-trips" must never be read as "the rows came back".
+    expect(await alertFiringsOrgIdNullable()).toBe(true);
+    expect(await alertFiringsPolicyAdmitsDeployment()).toBe(true);
+    expect(await alertFiringIndexes()).toEqual([
+      "alert_firings_by_org",
+      "alert_firings_by_org_status",
+      "alert_firings_open_global_key",
+      "alert_firings_open_key",
+      "alert_firings_pkey",
+    ]);
+    expect(
+      (await pool.query("select count(*)::int as n from alert_firings where org_id is null"))
+        .rows[0].n,
+    ).toBe(0);
     expect(await rawRecordIndexExists()).toBe(true);
     expect(await machineConnectorsTableExists()).toBe(true);
     expect(await machineConnectorPolicyShape()).toEqual([

@@ -20,6 +20,7 @@ function firing(over: Partial<AlertFiring> = {}): AlertFiring {
     connector: null,
     since: "2026-06-15T11:50:00.000Z",
     status: "open",
+    scope: "org",
     firstFiredAt: "2026-06-15T12:00:00.000Z",
     lastSeenAt: "2026-06-15T12:00:00.000Z",
     resolvedAt: null,

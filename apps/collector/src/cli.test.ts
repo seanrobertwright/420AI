@@ -333,7 +333,7 @@ describe("runWatch fatal fault (M16 16.6 — the C.11 lesson, applied to the dae
       runEngine: async () => {},
     });
 
-    const line = logs.find((m) => m.includes("capture fault is on record"));
+    const line = logs.find((m) => m.includes("capture fault (capture had stopped) is on record"));
     expect(line, logs.join("\n")).toBeDefined();
     expect(line).toContain(faultPathFor(home));
     expect(line).toContain("since 2026-08-06T12:00:00.000Z"); // when the outage STARTED
@@ -355,7 +355,10 @@ describe("runWatch fatal fault (M16 16.6 — the C.11 lesson, applied to the dae
       saveConnectorApprovals: () => {},
       runEngine: async () => {},
     });
-    expect(logs.join("\n")).not.toMatch(/capture fault is on record/);
+    // A plain substring, NOT a regex: the announcement text now contains parentheses, and
+    // `/…(capture had stopped)…/` would silently become a capture group that matches nothing —
+    // making this negative assertion pass vacuously, which is the one way it can be worthless.
+    expect(logs.join("\n")).not.toContain("is on record");
   });
 });
 
@@ -415,5 +418,138 @@ describe("watchExitCode (M16 16.6 — exit 1 on a fatal 401, 0 on SIGINT)", () =
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
+  });
+});
+
+/**
+ * M16 16.7 — the DEGRADED fault must reach disk WITHOUT reaching the exit code (D-16.7-8).
+ *
+ * This is the acceptance criterion the whole "separate callback" design exists for, and it is
+ * exactly the kind of thing that would ship broken and stay green: wiring `onDegraded` to the same
+ * `fault = f` assignment as `onFatal` typechecks perfectly, writes the same file, and looks right in
+ * review. It would also make `watchExitCode` return 1 for an unreachable archive, which WinSW's
+ * `<onfailure action="restart"/>` turns into a RESTART LOOP — the collector thrashing precisely
+ * while its durable queue is the only thing preserving the data, and restarting cannot make an
+ * unreachable archive reachable.
+ *
+ * So: the file appears, `result.fault` stays undefined, and `watchExitCode` stays 0.
+ */
+describe("runWatch onDegraded (M16 16.7 — degraded is NOT fatal)", () => {
+  const degradedHomes: string[] = [];
+  afterEach(() => {
+    for (const h of degradedHomes.splice(0)) {
+      try {
+        rmSync(h, { recursive: true, force: true });
+      } catch {
+        /* best effort */
+      }
+    }
+  });
+
+  const degraded: CaptureFault = {
+    code: "archive_unreachable",
+    message: "cannot reach the archive (3 consecutive sync failures). Capture is STILL RUNNING",
+    since: "2026-08-06T12:00:00.000Z",
+    url: "http://127.0.0.1:1/unreachable",
+  };
+
+  /** Drive `runWatch` with an engine that fires ONE `onDegraded` and then returns. */
+  async function watchWithDegraded(): Promise<{
+    home: string;
+    result: Awaited<ReturnType<typeof runWatch>>;
+  }> {
+    const home = mkdtempSync(join(tmpdir(), "m16-degraded-watch-"));
+    degradedHomes.push(home);
+    const result = await runWatch({
+      url: "http://127.0.0.1:1/unreachable",
+      token: "t",
+      home,
+      signal: new AbortController().signal,
+      loadConnectorConfig: () => ({ version: "test", connectors: {} }),
+      loadConnectorApprovals: () => ({ version: "test", approved: {} }),
+      saveConnectorApprovals: () => {},
+      runEngine: async (o) => {
+        o.onDegraded?.(degraded);
+      },
+    });
+    return { home, result };
+  }
+
+  it("writes fault.json but leaves result.fault undefined, so the exit code stays 0", async () => {
+    const { home, result } = await watchWithDegraded();
+    // The record is durable…
+    const onDisk = loadFault(faultPathFor(home));
+    expect(onDisk).toBeDefined();
+    expect(onDisk!.code).toBe("archive_unreachable");
+    expect(onDisk!.since).toBe(degraded.since);
+    // …and it is NOT a capture STOP. `result.fault` keeps its meaning: "capture stopped".
+    expect(result.fault).toBeUndefined();
+    expect(watchExitCode(result)).toBe(0);
+  });
+
+  it("a DELIVERING drain clears it, exactly as it clears a fatal one", async () => {
+    // The self-resolving half. Only bytes the archive ACCEPTED prove it is reachable again, which
+    // is why the clear is gated on `delivered > 0` for both codes and not on outcome "ok".
+    const home = mkdtempSync(join(tmpdir(), "m16-degraded-clear-"));
+    degradedHomes.push(home);
+    const result = await runWatch({
+      url: "http://127.0.0.1:1/unreachable",
+      token: "t",
+      home,
+      signal: new AbortController().signal,
+      loadConnectorConfig: () => ({ version: "test", connectors: {} }),
+      loadConnectorApprovals: () => ({ version: "test", approved: {} }),
+      saveConnectorApprovals: () => {},
+      runEngine: async (o) => {
+        o.onDegraded?.(degraded);
+        o.onSyncSuccess?.("2026-08-06T13:00:00.000Z", 5);
+      },
+    });
+    expect(existsSync(faultPathFor(home))).toBe(false);
+    expect(watchExitCode(result)).toBe(0);
+  });
+
+  it("an EMPTY drain leaves it — a no-op tick contacted nothing", async () => {
+    const home = mkdtempSync(join(tmpdir(), "m16-degraded-keep-"));
+    degradedHomes.push(home);
+    await runWatch({
+      url: "http://127.0.0.1:1/unreachable",
+      token: "t",
+      home,
+      signal: new AbortController().signal,
+      loadConnectorConfig: () => ({ version: "test", connectors: {} }),
+      loadConnectorApprovals: () => ({ version: "test", approved: {} }),
+      saveConnectorApprovals: () => {},
+      runEngine: async (o) => {
+        o.onDegraded?.(degraded);
+        o.onSyncSuccess?.("2026-08-06T13:00:00.000Z", 0);
+      },
+    });
+    expect(loadFault(faultPathFor(home))?.code).toBe("archive_unreachable");
+  });
+
+  it("announces a prior DEGRADED fault as degraded, not as a stop", async () => {
+    // The operator-facing half. "a capture fault is on record" said the same words for both codes,
+    // which tells someone capture STOPPED when an `archive_unreachable` record means the opposite.
+    const home = mkdtempSync(join(tmpdir(), "m16-degraded-announce-"));
+    degradedHomes.push(home);
+    saveFault(degraded, faultPathFor(home));
+    const logs: string[] = [];
+    await runWatch({
+      url: "http://127.0.0.1:1/unreachable",
+      token: "t",
+      home,
+      signal: new AbortController().signal,
+      logger: (m) => logs.push(m),
+      loadConnectorConfig: () => ({ version: "test", connectors: {} }),
+      loadConnectorApprovals: () => ({ version: "test", approved: {} }),
+      saveConnectorApprovals: () => {},
+      runEngine: async () => {},
+    });
+    const line = logs.find((m) => m.includes("is on record"));
+    expect(line, logs.join("\n")).toBeDefined();
+    expect(line).toContain("DEGRADED");
+    expect(line).toContain("capture kept running");
+    expect(line).not.toContain("capture had stopped");
   });
 });

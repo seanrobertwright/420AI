@@ -8,7 +8,9 @@ import {
   MONITOR_VERSION,
   ACTIVE_WINDOW_MS,
   SERVICE_ROLE,
+  sortAlerts,
   type LiveMonitorSnapshot,
+  type OperationalAlert,
 } from "@420ai/shared";
 import {
   machineStatuses,
@@ -17,7 +19,9 @@ import {
   connectorHealthWindowed,
   recentBacklogSamples,
   reconcileAlertFirings,
+  reconcileDeploymentFirings,
   listAlertFirings,
+  listDeploymentFirings,
   deliverPendingFirings,
   deliverResolvedFirings,
   countPendingCatalogs,
@@ -25,10 +29,17 @@ import {
   findLiveSession,
   isApiKeyLive,
   withOrg,
+  withDeployment,
   type DbClient,
 } from "@420ai/db";
 import { resolvePrincipal, authorized } from "../auth.js";
-import { deriveAlertSet, openFiringsDiverge } from "../alert-set.js";
+import {
+  deriveAlertSet,
+  deriveDeploymentAlertSet,
+  openFiringsDiverge,
+  reconcileThrottleKey,
+  DEPLOYMENT_THROTTLE_KEY,
+} from "../alert-set.js";
 
 // `ACTIVE_WINDOW_MS` was a local const here until M16 16.2. It moved to `@420ai/shared` because
 // `GET /v1/labels/queue` defines "settled" as the inverse of this same window (D-16.2-2) and the
@@ -64,6 +75,7 @@ async function buildSnapshot(
   userId: string,
   now: Date,
   reconcile: boolean,
+  deploymentAlerts: OperationalAlert[],
 ): Promise<LiveMonitorSnapshot> {
   const nowMs = now.getTime();
   const sinceIso = new Date(nowMs - ACTIVE_WINDOW_MS).toISOString();
@@ -84,11 +96,11 @@ async function buildSnapshot(
   const windowedConnectors = await connectorHealthWindowed(db, orgId, connectorRateSinceIso);
   const sessions = await activeSessions(db, orgId, sinceIso);
   const samplesByMachine = await recentBacklogSamples(db, orgId, trendSince);
-  const pendingCatalogs = await countPendingCatalogs(db);
-  const authFailureCount = await countRecentAuthFailures(
-    db,
-    new Date(nowMs - AUTH_FAILURE_ALERT.windowMs),
-  );
+  // M16 16.7: `countPendingCatalogs` / `countRecentAuthFailures` were read HERE until this slice.
+  // They moved to `reconcileDeployment` in the route handler, which derives the two deployment
+  // codes and hands them back as `deploymentAlerts` — so those tables are read ONCE per tick, not
+  // once here plus once there. Neither carries an `org_id`, which is the whole reason they are not
+  // this function's business.
   // Assemble the derived-state snapshot first, then fold in alerts — deriveAlerts reads the
   // already-derived machine status/backlogHigh + connector rows (no clock, no re-derivation, D3).
   const machineRows = machines.map((m) => ({
@@ -114,12 +126,12 @@ async function buildSnapshot(
   // shared rather than merely kept in sync: `reconcileAlertFirings` resolves any open firing whose
   // key is absent from the derived set, so two lists that disagree make every firing in the
   // difference flap between the read path and the timer. See `alert-set.ts`.
-  const alerts = deriveAlertSet(built, {
-    samplesByMachine,
-    pendingCatalogs,
-    authFailureCount,
-    windowedConnectors,
-  });
+  //
+  // M16 16.7 — TWO derivations now. `orgAlerts` is what this org's firings reconcile against;
+  // `alerts` on the wire is both scopes merged and re-sorted, so the dashboard's `alerts` array is
+  // byte-identical to before the split. Only the FIRING rows moved scope.
+  const orgAlerts = deriveAlertSet(built, { samplesByMachine, windowedConnectors });
+  const alerts = sortAlerts([...orgAlerts, ...deploymentAlerts]);
   // The WRITE (D1): reconcile firing state against the derived alerts (route owns `now`).
   //
   // M15 15.4 (audit B.4) — the throttle suppresses the STEADY-STATE write, not a state CHANGE.
@@ -133,9 +145,21 @@ async function buildSnapshot(
   // So a throttled tick READS first (a SELECT it was going to do anyway) and reconciles anyway
   // when the derived set disagrees with what is persisted. The write is skipped only when there
   // is genuinely nothing to write, which is the actual goal — and the common case by far.
-  let alertFirings = reconcile ? null : await listAlertFirings(db, orgId, userId, now);
-  if (alertFirings === null || openFiringsDiverge(alerts, alertFirings)) {
-    alertFirings = await reconcileAlertFirings(db, orgId, userId, alerts, now);
+  //
+  // M16 16.7 — the divergence comparison is against the ORG-SCOPED firings only. `listAlertFirings`
+  // returns this org's rows UNIONED with the deployment's (it must; the dashboard renders that list
+  // and nothing else), and comparing that union against the seven org codes would differ on every
+  // tick forever — reporting divergence permanently and quietly restoring the every-3-s write the
+  // throttle exists to remove. The deployment scope reconciles separately, in the route handler.
+  let alertFirings = reconcile ? null : await listAlertFirings(db, orgId, now);
+  if (
+    alertFirings === null ||
+    openFiringsDiverge(
+      orgAlerts,
+      alertFirings.filter((f) => f.scope === "org"),
+    )
+  ) {
+    alertFirings = await reconcileAlertFirings(db, orgId, userId, orgAlerts, now);
   }
   return { ...built, alerts, alertFirings };
 }
@@ -161,24 +185,34 @@ async function buildSnapshot(
  * `delivery_attempted_at` stamp inside a best-effort try/catch that is designed not to
  * complain. That is precisely the bug class the 15.3 code review caught here.
  */
-async function deliverFirings(
-  app: FastifyInstance,
-  orgId: string,
-  userId: string,
-  now: Date,
-): Promise<void> {
+async function deliverFirings(app: FastifyInstance, orgId: string, now: Date): Promise<void> {
+  const log = (e: unknown): void => app.log.error(e);
   try {
-    await deliverPendingFirings(app.db, orgId, SERVICE_ROLE, userId, app.alertDeliverer, now, (e) =>
-      app.log.error(e),
+    // M16 16.7 — FOUR calls, two scopes. The deployment pass claims the `org_id IS NULL` rows under
+    // `withDeployment` (opened internally, per statement, exactly as the org pass does). Running it
+    // per request is safe for the same two reasons the deployment RECONCILE is: the scopes are
+    // disjoint, and 16.6's atomic claim (`UPDATE … WHERE delivery_attempted_at IS NULL …
+    // RETURNING`) means exactly one caller can ever win a row however many race for it. That is why
+    // collapsing N per-member rows to one collapsed N notices to one with no new dedupe machinery.
+    const orgScope = { kind: "org", orgId } as const;
+    const deploymentScope = { kind: "deployment" } as const;
+    await deliverPendingFirings(app.db, orgScope, SERVICE_ROLE, app.alertDeliverer, now, log);
+    await deliverResolvedFirings(app.db, orgScope, SERVICE_ROLE, app.alertDeliverer, now, log);
+    await deliverPendingFirings(
+      app.db,
+      deploymentScope,
+      SERVICE_ROLE,
+      app.alertDeliverer,
+      now,
+      log,
     );
     await deliverResolvedFirings(
       app.db,
-      orgId,
+      deploymentScope,
       SERVICE_ROLE,
-      userId,
       app.alertDeliverer,
       now,
-      (e) => app.log.error(e),
+      log,
     );
   } catch (e) {
     app.log.error(e);
@@ -215,12 +249,55 @@ export default async function monitorRoutes(app: FastifyInstance): Promise<void>
    * not both observe a stale `last`. (The SSE path's `inFlight` guard prevents that within one
    * stream, but two browser tabs are two streams.)
    */
-  const shouldReconcile = (orgId: string, userId: string, now: Date): boolean => {
-    const key = `${orgId}:${userId}`;
+  const shouldReconcile = (key: string, now: Date): boolean => {
     const last = app.reconcileLastRunAt.get(key) ?? 0;
     const due = now.getTime() - last >= app.reconcileThrottleMs;
     if (due) app.reconcileLastRunAt.set(key, now.getTime());
     return due;
+  };
+
+  /**
+   * M16 16.7 — the DEPLOYMENT-scoped half of evaluate-on-read: derive the two codes that belong to
+   * no tenant, reconcile them into the single `org_id IS NULL` firing row, and return the alerts so
+   * the caller can merge them into the snapshot's `alerts` array.
+   *
+   * IT CANNOT LIVE INSIDE `buildSnapshot`. That function receives a `Tx` (the route already wrapped
+   * it in `withOrg`), while `withDeployment` takes a `Db` and opens its OWN transaction — a `Tx`
+   * would produce a SAVEPOINT whose `set_config` scope is the outer org transaction, i.e. an org
+   * context wearing a deployment label. So it sits here in the handler, beside `deliverFirings`,
+   * which is here for the sibling reason.
+   *
+   * It runs BEFORE `buildSnapshot`, deliberately: the snapshot's `listAlertFirings` unions the
+   * deployment rows, so reconciling afterwards would leave a newly-opened deployment firing out of
+   * the very frame that reports it — visible in `alerts`, absent from `alertFirings`, and therefore
+   * un-ackable until the next tick. That is the internally-inconsistent frame M15 15.4's throttle
+   * note warns about, one scope over.
+   *
+   * `userId` is PROVENANCE only (D-16.7-2) — whoever's request first opened the row. It scopes
+   * nothing, and the upsert leaves the original opener's id in place on every later touch.
+   *
+   * THROTTLED, UNLESS THE ANSWER WOULD DIFFER — the org path's exact logic, under the reserved
+   * sentinel key. The two count reads happen every tick regardless (the wire `alerts` array needs
+   * them); only the WRITE is gated.
+   */
+  const reconcileDeployment = async (userId: string, now: Date): Promise<OperationalAlert[]> => {
+    return withDeployment(app.db, SERVICE_ROLE, async (tx) => {
+      // SEQUENTIAL awaits, never `Promise.all` — a transaction is ONE connection (see the note in
+      // `buildSnapshot`). Neither table carries RLS (both are deployment-global, D-M15-9), so the
+      // unset org context here reads them normally.
+      const pendingCatalogs = await countPendingCatalogs(tx);
+      const authFailureCount = await countRecentAuthFailures(
+        tx,
+        new Date(now.getTime() - AUTH_FAILURE_ALERT.windowMs),
+      );
+      const alerts = deriveDeploymentAlertSet({ pendingCatalogs, authFailureCount });
+      const due = shouldReconcile(DEPLOYMENT_THROTTLE_KEY, now);
+      const persisted = due ? null : await listDeploymentFirings(tx, now);
+      if (persisted === null || openFiringsDiverge(alerts, persisted)) {
+        await reconcileDeploymentFirings(tx, userId, alerts, now);
+      }
+      return alerts;
+    });
   };
 
   app.get("/v1/monitor", async (request, reply) => {
@@ -235,11 +312,13 @@ export default async function monitorRoutes(app: FastifyInstance): Promise<void>
     const now = new Date();
     // M15 15.2: the "no such user → empty snapshot" branch is gone — a resolved
     // principal always has a user row, so it was dead code once the gate returned one.
-    const reconcile = shouldReconcile(principal.orgId, userId, now);
+    const reconcile = shouldReconcile(reconcileThrottleKey(principal.orgId, userId), now);
+    // M16 16.7: deployment scope FIRST — see `reconcileDeployment` for why the order matters.
+    const deploymentAlerts = await reconcileDeployment(userId, now);
     const snap = await withOrg(app.db, principal.orgId, SERVICE_ROLE, (tx) =>
-      buildSnapshot(tx, principal.orgId, userId, now, reconcile),
+      buildSnapshot(tx, principal.orgId, userId, now, reconcile, deploymentAlerts),
     );
-    await deliverFirings(app, principal.orgId, userId, now); // best-effort; never throws
+    await deliverFirings(app, principal.orgId, now); // best-effort; never throws
     return reply.code(200).send(snap);
   });
 
@@ -354,9 +433,14 @@ export default async function monitorRoutes(app: FastifyInstance): Promise<void>
         // exactly the class /lril:code-review caught in M9. The `inFlight` guard above is the
         // NEW half of that rule this slice forced: making the tick transactional means two
         // ticks can now deadlock each other, so they must not overlap.
-        const reconcile = shouldReconcile(principal.orgId, userId, now);
+        const reconcile = shouldReconcile(reconcileThrottleKey(principal.orgId, userId), now);
+        // M16 16.7: the deployment reconcile is its own short transaction, before the snapshot's
+        // (so the frame includes any firing it opens) and outside it (`withDeployment` takes a
+        // `Db`). Its write is gated by the sentinel throttle, which is what stops N connected
+        // dashboards writing the single shared deployment row N times every 3 s.
+        const deploymentAlerts = await reconcileDeployment(userId, now);
         const snap = await withOrg(app.db, principal.orgId, SERVICE_ROLE, (tx) =>
-          buildSnapshot(tx, principal.orgId, userId, now, reconcile),
+          buildSnapshot(tx, principal.orgId, userId, now, reconcile, deploymentAlerts),
         );
         // Deliver newly-opened firings before writing the frame (best-effort; guarded on
         // still-connected so a deliver query never runs against a dropped client).
@@ -364,7 +448,7 @@ export default async function monitorRoutes(app: FastifyInstance): Promise<void>
         // transaction open across a network round-trip to a third party is how connection
         // pools die. It is still org-SCOPED — it opens its own short transactions internally,
         // which it must, because `alert_firings` carries a strict policy.
-        if (!closed) await deliverFirings(app, principal.orgId, userId, now);
+        if (!closed) await deliverFirings(app, principal.orgId, now);
         if (!closed) reply.raw.write(`data: ${JSON.stringify(snap)}\n\n`);
       } catch (err) {
         // The error handler is bypassed post-hijack — emit + keep the stream alive.

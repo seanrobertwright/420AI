@@ -8,10 +8,13 @@ import {
   countPendingCatalogs,
   countRecentAuthFailures,
   reconcileAlertFirings,
+  reconcileDeploymentFirings,
   listAlertFirings,
+  listDeploymentFirings,
   deliverPendingFirings,
   deliverResolvedFirings,
   withOrg,
+  withDeployment,
   type Db,
 } from "@420ai/db";
 import {
@@ -25,7 +28,13 @@ import {
   type AlertFiring,
   type LiveMonitorSnapshot,
 } from "@420ai/shared";
-import { deriveAlertSet, openFiringsDiverge } from "./alert-set.js";
+import {
+  deriveAlertSet,
+  deriveDeploymentAlertSet,
+  openFiringsDiverge,
+  reconcileThrottleKey,
+  DEPLOYMENT_THROTTLE_KEY,
+} from "./alert-set.js";
 
 /**
  * M16 16.6 — the BACKGROUND alert evaluator (INC-2026-07).
@@ -88,8 +97,15 @@ export interface EvaluatorDeps {
    * wedges the plugin's re-entrancy guard permanently, from which there is no automatic recovery.
    *
    * Omitted → always reconcile, which is the right default for a direct call in a test.
+   *
+   * M16 16.7 — takes an opaque KEY rather than `(orgId, userId)`, because there is now a third
+   * caller with no org and no user: the deployment pass, which throttles under the reserved
+   * `DEPLOYMENT_THROTTLE_KEY` sentinel. Both key spellings live in `alert-set.ts` so the route and
+   * the tick cannot compute them differently — which would give each its own idea of when the last
+   * reconcile happened, restoring both the steady-state write and the concurrent-reconcile
+   * deadlock this dep exists to prevent.
    */
-  shouldReconcile?: (orgId: string, userId: string, now: Date) => boolean;
+  shouldReconcile?: (key: string, now: Date) => boolean;
 }
 
 /** What one tick did, for the caller's log line. Counts, never rows — nothing here is a wire type. */
@@ -98,9 +114,18 @@ export interface EvaluatorTickResult {
   orgs: number;
   /** Orgs skipped because they had no members at all. */
   skipped: number;
-  /** Total alerts derived across all evaluated orgs. */
+  /** Total alerts derived — org scopes PLUS the deployment scope, so the log line has one total. */
   alerts: number;
-  /** Orgs whose evaluation threw; each was reported via `onError` and did not stop the loop. */
+  /**
+   * M16 16.7 — of which, derived by the once-per-tick DEPLOYMENT pass. Broken out so an operator
+   * reading the log can tell "one deployment-wide condition" from "one condition in each of four
+   * orgs", which is exactly the distinction 16.7 exists to restore.
+   */
+  deploymentAlerts: number;
+  /**
+   * Evaluations that threw; each was reported via `onError` and did not stop the tick. Counts the
+   * deployment pass as one alongside the per-org failures — it is isolated the same way.
+   */
   failed: number;
 }
 
@@ -113,37 +138,26 @@ export interface EvaluatorTickResult {
  * make the 0016 RESTRICTIVE INSERT policy reject the reconcile and the `delivery_attempted_at`
  * stamp — silently, in the case of the stamp, because delivery is best-effort by design.
  *
- * D-16.6-2 — `userId` is the org's OWNER (resolved by the caller). `alert_firings_open_key` is
- * unique on `(user_id, alert_key) WHERE status = 'open'` (`schema.ts:980`), so the choice of user
- * decides whether this tick COLLIDES with the dashboard's firing row or DUPLICATES it. Reconciling
- * under a different user than the dashboard would open a second row and send a second email for
- * one outage. Measured in the planning spike, not reasoned about.
+ * D-16.6-2 — `userId` is the org's OWNER (resolved by the caller). Until 16.7 that choice decided
+ * whether this tick COLLIDED with the dashboard's firing row or DUPLICATED it, because the unique
+ * index carried `user_id`. It no longer does: the key is `(org_id, alert_key)` and `user_id` is
+ * PROVENANCE (D-16.7-2), so any member's id converges on the same row. The owner is still the
+ * deterministic choice — it makes "who first saw this" stable across ticks.
  *
- * KNOWN, OUT OF SCOPE, AND NOT AS DORMANT AS IT LOOKS — two of the nine codes are GLOBAL.
- * `catalog.update_requires_approval` and `ingest.auth_failure` derive from tables with no `org_id`
- * (`countPendingCatalogs`, `countRecentAuthFailures`), so ONE pending catalog opens a firing in
- * EVERY org and, with a deliverer wired, sends one notice per org plus one resolve notice per org.
+ * THE TWO DEFECTS 16.6 DOCUMENTED HERE ARE FIXED, and 16.7's migration 0027 is the fix:
  *
- * An earlier version of this note defended that with "each org's dashboard read already does
- * exactly this". Review showed the defence is FALSE, and the way it is false is the interesting
- * part: `ensurePersonalOrg` gives every user their own org, so org count tracks USER count rather
- * than tenant count — inviting two teammates makes this a three- or four-org deployment
- * immediately. Nobody ever opens a dashboard for a colleague's auto-created personal org, so before
- * 16.6 those orgs were never evaluated at all. The tick evaluates them, which is correct for
- * per-machine codes and is duplicative for the two global ones.
+ *   - Two of the nine codes are DEPLOYMENT-wide (`catalog.update_requires_approval`,
+ *     `ingest.auth_failure`, both deriving from tables with no `org_id`), so the per-org loop
+ *     opened a firing in EVERY org for one condition — and `ensurePersonalOrg` makes org count
+ *     track USER count, so that was three or four notices as soon as two teammates were invited.
+ *     They now derive ONCE per tick in `evaluateDeploymentAlerts` below, into a single row whose
+ *     `org_id IS NULL`, which every org can see and any member can ack once.
+ *   - Within one org, a non-owner opening the monitor opened a SECOND row under their own id. The
+ *     org-keyed index makes that the same row.
  *
- * Left as-is deliberately: this slice adds no alert code and changes no derivation, and the fix
- * (deriving the global codes once per tick rather than once per org, or gating on "the org owns at
- * least one machine") changes alert semantics for the read path too. It is stated here so the next
- * reader inherits the measurement rather than the earlier wrong reassurance.
- *
- * A SECOND, OLDER WART THIS DOES NOT FIX, named for the same reason: firings are keyed
- * `(user_id, alert_key)`, and the dashboard reconciles as `principal.userId`. So an `admin` or
- * `viewer` opening the monitor opens a SECOND row for the same condition under their own id and
- * triggers a second delivery. That predates 16.6 and is inherent to the per-user firing model —
- * but because the tick now guarantees the owner's row always exists, what used to need two people
- * with the dashboard open is now the default for any non-owner viewer. D-16.6-2 reasons only about
- * not duplicating the OWNER's row. The real fix is making firings org-keyed.
+ * The two scopes cannot make each other flap: their reconciles filter `org_id = :orgId` and
+ * `org_id IS NULL` respectively, which are disjoint (D-16.7-3, argued in full in `alert-set.ts`).
+ * That is why splitting the derive list — which 16.6's module doc warned against — is safe here.
  *
  * Returns the number of alerts derived.
  */
@@ -167,14 +181,10 @@ export async function evaluateOrgAlerts(
     const connectors = await connectorHealth(tx, orgId);
     const windowedConnectors = await connectorHealthWindowed(tx, orgId, connectorRateSinceIso);
     const samplesByMachine = await recentBacklogSamples(tx, orgId, trendSince);
-    const pendingCatalogs = await countPendingCatalogs(tx);
-    // NO `orgId`, deliberately. `countRecentAuthFailures` is global on purpose
-    // (`auth-failures.ts:37`): the auth failure that matters here is by definition from a machine
-    // no org can claim — which is precisely the signal INC-2026-07 generated and nobody evaluated.
-    const authFailureCount = await countRecentAuthFailures(
-      tx,
-      new Date(nowMs - AUTH_FAILURE_ALERT.windowMs),
-    );
+    // M16 16.7: `countPendingCatalogs` / `countRecentAuthFailures` are NOT read here any more.
+    // Both are deployment-wide (neither table carries an `org_id`), so reading them per org is
+    // what produced one firing per org for one condition. They moved to
+    // `evaluateDeploymentAlerts`, which runs ONCE per tick.
 
     const machineRows = machines.map((m) => ({
       ...m,
@@ -196,24 +206,20 @@ export async function evaluateOrgAlerts(
       alertFirings: [],
     };
 
-    // ALL NINE CODES — via the SHARED composition, which is the whole point. Completeness is a
-    // CORRECTNESS requirement rather than tidiness: `reconcileAlertFirings` resolves every open
-    // firing whose key is not in the derived set (`alert-firings.ts`, D5), so a tick deriving fewer
-    // codes than the dashboard would silently RESOLVE the missing ones every 60 s while the
-    // dashboard re-opened them — flapping, plus a resolve email per cycle for an outage that never
-    // ended. This slice originally duplicated the six-call list here and asserted the requirement
-    // in a comment; review pointed out that a comment enforces nothing and `tsc` cannot see a
-    // divergence between two independently-valid call sites, so it is now structural: one list, in
-    // `alert-set.ts`, shared with the route. See that file for the full argument.
+    // THE SEVEN ORG CODES — via the SHARED composition, which is the whole point. Completeness
+    // WITHIN THE SCOPE is a CORRECTNESS requirement rather than tidiness: `reconcileAlertFirings`
+    // resolves every open firing in scope whose key is not in the derived set (`alert-firings.ts`,
+    // D5), so a tick deriving fewer org codes than the dashboard would silently RESOLVE the missing
+    // ones every 60 s while the dashboard re-opened them — flapping, plus a resolve email per cycle
+    // for an outage that never ended. One list, in `alert-set.ts`, shared with the route.
+    //
+    // M16 16.7: the DEPLOYMENT codes are legitimately absent — they are a different scope with a
+    // disjoint resolve predicate, so neither list can resolve the other's firings. That is what
+    // makes splitting the list safe where merely duplicating it was not.
     //
     // It is also why `connectors` above is really queried: `deriveAlerts` reads
     // `snapshot.connectors` for `connector.failing`, so passing `[]` would drop a code.
-    const derived = deriveAlertSet(built, {
-      samplesByMachine,
-      pendingCatalogs,
-      authFailureCount,
-      windowedConnectors,
-    });
+    const derived = deriveAlertSet(built, { samplesByMachine, windowedConnectors });
     // THROTTLED, UNLESS THE ANSWER WOULD DIFFER — the route's exact logic (`routes/monitor.ts`),
     // now reached through the shared `openFiringsDiverge`. A blanket "skip the reconcile while
     // throttled" would be wrong in the way that is easy to miss: `deliverPendingFirings` reads
@@ -222,9 +228,19 @@ export async function evaluateOrgAlerts(
     // broke. So a throttled tick READS first (a SELECT it would do anyway) and reconciles anyway
     // when the derived set disagrees with what is persisted. The write is skipped only when there
     // is genuinely nothing to write, which is the common case by far.
-    const due = deps.shouldReconcile?.(orgId, userId, deps.now) ?? true;
-    const persisted = due ? null : await listAlertFirings(tx, orgId, userId, deps.now);
-    if (persisted === null || openFiringsDiverge(derived, persisted)) {
+    //
+    // M16 16.7 — compare against the ORG-SCOPED firings only. `listAlertFirings` unions this org's
+    // rows with the deployment's, so feeding the union in while deriving only the seven org codes
+    // would report divergence on EVERY tick forever, defeating the throttle entirely.
+    const due = deps.shouldReconcile?.(reconcileThrottleKey(orgId, userId), deps.now) ?? true;
+    const persisted = due ? null : await listAlertFirings(tx, orgId, deps.now);
+    if (
+      persisted === null ||
+      openFiringsDiverge(
+        derived,
+        persisted.filter((f) => f.scope === "org"),
+      )
+    ) {
       await reconcileAlertFirings(tx, orgId, userId, derived, deps.now);
     }
     return derived;
@@ -236,20 +252,71 @@ export async function evaluateOrgAlerts(
   // them in the `withOrg` above would pin one pooled connection across a third-party network hop.
   // Calling them with no org context at all would be worse: `alert_firings` carries a strict
   // policy, so they would read ZERO rows, deliver nothing, and report success.
-  await deliverPendingFirings(
+  const scope = { kind: "org", orgId } as const;
+  await deliverPendingFirings(deps.db, scope, SERVICE_ROLE, deps.deliverer, deps.now, deps.onError);
+  await deliverResolvedFirings(
     deps.db,
-    orgId,
+    scope,
     SERVICE_ROLE,
-    userId,
     deps.deliverer,
     deps.now,
     deps.onError,
   );
+  return alerts.length;
+}
+
+/**
+ * M16 16.7 — evaluate, reconcile and deliver the DEPLOYMENT's alerts. Runs ONCE per tick, not once
+ * per org, which is the entire fix for defect 1.
+ *
+ * `catalog.update_requires_approval` and `ingest.auth_failure` derive from `pricing_catalogs` and
+ * `ingest_auth_failures`, neither of which carries an `org_id`. Reading them inside the per-org
+ * loop meant ONE pending catalog opened a firing in EVERY org and — with a deliverer wired — sent
+ * one notice per org plus one resolve notice per org. `ensurePersonalOrg` gives every user their
+ * own org, so that scaled with the head-count, not with the tenant count.
+ *
+ * Runs under `withDeployment`, which sets the role and deliberately leaves `app.current_org` unset:
+ * an unset org context reads exactly the `org_id IS NULL` rows and may insert one, while still
+ * being refused an org-scoped insert. Both tables it reads carry no RLS at all (D-M15-9).
+ *
+ * `userId` is PROVENANCE for the row (the column is NOT NULL); the caller passes some real user —
+ * there is no deployment-level principal, and inventing one would need a users row.
+ *
+ * Returns the number of deployment alerts derived.
+ */
+export async function evaluateDeploymentAlerts(
+  deps: EvaluatorDeps,
+  userId: string,
+): Promise<number> {
+  const alerts = await withDeployment(deps.db, SERVICE_ROLE, async (tx) => {
+    // SEQUENTIAL awaits — a transaction is ONE connection (see `evaluateOrgAlerts`).
+    const pendingCatalogs = await countPendingCatalogs(tx);
+    // NO `orgId`, deliberately. `countRecentAuthFailures` is global on purpose
+    // (`auth-failures.ts:37`): the auth failure that matters here is by definition from a machine
+    // no org can claim — which is precisely the signal INC-2026-07 generated and nobody evaluated.
+    const authFailureCount = await countRecentAuthFailures(
+      tx,
+      new Date(deps.now.getTime() - AUTH_FAILURE_ALERT.windowMs),
+    );
+    const derived = deriveDeploymentAlertSet({ pendingCatalogs, authFailureCount });
+    // Same "throttled, UNLESS the answer would differ" logic as the org path, under the reserved
+    // sentinel key so the route and the tick share ONE throttle for the single shared row.
+    const due = deps.shouldReconcile?.(DEPLOYMENT_THROTTLE_KEY, deps.now) ?? true;
+    const persisted = due ? null : await listDeploymentFirings(tx, deps.now);
+    if (persisted === null || openFiringsDiverge(derived, persisted)) {
+      await reconcileDeploymentFirings(tx, userId, derived, deps.now);
+    }
+    return derived;
+  });
+
+  // OUTSIDE the transaction, on the UNWRAPPED handle, for the reasons `evaluateOrgAlerts` states:
+  // these open their own short contexts per statement and run the webhook/SMTP hop between them.
+  const scope = { kind: "deployment" } as const;
+  await deliverPendingFirings(deps.db, scope, SERVICE_ROLE, deps.deliverer, deps.now, deps.onError);
   await deliverResolvedFirings(
     deps.db,
-    orgId,
+    scope,
     SERVICE_ROLE,
-    userId,
     deps.deliverer,
     deps.now,
     deps.onError,
@@ -271,8 +338,54 @@ export async function evaluateOrgAlerts(
  * evaluated in its own try/catch; the error is handed to `onError` and the loop continues.
  */
 export async function runEvaluatorTick(deps: EvaluatorDeps): Promise<EvaluatorTickResult> {
-  const result: EvaluatorTickResult = { orgs: 0, skipped: 0, alerts: 0, failed: 0 };
+  const result: EvaluatorTickResult = {
+    orgs: 0,
+    skipped: 0,
+    alerts: 0,
+    deploymentAlerts: 0,
+    failed: 0,
+  };
   const orgs = await listOrganizations(deps.db);
+  /**
+   * M16 16.7 — THE DEPLOYMENT PASS, once, before the org loop.
+   *
+   * IN ITS OWN try/catch, mirroring the per-org isolation below and for the stronger version of the
+   * same reason: this is the tick's shared prologue, so an unhandled failure here would abort EVERY
+   * org's evaluation — one broken deployment-wide count taking down the whole detector, in the
+   * component whose entire job is to survive to report other components' failures. The error is
+   * labelled `deployment` for the same reason the org error is wrapped with its org id: `onError`
+   * is also the sink for per-firing delivery failures from three other places, so a bare stack
+   * trace leaves the operator unable to tell which pass produced it.
+   *
+   * It needs SOME user id for the firing row's provenance column and there is no deployment-level
+   * principal, so it borrows the first org's reconcile user — resolved by the same
+   * `owner-then-first-member` rule the loop uses. A deployment with no users at all has nothing to
+   * alert anybody about, so the pass is skipped rather than failed.
+   */
+  let deploymentUserId: string | undefined;
+  for (const org of orgs) {
+    try {
+      const members = await listMembers(deps.db, org.id);
+      const user = members.find((m) => m.role === "owner") ?? members[0];
+      if (user) {
+        deploymentUserId = user.userId;
+        break;
+      }
+    } catch {
+      // A failure to resolve a provenance user from THIS org is not a reason to skip the whole
+      // deployment pass — the loop below reports the same org's failure with its own id attached.
+      continue;
+    }
+  }
+  if (deploymentUserId) {
+    try {
+      result.deploymentAlerts = await evaluateDeploymentAlerts(deps, deploymentUserId);
+      result.alerts += result.deploymentAlerts;
+    } catch (err) {
+      result.failed += 1;
+      deps.onError(new Error("alert evaluator: deployment scope failed", { cause: err }));
+    }
+  }
   for (const org of orgs) {
     try {
       const members = await listMembers(deps.db, org.id);

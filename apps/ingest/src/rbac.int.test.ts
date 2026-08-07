@@ -378,7 +378,21 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.4 RBAC (two-role, two-user)", () 
   // 12 ── D-M15-6: the per-org firing fan-out is ALREADY satisfied by 15.3's per-(org,user)
   //       snapshot. CONFIRMED here rather than assumed — the residue 15.4 fixed was the
   //       hardcoded approver (test 6), not the fan-out.
-  it("two orgs pending the same catalog approval EACH get their own firing", async () => {
+  /**
+   * M16 16.7 — THIS TEST'S EXPECTATION IS INVERTED, and the inversion is the slice.
+   *
+   * It used to assert that two orgs pending the same catalog approval EACH got their own firing,
+   * and it passed, because that is exactly what the code did. It was describing a DEFECT as an
+   * invariant: `catalog.update_requires_approval` derives from `pricing_catalogs`, which carries no
+   * `org_id` at all, so "each org gets its own" means one condition producing N rows, N acks and —
+   * with a deliverer wired — N notices. `ensurePersonalOrg` gives every user their own org, so N is
+   * the head-count, not the tenant count.
+   *
+   * The correct assertion is ONE row, `org_id IS NULL`, visible to BOTH orgs. Kept in this file
+   * (rather than moved to the evaluator suite) precisely because the fan-out arrived here through
+   * the ROUTE, not the tick: two people opening the dashboard was always sufficient.
+   */
+  it("two orgs pending the same catalog approval share ONE deployment-scoped firing", async () => {
     await owner.db
       .insert(pricingCatalogs)
       .values({ version: "fanout-v1", payload: {}, signature: "sig", status: "pending" });
@@ -392,13 +406,31 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.4 RBAC (two-role, two-user)", () 
       expect(res.statusCode).toBe(200);
     }
 
+    // ONE row for the whole deployment, owned by nobody.
     const rows = await owner.db
       .select({ orgId: alertFirings.orgId })
       .from(alertFirings)
       .where(eq(alertFirings.code, "catalog.update_requires_approval"));
-    const orgsWithFiring = new Set(rows.map((r) => r.orgId));
-    expect(orgsWithFiring.has(orgA)).toBe(true);
-    expect(orgsWithFiring.has(orgB)).toBe(true);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.orgId).toBeNull();
+
+    // …and BOTH orgs still SEE it on the wire. One row is only correct if it stays universally
+    // visible — otherwise this would have hidden the condition from one org instead of fixing it.
+    for (const email of ["owner@example.com", ADMIN_EMAIL]) {
+      const res = await app.inject({
+        method: "GET",
+        url: "/v1/monitor",
+        headers: asUser(await login(email)),
+      });
+      const snap = res.json() as { alertFirings: { alertKey: string; scope: string }[] };
+      const global = snap.alertFirings.find(
+        (f) => f.alertKey === "catalog.update_requires_approval:*",
+      );
+      expect(global, `${email} cannot see the deployment firing`).toBeDefined();
+      expect(global!.scope).toBe("deployment");
+    }
+    expect(orgA).toBeTruthy();
+    expect(orgB).toBeTruthy();
   });
 
   // 13 ── THE THROTTLE (audit B.4). With a long window, two consecutive GETs perform ONE

@@ -44,7 +44,13 @@ export {
 } from "./schema.js";
 export { createDb } from "./client.js";
 export type { Db, Tx, DbClient } from "./client.js";
-export { withOrg, APP_ROLE_NAME, ORG_SETTING, ROLE_SETTING } from "./org-context.js";
+export {
+  withOrg,
+  withDeployment,
+  APP_ROLE_NAME,
+  ORG_SETTING,
+  ROLE_SETTING,
+} from "./org-context.js";
 export { provisionAppRole } from "./provision-app-role.js";
 export { encryptField, decryptField, activeKeyId } from "./crypto.js";
 export type { EncryptedField } from "./crypto.js";
@@ -79,11 +85,14 @@ export type { Principal } from "./repositories/principal.js";
 export { machineStatuses, activeSessions, recentBacklogSamples } from "./repositories/monitor.js";
 export {
   reconcileAlertFirings,
+  reconcileDeploymentFirings,
   listAlertFirings,
+  listDeploymentFirings,
   ackAlertFiring,
   deliverPendingFirings,
   deliverResolvedFirings,
 } from "./repositories/alert-firings.js";
+export type { FiringScope } from "./repositories/alert-firings.js";
 export { recordIngestAuthFailure, countRecentAuthFailures } from "./repositories/auth-failures.js";
 export {
   findUserIdByEmail,

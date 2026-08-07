@@ -323,8 +323,16 @@ export async function runWatch(opts: {
    */
   const existingFault = loadFault(faultPath);
   if (existingFault) {
+    // M16 16.7: NAME WHICH KIND. The message was "a capture fault is on record" for both codes,
+    // which tells an operator that capture stopped when an `archive_unreachable` record means the
+    // opposite — capture kept running and the queue buffered. Getting that backwards on the one
+    // message this feature exists to emit is worse than saying nothing.
+    const kind =
+      existingFault.code === "archive_unreachable"
+        ? "a DEGRADED capture fault (capture kept running; the archive was unreachable)"
+        : "a FATAL capture fault (capture had stopped)";
     opts.logger?.(
-      `a capture fault is on record at ${faultPath}: ${existingFault.message} ` +
+      `${kind} is on record at ${faultPath}: ${existingFault.message} ` +
         `(since ${existingFault.since}` +
         (existingFault.lastObservedAt ? `, last observed ${existingFault.lastObservedAt}` : "") +
         `). It clears on the next sync that actually delivers.`,
@@ -376,6 +384,18 @@ export async function runWatch(opts: {
     // an empty-queue drain returns "ok" and fires this callback every ~2 s WITHOUT making a single
     // request, so clearing on that would delete the record on the first idle tick after a restart,
     // having never re-contacted the archive. Only bytes accepted by the archive prove it is over.
+    // M16 16.7 — the DEGRADED record. It writes the file and does NOTHING ELSE: `fault` is left
+    // undefined, so `watchExitCode` still returns 0 and WinSW does not restart. That is the whole
+    // point (D-16.7-8) — restarting a collector does not make an unreachable archive reachable, and
+    // a restart loop would thrash the process precisely while its durable queue is the only thing
+    // preserving the data. `result.fault` keeps its meaning: "capture STOPPED".
+    onDegraded: (f) => {
+      try {
+        saveFault(f, faultPath);
+      } catch (err) {
+        opts.logger?.(`could not record capture fault at ${faultPath}: ${String(err)}`);
+      }
+    },
     onSyncSuccess: (_at, delivered) => {
       if (delivered > 0) clearFault(faultPath);
     },

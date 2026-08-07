@@ -4,14 +4,17 @@ import type { FastifyInstance } from "fastify";
 import {
   createDb,
   ensurePersonalOrg,
+  listAlertFirings,
   machines,
   memberships,
   pricingCatalogs,
   recordHeartbeat,
   recordIngestAuthFailure,
   setUserPassword,
+  withOrg,
 } from "@420ai/db";
 import type { AlertFiring, LiveMonitorSnapshot } from "@420ai/shared";
+import { SERVICE_ROLE } from "@420ai/shared";
 import { buildApp } from "./app.js";
 import { hashPassword } from "./password.js";
 import { runEvaluatorTick, evaluateOrgAlerts, type EvaluatorDeps } from "./alert-evaluator.js";
@@ -341,14 +344,22 @@ describe.skipIf(!TEST_URL || !APP_URL)("M16 16.6 background alert evaluator", ()
     await seedOfflineMachine(orgId, userId, "doomed-machine"); // org A — created first
     const machineB = await seedOfflineMachine(orgB, userB, "surviving-machine");
 
-    let transactions = 0;
+    // M16 16.7: fail the first ORG transaction, not simply the first transaction. The tick now
+    // opens several `withDeployment` transactions BEFORE the org loop (the deployment reconcile
+    // plus its two delivery passes), so a naive "reject call #0" now takes down the deployment
+    // prologue instead — which is a different behaviour, covered by its own test below. The stack
+    // check is what keeps this test about ORG isolation, which is what it was written for.
+    let orgTransactions = 0;
     const flaky = new Proxy(appRole.db, {
       get(target, prop, receiver) {
         if (prop === "transaction") {
-          return (...args: unknown[]) =>
-            transactions++ === 0
-              ? Promise.reject(new Error("simulated org failure"))
-              : (target.transaction as (...a: unknown[]) => unknown)(...args);
+          return (...args: unknown[]) => {
+            const fromDeployment = (new Error().stack ?? "").includes("withDeployment");
+            if (!fromDeployment && orgTransactions++ === 0) {
+              return Promise.reject(new Error("simulated org failure"));
+            }
+            return (target.transaction as (...a: unknown[]) => unknown)(...args);
+          };
         }
         return Reflect.get(target, prop, receiver) as unknown;
       },
@@ -637,5 +648,194 @@ describe.skipIf(!TEST_URL || !APP_URL)("M16 16.6 background alert evaluator", ()
     const after = slow.deliver.mock.calls.length;
     await new Promise((r) => setTimeout(r, 80));
     expect(slow.deliver.mock.calls.length).toBe(after);
+  });
+
+  /**
+   * M16 16.7 — THE HEADLINE REGRESSION. One deployment-wide condition, three orgs, ONE firing.
+   *
+   * Before 16.7 the tick derived `catalog.update_requires_approval` and `ingest.auth_failure`
+   * INSIDE the per-org loop, from tables that carry no `org_id` at all (`pricing_catalogs`,
+   * `ingest_auth_failures`). So one pending catalog opened a firing in EVERY org and — with a
+   * deliverer wired, which production has — sent one notice per org, then one resolve notice per
+   * org when it cleared.
+   *
+   * That is not a multi-tenant hypothetical. `ensurePersonalOrg` gives every user their own org, so
+   * ORG COUNT TRACKS USER COUNT: inviting two teammates makes this a three- or four-org deployment
+   * the same afternoon, and nobody ever opens a dashboard for a colleague's auto-created personal
+   * org, so before 16.6 those orgs were never evaluated at all and the duplication was invisible.
+   *
+   * Three orgs rather than two, deliberately: with two, "one firing" and "one per org" differ by a
+   * factor a `toHaveBeenCalledTimes(2)` typo could absorb. With three the numbers cannot be
+   * confused — 1 versus 3.
+   */
+  describe("M16 16.7 — deployment-scoped codes fire ONCE for the whole deployment", () => {
+    /** Seed two further orgs (three including the suite's default), each with its own user. */
+    async function seedThreeOrgs(): Promise<string[]> {
+      const userB = await setUserPassword(owner.db, "b@example.com", hashPassword(PASSWORD));
+      const orgB = await ensurePersonalOrg(owner.db, userB, "b@example.com");
+      const userC = await setUserPassword(owner.db, "c@example.com", hashPassword(PASSWORD));
+      const orgC = await ensurePersonalOrg(owner.db, userC, "c@example.com");
+      expect(new Set([orgId, orgB, orgC]).size).toBe(3);
+      return [orgId, orgB, orgC];
+    }
+
+    /** A pending signed pricing catalog — deployment-wide by construction (no `org_id` column). */
+    async function seedPendingCatalog(): Promise<void> {
+      await owner.db
+        .insert(pricingCatalogs)
+        .values({ version: "m167-1", status: "pending", payload: {}, signature: "sig" });
+    }
+
+    it("ONE pending catalog across THREE orgs produces exactly ONE open firing and ONE delivery", async () => {
+      const orgs = await seedThreeOrgs();
+      await seedPendingCatalog();
+
+      const result = await runEvaluatorTick(deps());
+
+      expect(result.orgs).toBe(3);
+      expect(result.failed).toBe(0);
+      // Derived once, not once per org — and broken out so the log line can say which.
+      expect(result.deploymentAlerts).toBe(1);
+
+      // ONE row, and its `org_id` is NULL: it belongs to the deployment, not to whichever org the
+      // loop happened to reach first. Read on the OWNER handle — the app role sees the row under
+      // any context, so only the owner can prove there is exactly one of it.
+      const rows = await owner.db.execute<{ org_id: string | null }>(sql`
+        SELECT org_id FROM alert_firings
+         WHERE status = 'open' AND alert_key = 'catalog.update_requires_approval:*'`);
+      expect(rows.rows).toHaveLength(1);
+      expect(rows.rows[0]!.org_id).toBeNull();
+
+      // ONE notice, not three.
+      const catalogNotices = delivered.filter((f) => f.code === "catalog.update_requires_approval");
+      expect(catalogNotices).toHaveLength(1);
+      expect(catalogNotices[0]!.scope).toBe("deployment");
+      expect(deliverer.deliver).toHaveBeenCalledTimes(1);
+      expect(httpRequests).toBe(0);
+
+      // …and EVERY org can still see it. One row is only the right answer if it is universally
+      // visible — otherwise this "fix" would have hidden the condition from two orgs out of three.
+      for (const org of orgs) {
+        const seen = await withOrg(appRole.db, org, SERVICE_ROLE, (tx) =>
+          listAlertFirings(tx, org, new Date()),
+        );
+        expect(
+          seen.find((f) => f.alertKey === "catalog.update_requires_approval:*"),
+          `org ${org} cannot see the deployment firing`,
+        ).toBeDefined();
+      }
+    });
+
+    it("resolves ONCE too — one resolve notice for three orgs, not three", async () => {
+      await seedThreeOrgs();
+      await seedPendingCatalog();
+      await runEvaluatorTick(deps());
+      expect(deliverer.deliver).toHaveBeenCalledTimes(1);
+
+      // The catalog is approved: the condition clears deployment-wide.
+      await owner.db.execute(sql`UPDATE pricing_catalogs SET status = 'active'`);
+      await runEvaluatorTick(deps());
+
+      const resolves = delivered.filter((f) => f.status === "resolved");
+      expect(resolves).toHaveLength(1);
+      expect(resolves[0]!.code).toBe("catalog.update_requires_approval");
+      expect(await countOpenFirings()).toBe(0);
+    });
+
+    it("ingest.auth_failure is likewise deployment-scoped — one row across three orgs", async () => {
+      await seedThreeOrgs();
+      for (const ip of ["1.1.1.1", "2.2.2.2", "3.3.3.3"]) {
+        await recordIngestAuthFailure(appRole.db, { remoteIp: ip });
+      }
+
+      const result = await runEvaluatorTick(deps());
+
+      expect(result.deploymentAlerts).toBe(1);
+      const rows = await owner.db.execute<{ n: number }>(sql`
+        SELECT count(*)::int AS n FROM alert_firings
+         WHERE status = 'open' AND alert_key = 'ingest.auth_failure:*'`);
+      expect(rows.rows[0]!.n).toBe(1);
+      expect(delivered.filter((f) => f.code === "ingest.auth_failure")).toHaveLength(1);
+    });
+
+    it("org-scoped codes are UNAFFECTED — three orgs with three offline machines still get three", async () => {
+      // The control. If the deployment split had accidentally swallowed the per-org codes too, the
+      // headline test above would still pass while the evaluator had stopped detecting anything
+      // per-tenant. Same tick, opposite expectation.
+      const [orgA, orgB, orgC] = await seedThreeOrgs();
+      const users = await owner.db.execute<{ user_id: string; org_id: string }>(
+        sql`SELECT user_id, org_id FROM memberships`,
+      );
+      const byOrg = new Map(
+        (users.rows as { user_id: string; org_id: string }[]).map((r) => [r.org_id, r.user_id]),
+      );
+      for (const [i, org] of [orgA!, orgB!, orgC!].entries()) {
+        await seedOfflineMachine(org, byOrg.get(org)!, `machine-${i}`);
+      }
+
+      const result = await runEvaluatorTick(deps());
+
+      expect(result.orgs).toBe(3);
+      expect(delivered.filter((f) => f.code === "collector.offline")).toHaveLength(3);
+      expect(delivered.every((f) => f.scope === "org")).toBe(true);
+    });
+
+    it("does not FLAP: the deployment firing survives an org tick that derives nothing", async () => {
+      // D-16.7-3 END TO END. The org reconcile resolves every open firing in ITS scope whose key is
+      // absent from the derived set — and it derives no deployment codes at all. If the two scopes'
+      // predicates overlapped, each tick would resolve the deployment firing and the next re-open
+      // it, sending a resolve notice per cycle for a condition that never cleared.
+      await seedThreeOrgs();
+      await seedPendingCatalog();
+      await runEvaluatorTick(deps());
+      const opened = delivered.filter((f) => f.code === "catalog.update_requires_approval");
+      expect(opened).toHaveLength(1);
+
+      // Three more ticks, no state change. Nothing further should be delivered at all.
+      for (let i = 0; i < 3; i++) await runEvaluatorTick(deps());
+      expect(delivered.filter((f) => f.status === "resolved")).toHaveLength(0);
+      expect(deliverer.deliver).toHaveBeenCalledTimes(1);
+
+      const rows = await owner.db.execute<{ n: number }>(sql`
+        SELECT count(*)::int AS n FROM alert_firings
+         WHERE alert_key = 'catalog.update_requires_approval:*'`);
+      expect(rows.rows[0]!.n).toBe(1); // still ONE row, still open — never resolved and re-opened
+    });
+
+    it("ISOLATES a failing deployment pass — the org loop still runs", async () => {
+      // The deployment pass is the tick's shared PROLOGUE, so an unhandled failure there would
+      // abort every org's evaluation — one broken deployment-wide count taking down the whole
+      // detector. It gets the same try/catch the per-org loop has, and the error is labelled so an
+      // operator can tell which pass produced it (`onError` is also the sink for per-firing
+      // delivery failures from three other places).
+      await seedThreeOrgs();
+      await seedOfflineMachine(orgId, userId, "still-detected");
+      const brokenDb = new Proxy(appRole.db, {
+        get(target, prop, receiver) {
+          // Fail ONLY the deployment pass: it is the one that runs with no org context.
+          if (prop === "transaction") {
+            return async (fn: unknown, ...rest: unknown[]) => {
+              const stack = new Error().stack ?? "";
+              if (stack.includes("withDeployment")) throw new Error("deployment pass exploded");
+              return (
+                Reflect.get(target, prop, receiver) as (
+                  f: unknown,
+                  ...r: unknown[]
+                ) => Promise<unknown>
+              ).call(target, fn, ...rest);
+            };
+          }
+          return Reflect.get(target, prop, receiver);
+        },
+      }) as typeof appRole.db;
+
+      const result = await runEvaluatorTick(deps({ db: brokenDb }));
+
+      expect(result.failed).toBeGreaterThanOrEqual(1);
+      expect(errors.some((e) => String(e).includes("deployment"))).toBe(true);
+      // …and the org loop still ran and still delivered.
+      expect(result.orgs).toBe(3);
+      expect(delivered.filter((f) => f.code === "collector.offline")).toHaveLength(1);
+    });
   });
 });

@@ -126,6 +126,19 @@ export interface SyncLoopDeps extends SyncDeps {
    */
   onSync?: (at: string, delivered: number) => void;
   /**
+   * M16 16.7: called after each FAILED drain with the running consecutive-failure count (1, 2, 3…),
+   * reset to 0 by the next `"ok"`. The mirror of `onSync`, and the reason it exists is that
+   * `consecutiveSyncFailures` was previously reported ONLY through the heartbeat — the one channel
+   * that cannot arrive when the archive is what is down.
+   *
+   * The loop makes no decision from it: it does not throttle, does not write a file and does not
+   * stop. The engine applies the threshold and the re-stamp policy, because those are POLICY and
+   * this is a loop.
+   *
+   * NOT called for a `"stop"` (401) outcome — that is the fatal path, which has `onStop`.
+   */
+  onSyncFailure?: (consecutive: number) => void;
+  /**
    * M9 heartbeat (opt-in): when `collectorVersion` is set, the loop sends a throttled,
    * best-effort liveness ping each iteration (queue backlog + version). Omitting it
    * disables heartbeats — existing callers/tests are unaffected.
@@ -203,13 +216,46 @@ export async function runSyncLoop(
     }
     if (signal.aborted) break;
     if (outcome === "ok") {
-      consecutiveSyncFailures = 0; // archive reachable — clear the failure streak
+      // M16 16.7 — RESET ONLY ON A DRAIN THAT ACTUALLY DELIVERED. This read
+      // `consecutiveSyncFailures = 0` on every "ok", and that made the counter unable to count.
+      //
+      // `syncOnce` returns "ok" for an empty claim WITHOUT posting anything, and a FAILED item is
+      // backed off exponentially (1 s → 2 s → … → 30 s, `queue-store.ts`) while `retryMs` stays at
+      // 1 s. So from the second failure onward the next claim finds nothing due, returns "ok", and
+      // zeroed the streak. Measured, not theorised: a loop against a permanently-503 archive
+      // produced the sequence 1, 1, 1, … forever instead of 1, 2, 3.
+      //
+      // The consequence was not subtle. `ARCHIVE_UNREACHABLE_MIN_FAILURES` is 3, and this counter
+      // is the ONLY input to it — via the heartbeat for the server-side `archive.unreachable`
+      // alert, and (since 16.7) via `onSyncFailure` for the collector's own durable fault record.
+      // A threshold of 3 against a value that oscillates between 0 and 1 is a detector that cannot
+      // fire, so a sustained outage was undetectable by BOTH surfaces.
+      //
+      // This is 16.6's F1 lesson applied one layer up. `cli.ts` already refuses to CLEAR the fault
+      // record on `delivered === 0` for exactly this reason ("only bytes the archive accepted prove
+      // it is reachable"); the counter that OPENS the record was still treating a no-op drain as
+      // proof. Both halves now use the same evidence.
+      //
+      // A non-zero streak implies there are pending items (the counter only grows from failed
+      // POSTs, and a failed item stays queued), so the first drain that reaches a recovered archive
+      // delivers and resets — the counter cannot get stuck high on a genuinely healthy machine.
+      if (delivered > 0) consecutiveSyncFailures = 0;
       deps.onSync?.((deps.now ?? (() => new Date()))().toISOString(), delivered);
       // Empty/clean drain — idle. (A non-empty 2xx returns "ok" too; we still
       // idle briefly, then the next claim pulls any remaining batch.)
       await delay(idleMs, signal);
     } else {
       consecutiveSyncFailures += 1; // network/5xx — couldn't reach the archive
+      // M16 16.7: report the streak so the engine can write a DURABLE record of an unreachable
+      // archive. GUARDED for the reason `capture-engine.ts` guards `onFatal` and `heartbeat.ts`
+      // guards `onError` (the F-16.3-2 shape): the callback writes a file, and a throw here would
+      // unwind the whole sync loop through a rejected promise — turning "the archive is down" into
+      // "capture stopped", in the component whose job is to keep queueing until it comes back.
+      try {
+        deps.onSyncFailure?.(consecutiveSyncFailures);
+      } catch {
+        /* a failure reporter that throws must not become the outage it was reporting */
+      }
       // retry — short delay; due-time enforced by next_attempt_at.
       await delay(retryMs, signal);
     }
