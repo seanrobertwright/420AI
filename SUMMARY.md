@@ -97,14 +97,14 @@ models); the scope conversation asked for one strategic direction and the answer
 (_who the next milestone is for_ — the answer being that this product is going to be a SaaS, so the
 tenancy foundation is built now, with one install and zero customers).
 
-**M16 (Dogfood instrumentation & data trust)** is the **ACTIVE** milestone — promoted 2026-08-02 by
+**M16 (Dogfood instrumentation & data trust)** is **DONE** `2026-08-07` — promoted 2026-08-02 by
 the deferral audit + scope conversation, on the same criterion and a different answer: **Sean alone,
-for a 24-week research period**. It builds only what makes that period's evidence trustworthy — the
+for a 24-week research period**. It built only what makes that period's evidence trustworthy — the
 **P0** backlog of
 [`.agents/supplemental docs/research-analysis-plan.md`](./.agents/supplemental%20docs/research-analysis-plan.md)
-§7 — sliced **16.0–16.4**. See
+§7 — sliced **16.0–16.7**. See
 [`.agents/plans/m16-dogfood-instrumentation.md`](./.agents/plans/m16-dogfood-instrumentation.md).
-**M17–M20 remain committed and unsequenced.**
+**No milestone is currently ACTIVE; M17–M20 remain committed and unsequenced.**
 
 > **Renumbered 2026-08-02 (slice 16.0).** **Cloud-hosted SaaS was `M16`; it is now `M20`**, back in
 > the unsequenced bucket with its scope unchanged (and still inheriting D-15.10-1's multi-org
@@ -273,7 +273,7 @@ through the deferral-audit + scope conversation that produced M12/M13/M14. Full 
   **15.8** ✅ MFA (TOTP + recovery codes) · **15.9** ✅ API keys + retire `ADMIN_TOKEN` ·
   **15.10** ✅ Team surfaces + audit table (PR #70).
   **15.0 gates 15.3**; 15.5 gates 15.7; 15.6 gates 15.8.
-- **M16 — Dogfood instrumentation & data trust** is **IN PROGRESS** (promoted + redefined
+- **M16 — Dogfood instrumentation & data trust** is **DONE** `2026-08-07` (promoted + redefined
   2026-08-02;
   [`.agents/plans/m16-dogfood-instrumentation.md`](./.agents/plans/m16-dogfood-instrumentation.md)).
   The engineering half of the 24-week research period defined in
@@ -313,9 +313,20 @@ through the deferral-audit + scope conversation that produced M12/M13/M14. Full 
   absence is not a state the projection represents. The signal existed the whole time —
   `ingest_auth_failures` rows were being written on every rejected token and `deriveAuthFailureAlerts`
   fires at ≥3 in 15 min. Hence the family's fourth member: **`derivable ≠ detected`**.
-  **M16 remains IN PROGRESS**: the one open box is _four consecutive weekly scorecards in
-  `.agents/research/weekly/`_, which is blocked by the calendar rather than by work — the scaffold
-  landed 2026-08-02, so the earliest it can close is late August.
+  **M16 closed `2026-08-07` with one box unticked, deliberately** (**D-M16-2**). That box —
+  _four consecutive weekly scorecards in `.agents/research/weekly/`_ — was never engineering work:
+  the scaffold and the instrument both landed (16.0, 16.3), and what remained was four calendar
+  weeks of running them, which no amount of building shortens. `.agents/research/weekly/` therefore
+  still holds only `TEMPLATE.md`, and this entry says so rather than implying otherwise. Two reasons
+  it is retired as a completion gate instead of held open. **(a)** It is a **measurement** criterion
+  wearing a milestone's clothes: it gates when the evidence becomes trustworthy, not when the code
+  that produces the evidence exists — and only the second is a thing a milestone can finish.
+  **(b)** The measurement/testing strategy it belongs to is sequenced **after all milestones ship**,
+  so holding M16 open would block M17–M20 on a clock rather than on work. The scorecards remain
+  owed to the research period and are tracked there, in the research plan's own §3 artifact set —
+  moved, not dropped. The honest reading of M16 is therefore: **the instrumentation is built and
+  verified; it has not yet been run for four weeks.** Do not later re-read this line as a claim
+  that it has.
 - **M17 — Cross-platform collectors.** macOS + Linux (V1/M11 are Windows-first) + portable signed
   installers/auto-update. _Most parallelizable — best candidate to run alongside another milestone._
 - **M18 — Advanced intelligence & automation.** Semantic/vector search, scheduled _analysis_,
@@ -465,7 +476,8 @@ original M10 "hardening bundle" (exports, catalog signing, replay metadata, pers
 
 - [x] **M15 Multi-user & access control — DONE `2026-08-02`** (all eleven slices, 15.0-15.10;
       15.10 was the last).
-      **NEXT: M16 (dogfood instrumentation & data trust) is ACTIVE; M17–M20 remain committed and
+      **NEXT: M16 (dogfood instrumentation & data trust) was promoted next and is now DONE
+      `2026-08-07`; M17–M20 remain committed and
       unsequenced** — each of those four still needs its own deferral-audit + scope conversation
       before it is executable, and **M20** (Cloud-hosted SaaS, renumbered from M16 on 2026-08-02)
       additionally inherits D-15.10-1's deferred
@@ -840,7 +852,12 @@ enforced`, the sibling of `skipped ≠ passed`. Closes the Spike-6 hole: a cross
         surfaces that stay headless but curl-reachable (gated self-signup, password-reset pages, an
         active-sessions list, MFA QR — the last held by the slice's no-new-dependency rule).
 
-- [ ] **M16 Dogfood instrumentation & data trust — IN PROGRESS** (promoted + redefined 2026-08-02 by
+- [x] **M16 Dogfood instrumentation & data trust — DONE `2026-08-07`** (all eight slices, 16.0–16.7;
+      16.7 was the last). Closed with the _four consecutive weekly scorecards_ box deliberately
+      unticked — see **D-M16-2** in §0: it is a measurement criterion gated by the calendar, and the
+      measurement/testing strategy is sequenced after all milestones ship. **NEXT: no milestone is
+      ACTIVE; M17–M20 remain committed and unsequenced**, each still needing its own deferral-audit +
+      scope conversation before it is executable. (Promoted + redefined 2026-08-02 by
       the deferral-audit + scope conversation that produced M12/M13/M14/M15, on the same criterion —
       _who the next milestone is for_ — with a different answer: **Sean alone, for a 24-week research
       period**). It builds the §7 **P0** backlog of
