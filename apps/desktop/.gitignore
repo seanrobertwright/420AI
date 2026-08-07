@@ -8,5 +8,16 @@ src-tauri/gen/
 # The SEA sidecar is BUILT by build-sea.mjs, never committed (88 MB).
 src-tauri/binaries/*.exe
 
-# Generated app icons (produced locally by `cargo tauri icon`).
-src-tauri/icons/
+# Generated app icons (produced locally by `cargo tauri icon`). The five files
+# tauri.conf.json references are TRACKED: tauri_build's generate_context! (Linux/macOS)
+# and its Windows resource step hard-require them, so an ignore of the whole dir makes
+# `cargo check` fail on every machine but the one that generated them — measured by the
+# 17.0 CI matrix, where all five lanes failed on exactly this. The rest (android/, ios/,
+# Square* store logos) stay ignored until a slice needs them.
+# NOTE: `dir/` would forbid re-including files inside it — hence `dir/*` + negations.
+src-tauri/icons/*
+!src-tauri/icons/32x32.png
+!src-tauri/icons/128x128.png
+!src-tauri/icons/128x128@2x.png
+!src-tauri/icons/icon.icns
+!src-tauri/icons/icon.ico

@@ -61,7 +61,7 @@ Ranked, from the reconnaissance sweep:
 | 6   | Updater feed carries only `windows-x86_64`                 | `docs/guide/operations.md:360-368`, `tauri.conf.json:42-45`  | An installed macOS/Linux build's `check()` finds no platform entry → auto-update silently never fires                 |
 | 7   | The entire service install is WinSW                        | `apps/collector/service/420ai-collector.xml`, `service/README.md` | No launchd/systemd equivalent exists; roll-by-size logging has **no** launchd counterpart                        |
 | 8   | No macOS notarization story exists repo-wide               | absent; policy at `docs/PRD.md:812-813`                      | "Parked" is survivable on Windows (SmartScreen warns once) but Gatekeeper **hard-blocks** an unnotarized download      |
-| 9   | CI has never executed on macOS or Windows                  | `pr-checks.yml:13`, `repo-health.yml:27`                     | No matrix; `.cargo/config.toml:14` confirms "CI (Linux) never builds this crate" — zero regression signal             |
+| 9   | ~~CI has never executed on macOS or Windows~~ **RETIRED by 17.0** | `.github/workflows/cross-platform.yml`                | Five-lane matrix now runs typecheck + vitest + `cargo check` on every PR — see "Measured by 17.0" below               |
 | 10  | Case-sensitive FS + un-normalized dedup keys               | `watcher/file-watcher.ts:71`                                 | ext4 is case-sensitive where Windows/APFS-default are not; no `toLowerCase()` normalization exists _(impact inferred)_ |
 
 **Second-order effect worth naming**, because it will look like a bug report from users:
@@ -71,13 +71,41 @@ fingerprint is **environment-dependent rather than argument-dependent** — so e
 install trips the §10.4 capture-surface-change gate and marks Cursor `needs-approval` for no real
 reason. Fixing #1 and #2 fixes this; not fixing it makes it a support burden.
 
+### Measured by 17.0 (run 31178775260, PR #82, 2026-08-07) — measurement, not inference
+
+Five standard GitHub-hosted lanes, every push/PR to `main`. All cells below are read from the run:
+
+| Lane                          | typecheck (`tsc -b --force`) | `npx vitest run`             | `cargo check --locked` |
+| ----------------------------- | ---------------------------- | ---------------------------- | ---------------------- |
+| `ubuntu-latest` (linux-x64)   | ✅ 10 s                      | ✅ 1034 passed \| 680 skipped | ✅ 81 s                |
+| `ubuntu-24.04-arm`            | ✅ 10 s                      | ✅ 1034 passed \| 680 skipped | ✅ 76 s                |
+| `macos-15-intel`              | ✅ 16 s                      | ✅ 1034 passed \| 680 skipped | ✅ 209 s               |
+| `macos-latest` (arm64)        | ✅ 13 s                      | ✅ 1034 passed \| 680 skipped | ✅ 120 s               |
+| `windows-latest`              | ✅ 12 s                      | ✅ 1034 passed \| 680 skipped | ✅ 177 s               |
+
+**The 680 skipped are the Postgres-gated `*.int.test.ts` layer (61 files) — `skipped ≠ passed`.**
+These lanes have no DB; that layer is proven only by `repo-health.yml` on `ubuntu-latest`. Any
+reading of this table as "all platforms fully green" is a misreading.
+
+Two findings from the first (all-red) run, both worth more than the green table:
+
+1. **`apps/desktop/.gitignore` ignored `src-tauri/icons/` wholesale**, so every checkout but the
+   authoring machine was missing files `tauri_build` hard-requires — all five lanes failed
+   `cargo check` identically (Windows in the winres step on `icon.ico`; Linux/macOS in
+   `tauri::generate_context!` on `32x32.png`). Fixed in 17.0 (the five `tauri.conf.json` icons are
+   now tracked): this was CI-infrastructure, not product code, and with it broken the matrix could
+   measure nothing platform-specific.
+2. **The anticipated `keyring` red cell did NOT materialize** — `keyring v3.6.3` compiles clean on
+   all five lanes. Row 3 above is therefore a **runtime** concern only (the off-Windows mock
+   backend persists nothing); 17.5 still owns it, but no compile barrier exists.
+
 ---
 
 ## Slices (dependency order)
 
 | #        | Slice                                    | Size | Confidence | Content                                                                                                                                                                                                                                                                                                              |
 | -------- | ---------------------------------------- | ---- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **17.0** | Truth: CI matrix + spike protocol        | M    | 90%        | Expand both workflows to `{ubuntu-latest, macos-13 (Intel), macos-latest (ARM), windows-latest}`; build the Rust/Tauri crate in CI for the first time. Write 17.2's measurement protocol so it runs the day hardware lands. Output is a **table of what is green where**, replacing every inference above with a measurement. **No product code change.** |
+| **17.0** | Truth: CI matrix + spike protocol        | M    | 90%        | Add a `cross-platform.yml` matrix over `{ubuntu-latest, ubuntu-24.04-arm, macos-15-intel, macos-latest (ARM), windows-latest}`; build the Rust/Tauri crate in CI for the first time. Write 17.2's measurement protocol so it runs the day hardware lands. Output is a **table of what is green where**, replacing every inference above with a measurement. **No product code change.** See `.agents/plans/m17-slice0-cross-platform-ci-matrix.md`. |
 | **17.1** | Connector portability                    | S–M  | 90%        | Fix #1 (`APPDATA`) and #2 (INC-2026-01) plus the approval-fingerprint knock-on. Audit every `watchGlobs(home)`/`sources(home)` implementation against the `connector.ts` contract. Windows-verifiable today; no hardware needed.                                                                                        |
 | **17.2** | **SPIKE** — truth on real hardware       | M    | _n/a_      | Clean-room runs on Intel Mac, Linux x86_64 and Linux arm64, mirroring 16.0's timed deploy. **Measures; fixes nothing** (D-M17-5). Re-scores 17.3–17.6 before any of them is planned.                                                                                                                                   |
 | **17.3** | Multi-target SEA build                   | M    | 65% →      | Un-pin `build-sea.mjs`'s triple. SEA copies `process.execPath`, so it is **build-on-target, not cross-compilable** — this slice depends structurally on 17.0's matrix existing.                                                                                                                                        |
@@ -189,9 +217,19 @@ approval-fingerprint knock-on; nothing else is fixed before the spike.
 4. **The maintainer builds and verifies alone**, on hardware chosen to be convenient. Same shape as
    M16 Risk 2. Mitigation: CI runs the matrix on hardware nobody chose, and 17.7's UAT lanes are
    written per-platform so a skipped lane is visible as a skipped lane.
-5. **`macos-13` (Intel) runner deprecation.** GitHub retires older macOS images on a rolling
-   schedule; an Intel lane can disappear mid-milestone. Mitigation: 17.0 pins image labels
-   explicitly and 17.7 re-checks them at sign-off.
+5. **macOS runner-image churn.** GitHub retires macOS images on a rolling schedule, and this already
+   bit the plan once: `macos-13` was named here at promotion time and **no longer exists** — verified
+   2026-08-07 against `actions/runner-images`, which now lists Intel as `macos-15-intel` /
+   `macos-26-intel` and marks the macOS 14 images deprecated. Mitigation: 17.0 pins labels
+   explicitly, and 17.7 re-verifies every label against `actions/runner-images` at sign-off rather
+   than trusting this document.
+
+**Correction folded in from 17.0 planning (2026-08-07), because it strengthens D-M17-3:**
+`ubuntu-24.04-arm` is a **standard** GitHub-hosted runner, and standard runners are free and
+unlimited on public repositories — so `linux-arm64` gets **native, free CI** rather than the
+cross-compile-and-hope treatment this plan assumed. The Intel macOS labels (`macos-15-intel`) are
+standard too, so D-M17-4's "free ARM Mac runners" premise holds for the Intel half as well. Only the
+`-large` / `-xlarge` variants are the paid larger-runner tier; **no lane may use them.**
 
 ---
 
