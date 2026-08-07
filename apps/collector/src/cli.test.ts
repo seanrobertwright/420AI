@@ -11,7 +11,13 @@ import {
   watchExitCode,
   type WatchRunResult,
 } from "./cli.js";
-import { faultPathFor, loadFault, saveFault, type CaptureFault } from "./fault.js";
+import {
+  faultPathFor,
+  loadFault,
+  saveFault,
+  type DegradedCaptureFault,
+  type FatalCaptureFault,
+} from "./fault.js";
 import type { CaptureEngineOptions } from "./capture-engine.js";
 import type { ConnectorConfig } from "./connectors/connector-config.js";
 import type { ConnectorApprovals } from "./connectors/connector-approvals.js";
@@ -202,7 +208,7 @@ describe("runWatch fatal fault (M16 16.6 — the C.11 lesson, applied to the dae
     return { home, result };
   };
 
-  const fault: CaptureFault = {
+  const fault: FatalCaptureFault = {
     code: "auth_revoked",
     message: "ingest returned 401 — token revoked.",
     since: "2026-08-06T12:00:00.000Z",
@@ -368,7 +374,7 @@ describe("runWatch fatal fault (M16 16.6 — the C.11 lesson, applied to the dae
  * The mapper is extracted for exactly the reason `pairSummary` / `formatCliError` were.
  */
 describe("watchExitCode (M16 16.6 — exit 1 on a fatal 401, 0 on SIGINT)", () => {
-  const fault: CaptureFault = {
+  const fault: FatalCaptureFault = {
     code: "auth_revoked",
     message: "ingest returned 401 — token revoked.",
     since: "2026-08-06T12:00:00.000Z",
@@ -446,7 +452,7 @@ describe("runWatch onDegraded (M16 16.7 — degraded is NOT fatal)", () => {
     }
   });
 
-  const degraded: CaptureFault = {
+  const degraded: DegradedCaptureFault = {
     code: "archive_unreachable",
     message: "cannot reach the archive (3 consecutive sync failures). Capture is STILL RUNNING",
     since: "2026-08-06T12:00:00.000Z",

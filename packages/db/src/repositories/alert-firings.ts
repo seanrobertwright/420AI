@@ -270,15 +270,22 @@ export async function reconcileAlertFirings(
  * Must run under `withDeployment` (or the owner handle in a test): an org context can SEE these
  * rows but the write is the deployment's, not any tenant's. Passing `[]` resolves every open
  * deployment firing and leaves every org row untouched — that asymmetry is the point.
+ *
+ * RETURNS NOTHING, deliberately asymmetric with `reconcileAlertFirings`. That sibling returns the
+ * org's list because the list IS the snapshot's `alertFirings` — a read the caller needs anyway.
+ * Nothing wants this one: the wire list comes from `listAlertFirings`, which already unions the
+ * deployment rows into the org read. Returning it would be a second `SELECT` per tick that both
+ * call sites discard — and in the throttled-but-diverged path, the second `listDeploymentFirings`
+ * inside the same transaction. A signature promising a value the codebase never wants is the same
+ * shape as a parameter accepted and ignored (see `ackAlertFiring`).
  */
 export async function reconcileDeploymentFirings(
   db: DbClient,
   userId: string,
   alerts: OperationalAlert[],
   now: Date,
-): Promise<AlertFiring[]> {
+): Promise<void> {
   await reconcileFirings(db, { kind: "deployment" }, userId, alerts, now);
-  return listDeploymentFirings(db, now);
 }
 
 /** The open + recently-resolved window every list read shares. */
@@ -375,19 +382,22 @@ export async function ackAlertFiring(
   id: string,
   now: Date,
 ): Promise<AlertFiring | undefined> {
-  const [updated] = await db
+  // ONE statement: `RETURNING` the full column list rather than an id followed by a re-`SELECT`.
+  // The two deliverers below already do this (16.6's atomic claim needs it), which left this as the
+  // only update-then-select in the file — and, more to the point, the only read with NO scope
+  // predicate at all: the re-select was `where(eq(id))` alone, leaning entirely on RLS against
+  // D-M15-3 ("RLS backstops application scoping, it does not replace it"). Not exploitable as it
+  // stood (the UPDATE above had just proved the row was in scope, in the same transaction), but it
+  // is exactly the call site that survives a later refactor onto an unwrapped handle. Collapsing it
+  // removes the unscoped read rather than adding a predicate to it. Semantics are identical —
+  // `RETURNING` yields the post-update row, which is what the re-select was fetching.
+  const [row] = await db
     .update(alertFirings)
     .set({ ackedAt: now })
     .where(
       and(eq(alertFirings.id, id), or(eq(alertFirings.orgId, orgId), isNull(alertFirings.orgId))),
     )
-    .returning({ id: alertFirings.id });
-  if (!updated) return undefined;
-  const [row] = await db
-    .select(firingColumns)
-    .from(alertFirings)
-    .where(eq(alertFirings.id, id))
-    .limit(1);
+    .returning(firingColumns);
   return row ? toFiring(row) : undefined;
 }
 

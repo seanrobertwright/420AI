@@ -40,7 +40,14 @@ import {
   NotPairedError,
   type Credentials,
 } from "./identity.js";
-import { faultPathFor, saveFault, loadFault, clearFault, type CaptureFault } from "./fault.js";
+import {
+  faultPathFor,
+  saveFault,
+  loadFault,
+  clearFault,
+  describeFault,
+  type FatalCaptureFault,
+} from "./fault.js";
 import { QueueStore, type QueueStats, type SyncOutcome } from "./queue/queue-store.js";
 import { runCaptureEngine } from "./capture-engine.js";
 import { resolveConnectorStates } from "./connectors/connector-info.js";
@@ -189,7 +196,7 @@ function resolveCreds(opts: { url?: string; token?: string; home?: string }): Cr
  */
 export interface WatchRunResult {
   /** Set iff capture stopped for a fatal, non-recoverable reason (today: a revoked token). */
-  fault?: CaptureFault;
+  fault?: FatalCaptureFault;
   /**
    * True iff `fault` was successfully written to disk. A LocalSystem service can plausibly fail the
    * write (read-only disk, ENOSPC, EPERM), and the entrypoint must not then print "Recorded at
@@ -327,18 +334,13 @@ export async function runWatch(opts: {
     // which tells an operator that capture stopped when an `archive_unreachable` record means the
     // opposite — capture kept running and the queue buffered. Getting that backwards on the one
     // message this feature exists to emit is worse than saying nothing.
-    const kind =
-      existingFault.code === "archive_unreachable"
-        ? "a DEGRADED capture fault (capture kept running; the archive was unreachable)"
-        : "a FATAL capture fault (capture had stopped)";
-    opts.logger?.(
-      `${kind} is on record at ${faultPath}: ${existingFault.message} ` +
-        `(since ${existingFault.since}` +
-        (existingFault.lastObservedAt ? `, last observed ${existingFault.lastObservedAt}` : "") +
-        `). It clears on the next sync that actually delivers.`,
-    );
+    //
+    // The sentence lives in `fault.ts` (`describeFault`) rather than here: `serve.ts` needs the
+    // identical wording, the severity map it branches on is exhaustive over `CaptureFaultCode`, and
+    // two hand-maintained copies of an operator-facing string is one copy too many.
+    opts.logger?.(describeFault(existingFault, faultPath));
   }
-  let fault: CaptureFault | undefined;
+  let fault: FatalCaptureFault | undefined;
   let recorded = false;
 
   await (opts.runEngine ?? runCaptureEngine)({

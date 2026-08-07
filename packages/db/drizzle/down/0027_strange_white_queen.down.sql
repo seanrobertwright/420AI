@@ -52,7 +52,13 @@ CREATE POLICY "alert_firings_org_isolation" ON "alert_firings" USING (org_id = n
 --    partial — but it leaves the operator hand-writing SQL during an incident, which is the worst
 --    possible time. Same shape as step 1's ordering trap: a down migration must re-derive the
 --    property its target index needs, never inherit the forward migration's.
-UPDATE "alert_firings" SET "status" = 'resolved', "resolved_at" = now()
+--
+--    `resolve_delivered_at` is stamped for the same reason 0027's steps 3 and 4 stamp it: without
+--    it, `deliverResolvedFirings` (which has no age filter) would send an `alert.resolved` notice
+--    for every already-delivered row this collapses — a false all-clear for a condition whose
+--    surviving row is still open, emitted on the first tick after a ROLLBACK, i.e. at the worst
+--    possible moment. These resolutions are this script's bookkeeping, not an observation.
+UPDATE "alert_firings" SET "status" = 'resolved', "resolved_at" = now(), "resolve_delivered_at" = now()
  WHERE "status" = 'open' AND "id" NOT IN (
    SELECT DISTINCT ON ("user_id", "alert_key") "id" FROM "alert_firings"
     WHERE "status" = 'open'

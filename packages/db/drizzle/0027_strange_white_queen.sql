@@ -64,15 +64,34 @@ UPDATE "alert_firings" SET "org_id" = NULL
       AND split_part("alert_key", ':', 1) IN ('catalog.update_requires_approval','ingest.auth_failure')
     ORDER BY "alert_key", "first_fired_at" ASC, "id" ASC);--> statement-breakpoint
 
+-- STEPS 3 AND 4 STAMP `resolve_delivered_at`, AND THAT IS NOT BOOKKEEPING TIDINESS — IT IS THE
+-- DIFFERENCE BETWEEN A SILENT MIGRATION AND A BURST OF FALSE ALL-CLEARS.
+--
+-- `deliverResolvedFirings` claims exactly the shape these two UPDATEs would otherwise leave behind:
+--   status='resolved' AND resolved_at IS NOT NULL AND delivery_attempted_at IS NOT NULL
+--   AND resolve_delivered_at IS NULL
+-- and — unlike every list read — it carries NO age or window filter whatsoever. So the first
+-- `GET /v1/monitor`, SSE frame or evaluator tick after this migration would send one
+-- `alert.resolved` notice for EVERY row deduped below that had already been delivered.
+--
+-- The notices would be lies. A row resolved by step 3 is a duplicate of a condition whose surviving
+-- row (promoted to the deployment scope by step 2) is STILL OPEN — so the operator gets
+-- "catalog.update_requires_approval RESOLVED" for a catalog that is still pending, alongside the
+-- open firing for the same condition. Step 4 has the identical shape one scope down.
+--
+-- These resolutions are the migration's OWN bookkeeping, not an observation that anything cleared,
+-- so they are marked already-notified. That is the honest reading of `resolve_delivered_at`: "no
+-- resolve notice is owed for this row."
+--
 -- 3. Resolve the per-org duplicates of those global conditions. They are re-derivable projections
 --    ("events disposable", doubly so for a projection of a projection) and the surviving row from
 --    step 2 carries the original `first_fired_at`, so no history is lost.
-UPDATE "alert_firings" SET "status" = 'resolved', "resolved_at" = now()
+UPDATE "alert_firings" SET "status" = 'resolved', "resolved_at" = now(), "resolve_delivered_at" = now()
  WHERE "status" = 'open' AND "org_id" IS NOT NULL
    AND split_part("alert_key", ':', 1) IN ('catalog.update_requires_approval','ingest.auth_failure');--> statement-breakpoint
 
 -- 4. Collapse per-USER duplicates WITHIN an org (defect 2): keep the oldest, resolve the rest.
-UPDATE "alert_firings" SET "status" = 'resolved', "resolved_at" = now()
+UPDATE "alert_firings" SET "status" = 'resolved', "resolved_at" = now(), "resolve_delivered_at" = now()
  WHERE "status" = 'open' AND "org_id" IS NOT NULL AND "id" NOT IN (
    SELECT DISTINCT ON ("org_id", "alert_key") "id" FROM "alert_firings"
     WHERE "status" = 'open' AND "org_id" IS NOT NULL

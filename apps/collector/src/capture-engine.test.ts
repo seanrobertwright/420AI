@@ -3,7 +3,12 @@ import { ARCHIVE_UNREACHABLE_MIN_FAILURES } from "@420ai/shared";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { drainBeforeExit, pollLoop, runCaptureEngine } from "./capture-engine.js";
+import {
+  degradedStampDecision,
+  drainBeforeExit,
+  pollLoop,
+  runCaptureEngine,
+} from "./capture-engine.js";
 import { QueueStore, type SyncOutcome } from "./queue/queue-store.js";
 import { IngestHttpError } from "./ingest-client.js";
 import type { CaptureFault } from "./fault.js";
@@ -15,6 +20,65 @@ import type { Connector } from "./connectors/connector.js";
  * so a ~200k-item queue hung exit for minutes and held the SQLite handle open. drainBeforeExit
  * caps the drain by a wall-clock deadline so exit is always prompt; leftovers stay queued.
  */
+/**
+ * M16 16.7 (prp-review) — the SPARSE RE-STAMP policy, tested where it can actually fail.
+ *
+ * The engine-level test below asserts `seen.length < failures` over a 20 s window, which is true
+ * (1 < 5) — and stays true if `DEGRADED_RESTAMP_EVERY` were 1 (3 < 5). It never observes a
+ * re-stamp, because reaching one costs 60 backed-off drains ~ half an hour at the queue's 30 s
+ * backoff cap. So the property D-16.7-9 exists to guarantee was pinned by nothing at all. Driving
+ * the pure decision directly is the only way to check it in milliseconds.
+ */
+describe("degradedStampDecision (M16 16.7 — write on the crossing, then sparsely)", () => {
+  /** Replay a whole failure streak through the policy, collecting the failures that stamped. */
+  function stampsOver(lastConsecutive: number): { at: number; crossing: boolean }[] {
+    const stamps: { at: number; crossing: boolean }[] = [];
+    let sinceStamp = 0;
+    for (let n = 1; n <= lastConsecutive; n += 1) {
+      const d = degradedStampDecision(n, sinceStamp);
+      sinceStamp = d.failuresSinceStamp;
+      if (d.stamp) stamps.push({ at: n, crossing: d.crossing });
+    }
+    return stamps;
+  }
+
+  it("writes NOTHING below the threshold", () => {
+    expect(stampsOver(ARCHIVE_UNREACHABLE_MIN_FAILURES - 1)).toEqual([]);
+  });
+
+  it("writes exactly once AT the threshold, and marks it the crossing", () => {
+    expect(stampsOver(ARCHIVE_UNREACHABLE_MIN_FAILURES)).toEqual([
+      { at: ARCHIVE_UNREACHABLE_MIN_FAILURES, crossing: true },
+    ]);
+  });
+
+  it("then re-stamps every 60th failure — NOT every failure (the assertion that was missing)", () => {
+    // THIS is the test the engine-level one could not be: it observes real re-stamps and would fail
+    // loudly if `DEGRADED_RESTAMP_EVERY` were changed to 1 (which would produce ~121 stamps here).
+    const stamps = stampsOver(ARCHIVE_UNREACHABLE_MIN_FAILURES + 120);
+    expect(stamps).toEqual([
+      { at: ARCHIVE_UNREACHABLE_MIN_FAILURES, crossing: true },
+      { at: ARCHIVE_UNREACHABLE_MIN_FAILURES + 60, crossing: false },
+      { at: ARCHIVE_UNREACHABLE_MIN_FAILURES + 120, crossing: false },
+    ]);
+    // Only the crossing logs; the re-stamps are silent by design (one operator line per outage).
+    expect(stamps.filter((s) => s.crossing)).toHaveLength(1);
+  });
+
+  it("a streak that RECOVERS and re-crosses announces again immediately", () => {
+    // The engine resets `consecutive` via the sync loop, not this function; what matters here is
+    // that a fresh crossing stamps without waiting out any remaining re-stamp interval.
+    const first = degradedStampDecision(ARCHIVE_UNREACHABLE_MIN_FAILURES, 0);
+    expect(first).toEqual({ stamp: true, crossing: true, failuresSinceStamp: 0 });
+    const mid = degradedStampDecision(ARCHIVE_UNREACHABLE_MIN_FAILURES + 1, 0);
+    expect(mid.stamp).toBe(false);
+    // …archive recovers, streak resets to 0, then fails 3 more times. `failuresSinceStamp` is
+    // whatever it was (1) — the crossing must still stamp, and must reset the counter.
+    const again = degradedStampDecision(ARCHIVE_UNREACHABLE_MIN_FAILURES, mid.failuresSinceStamp);
+    expect(again).toEqual({ stamp: true, crossing: true, failuresSinceStamp: 0 });
+  });
+});
+
 describe("drainBeforeExit (C.8 — bounded shutdown drain)", () => {
   it("stops at the deadline instead of draining a huge backlog forever", async () => {
     let calls = 0;

@@ -126,30 +126,6 @@ export function deriveDeploymentAlertSet(inputs: DeploymentAlertInputs): Operati
 }
 
 /**
- * True when the set of OPEN firing keys differs from the set of derived alert keys — i.e. an alert
- * has appeared or cleared since the last reconcile. Compared by `alertKey`, the same key the
- * partial unique index uses, so this asks exactly the question the reconcile would answer.
- * Recently-RESOLVED firings are ignored: they linger in the list as confirmation by design and are
- * not evidence of a change.
- *
- * M16 16.6 — moved here from `routes/monitor.ts` (behaviour identical) so the background evaluator
- * can make the SAME throttling decision the route does. That matters more than code reuse: the
- * throttle exists to stop a steady-state write, but skipping a reconcile when the derived set has
- * genuinely CHANGED would leave a newly-derived alert with no firing row — un-ackable and
- * undelivered — on the one path whose whole job is to say something broke. Both callers must
- * therefore apply "throttled, UNLESS the answer would differ", and having two copies of that
- * predicate is exactly the drift `deriveAlertSet` above exists to prevent.
- *
- * M16 16.7 — CALLERS MUST PASS A SCOPE-FILTERED FIRING LIST, and this is the subtle way the slice
- * can silently disable the throttle. `listAlertFirings` now returns an org's rows UNIONED with the
- * deployment's (it must — the dashboard renders that list and nothing else). Feed that union in
- * while deriving only the seven org codes and the key sets differ on every tick forever, so
- * `openFiringsDiverge` returns true forever, so the reconcile runs on every SSE frame — exactly
- * the steady-state write M15 15.4 audit B.4 added the throttle to remove, silently restored.
- * Filter on `f.scope` before comparing: org callers pass `scope === "org"`, the deployment caller
- * passes the deployment list (`listDeploymentFirings` returns only those).
- */
-/**
  * M15 15.4 audit B.4 / M16 16.7 — the KEY under which a reconcile's last-run instant is recorded in
  * `app.reconcileLastRunAt`.
  *
@@ -179,6 +155,30 @@ export function reconcileThrottleKey(orgId: string, userId: string): string {
  */
 export const DEPLOYMENT_THROTTLE_KEY = "*:deployment";
 
+/**
+ * True when the set of OPEN firing keys differs from the set of derived alert keys — i.e. an alert
+ * has appeared or cleared since the last reconcile. Compared by `alertKey`, the same key the
+ * partial unique index uses, so this asks exactly the question the reconcile would answer.
+ * Recently-RESOLVED firings are ignored: they linger in the list as confirmation by design and are
+ * not evidence of a change.
+ *
+ * M16 16.6 — moved here from `routes/monitor.ts` (behaviour identical) so the background evaluator
+ * can make the SAME throttling decision the route does. That matters more than code reuse: the
+ * throttle exists to stop a steady-state write, but skipping a reconcile when the derived set has
+ * genuinely CHANGED would leave a newly-derived alert with no firing row — un-ackable and
+ * undelivered — on the one path whose whole job is to say something broke. Both callers must
+ * therefore apply "throttled, UNLESS the answer would differ", and having two copies of that
+ * predicate is exactly the drift `deriveAlertSet` above exists to prevent.
+ *
+ * M16 16.7 — CALLERS MUST PASS A SCOPE-FILTERED FIRING LIST, and this is the subtle way the slice
+ * can silently disable the throttle. `listAlertFirings` now returns an org's rows UNIONED with the
+ * deployment's (it must — the dashboard renders that list and nothing else). Feed that union in
+ * while deriving only the seven org codes and the key sets differ on every tick forever, so
+ * `openFiringsDiverge` returns true forever, so the reconcile runs on every SSE frame — exactly
+ * the steady-state write M15 15.4 audit B.4 added the throttle to remove, silently restored.
+ * Filter on `f.scope` before comparing: org callers pass `scope === "org"`, the deployment caller
+ * passes the deployment list (`listDeploymentFirings` returns only those).
+ */
 export function openFiringsDiverge(alerts: OperationalAlert[], firings: AlertFiring[]): boolean {
   const open = new Set(firings.filter((f) => f.status === "open").map((f) => f.alertKey));
   const derived = new Set(alerts.map(alertKey));

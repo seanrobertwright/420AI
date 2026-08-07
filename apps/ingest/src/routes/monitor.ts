@@ -117,15 +117,20 @@ async function buildSnapshot(
     alerts: [],
     alertFirings: [],
   };
-  // Frozen deriveAlerts (D2) + the sibling backlog-growing + the §20 catalog-approval
-  // derivatives, merged + re-sorted. The catalog alert is GLOBAL (no machine/connector).
+  // Frozen deriveAlerts (D2) + the sibling backlog-growing + archive-unreachable + windowed
+  // connector-rate derivatives, merged + re-sorted.
   //
-  // M16 16.6 — the six-call list MOVED to `alert-set.ts` and is now shared with the background
-  // evaluator. Behaviour here is byte-identical (same calls, same order, same `sortAlerts`); what
-  // changed is that there is no longer a second copy able to drift from this one. It has to be
-  // shared rather than merely kept in sync: `reconcileAlertFirings` resolves any open firing whose
-  // key is absent from the derived set, so two lists that disagree make every firing in the
-  // difference flap between the read path and the timer. See `alert-set.ts`.
+  // M16 16.7 — THE TWO GLOBAL CODES ARE NOT HERE. `catalog.update_requires_approval` and
+  // `ingest.auth_failure` moved to `deriveDeploymentAlertSet` and arrive as `deploymentAlerts`;
+  // this comment used to name the catalog alert as one of these derivatives, which would send a
+  // reader looking for it in the org reconcile and — not finding it — "restore" it, reintroducing
+  // the one-firing-per-org defect the slice exists to remove.
+  //
+  // M16 16.6 — the shared list MOVED to `alert-set.ts` and is used by the background evaluator too.
+  // Sharing is required rather than tidy: `reconcileAlertFirings` resolves any open firing whose key
+  // is absent from the derived set, so two callers whose lists disagree WITHIN a scope make every
+  // firing in the difference flap between the read path and the timer. Across the two SCOPES that
+  // cannot happen at all — their resolve predicates are disjoint (D-16.7-3). See `alert-set.ts`.
   //
   // M16 16.7 — TWO derivations now. `orgAlerts` is what this org's firings reconcile against;
   // `alerts` on the wire is both scopes merged and re-sorted, so the dashboard's `alerts` array is
@@ -241,9 +246,19 @@ export default async function monitorRoutes(app: FastifyInstance): Promise<void>
    * serve the persisted firing list in between — the frame the client receives is identical in
    * shape either way.
    *
-   * The map is keyed on org+user (the same grain as the firing rows themselves) and lives on the
-   * app, so it is per-process and resets on restart. That is fine: a missed throttle window costs
-   * one extra reconcile, never a wrong result.
+   * The map is keyed on an OPAQUE THROTTLE KEY — `reconcileThrottleKey(orgId, userId)` for an org,
+   * and the reserved `DEPLOYMENT_THROTTLE_KEY` sentinel for the once-per-tick deployment pass (both
+   * spelled in `alert-set.ts` so the route and the background tick cannot compute them differently).
+   *
+   * M16 16.7: this used to read "keyed on org+user (the same grain as the firing rows themselves)",
+   * which is now false on BOTH halves — firing rows key on `(org_id, alert_key)` with `user_id`
+   * demoted to provenance, and the map also holds a key belonging to no org at all. A reader
+   * trusting the old sentence would take the sentinel for a bug and "fix" it. The org key is simply
+   * FINER than the rows it throttles, which costs at most one extra reconcile and never a wrong
+   * result.
+   *
+   * It lives on the app, so it is per-process and resets on restart — also fine, for the same
+   * reason: a missed throttle window costs one extra reconcile.
    *
    * The timestamp is stamped BEFORE the snapshot await, not after: two overlapping requests must
    * not both observe a stale `last`. (The SSE path's `inFlight` guard prevents that within one

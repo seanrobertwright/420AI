@@ -263,12 +263,25 @@ describe.skipIf(!TEST_URL)("migration rollback (rollbackLast, integration)", () 
       `delete from alert_firings where user_id in
          (select id from users where email = 'rollback-dup-0027@example.test')`,
     );
-    await pool.query(`delete from users where email = 'rollback-dup-0027@example.test'`);
+    await pool.query(
+      `delete from alert_firings where user_id in
+         (select id from users where email = 'rollback-dup2-0027@example.test')`,
+    );
+    await pool.query(
+      `delete from users where email in
+         ('rollback-dup-0027@example.test','rollback-dup2-0027@example.test')`,
+    );
     await pool.query(`delete from organizations where name in ('rollback-dup-a','rollback-dup-b')`);
     const u = await pool.query<{ id: string }>(
       `insert into users (email) values ('rollback-dup-0027@example.test') returning id`,
     );
     const userId = u.rows[0]!.id;
+    // A SECOND user, created here so `seedPre167DefectShapes` (which runs after the rollback, when
+    // the old `(user_id, alert_key)` index is back) has two distinct users to hang duplicate rows
+    // on. Both defect shapes need it — one user cannot hold two open rows with the same key.
+    await pool.query(
+      `insert into users (email) values ('rollback-dup2-0027@example.test') returning id`,
+    );
     const orgs: string[] = [];
     for (const name of ["rollback-dup-a", "rollback-dup-b"]) {
       const o = await pool.query<{ id: string }>(
@@ -287,6 +300,71 @@ describe.skipIf(!TEST_URL)("migration rollback (rollbackLast, integration)", () 
       );
     }
     return userId;
+  }
+
+  /**
+   * Seed the TWO PRE-16.7 DEFECT SHAPES that migration 0027's forward data statements exist to
+   * clean up. Must run AFTER `rollbackLast` and BEFORE the re-migrate, because both shapes are
+   * ILLEGAL under 0027's own indexes — which is precisely why the forward dedupe has to run before
+   * those indexes are built, and precisely why it cannot be seeded any earlier in this test.
+   *
+   * Without this, the re-migrate executes all three of 0027's UPDATEs against rows that none of
+   * their predicates select, so `split_part(alert_key, ':', 1) IN (…)`, the `DISTINCT ON` key vs
+   * `ORDER BY` prefix, and the "oldest `first_fired_at` wins" tie-break are asserted NOWHERE. An
+   * error in any of them would surface as `CREATE UNIQUE INDEX "alert_firings_open_global_key"`
+   * aborting the migration on the first real multi-org deployment — mid-deploy, with the column
+   * already widened and the old indexes already dropped.
+   *
+   * Both shapes need TWO users, because the restored pre-16.7 index is unique on
+   * `(user_id, alert_key)`: one user cannot hold two open rows with the same key, which is the very
+   * constraint 16.7 removed.
+   */
+  async function seedPre167DefectShapes(): Promise<{ orgA: string; orgB: string }> {
+    const [orgA, orgB] = (
+      await pool.query<{ id: string }>(
+        `select id from organizations where name in ('rollback-dup-a','rollback-dup-b') order by name`,
+      )
+    ).rows.map((r) => r.id) as [string, string];
+    const users = (
+      await pool.query<{ id: string }>(
+        `select id from users where email in
+           ('rollback-dup-0027@example.test','rollback-dup2-0027@example.test') order by email`,
+      )
+    ).rows.map((r) => r.id);
+    const [user1, user2] = users as [string, string];
+
+    // DEFECT 1 — one deployment-wide condition open in EVERY org. Distinct `first_fired_at` so
+    // "the OLDEST row is the one promoted to the deployment scope" is an assertable claim rather
+    // than a coin flip: org A's is a month older and must be the survivor.
+    await pool.query(
+      `insert into alert_firings (org_id, user_id, alert_key, code, severity, message, status, first_fired_at)
+       values ($1, $3, 'catalog.update_requires_approval:*', 'catalog.update_requires_approval',
+               'warning', 'seeded: global fan-out (older)', 'open', '2026-01-01T00:00:00Z'),
+              ($2, $4, 'catalog.update_requires_approval:*', 'catalog.update_requires_approval',
+               'warning', 'seeded: global fan-out (newer)', 'open', '2026-02-01T00:00:00Z')`,
+      [orgA, orgB, user1, user2],
+    );
+    // DEFECT 2 — two MEMBERS of ONE org holding their own row for the same condition. Org A's is
+    // older and must survive step 4.
+    await pool.query(
+      `insert into alert_firings (org_id, user_id, alert_key, code, severity, message, status, first_fired_at)
+       values ($1, $2, 'collector.offline:seed', 'collector.offline', 'critical',
+               'seeded: per-user duplicate (older)', 'open', '2026-03-01T00:00:00Z'),
+              ($1, $3, 'collector.offline:seed', 'collector.offline', 'critical',
+               'seeded: per-user duplicate (newer)', 'open', '2026-04-01T00:00:00Z')`,
+      [orgA, user1, user2],
+    );
+    return { orgA, orgB };
+  }
+
+  /** The open rows for one `alert_key`, as `[org_id, message]` pairs — null org = deployment. */
+  async function openFiringsForKey(key: string): Promise<{ orgId: string | null; msg: string }[]> {
+    const r = await pool.query<{ orgId: string | null; msg: string }>(
+      `select org_id as "orgId", message as msg from alert_firings
+         where alert_key = $1 and status = 'open' order by message`,
+      [key],
+    );
+    return r.rows;
   }
 
   /** How many OPEN firings this user holds, across every org. */
@@ -522,8 +600,41 @@ describe.skipIf(!TEST_URL)("migration rollback (rollbackLast, integration)", () 
     // Note also that the hand-appended policy block survives the round trip, which is what proves
     // the migration FILE (not `db:generate`) is the source of truth for it — the property 0023
     // established and 0024 confirmed, now checked for a THIRD hand-edited migration.
+    // SEED THE TWO PRE-16.7 DEFECT SHAPES FIRST, so the forward dedupe runs against rows it
+    // actually matches. Both are illegal under 0027's indexes and legal under the restored
+    // pre-16.7 one, so THIS — after the rollback, before the re-migrate — is the only point in the
+    // test where they can exist. Without them, 0027's three data statements execute against a
+    // table none of their predicates select, and the migration's whole reason for existing is
+    // exercised by nothing.
+    const { orgA, orgB } = await seedPre167DefectShapes();
+    expect(await openFiringsForKey("catalog.update_requires_approval:*")).toHaveLength(2);
+    expect(await openFiringsForKey("collector.offline:seed")).toHaveLength(2);
+
     await runMigrations(TEST_URL!);
     expect(await trackedCount()).toBe(28);
+
+    // THE FORWARD DEDUPE ACTUALLY RAN, and it picked the right winners.
+    //
+    // Defect 1 — the deployment-wide condition that had a row in every org is now ONE row whose
+    // `org_id IS NULL`, and it is the OLDER of the two (steps 2 + 3: promote the oldest by
+    // `first_fired_at`, resolve the rest). If the `split_part(...) IN (...)` list, the
+    // `DISTINCT ON` key or the `ORDER BY` prefix were wrong, this is where it shows — rather than
+    // as a failed `CREATE UNIQUE INDEX` on someone's production deploy.
+    const globals = await openFiringsForKey("catalog.update_requires_approval:*");
+    expect(globals).toEqual([{ orgId: null, msg: "seeded: global fan-out (older)" }]);
+    // Defect 2 — the two members' rows in one org collapse to the older one, still org-scoped.
+    const perUser = await openFiringsForKey("collector.offline:seed");
+    expect(perUser).toEqual([{ orgId: orgA, msg: "seeded: per-user duplicate (older)" }]);
+    // The losers are RESOLVED, not deleted — and stamped as already-notified, so the first tick
+    // after a real migration does not emit a burst of false "resolved" notices for conditions
+    // whose surviving row is still open (`deliverResolvedFirings` has no age filter).
+    const losers = await pool.query<{ n: number }>(
+      `select count(*)::int as n from alert_firings
+         where message like 'seeded:%' and status = 'resolved' and resolve_delivered_at is null`,
+    );
+    expect(losers.rows[0]!.n).toBe(0);
+    expect(orgB).toBeTruthy();
+
     // 0027 comes back, WHOLE — the nullable column, BOTH partial unique indexes, the re-keyed
     // status index and the amended policy. This is the forward half of the D-M15-13 drill and the
     // acceptance criterion the 16.7 plan calls "run it, forward and back, with matching schema":
@@ -543,9 +654,18 @@ describe.skipIf(!TEST_URL)("migration rollback (rollbackLast, integration)", () 
       "alert_firings_open_key",
       "alert_firings_pkey",
     ]);
+    // The deployment-scoped rows the DOWN script deleted do not resurrect. The only `org_id IS
+    // NULL` row now present is the ONE the re-migrate's step 2 just promoted from the defect shape
+    // seeded above — which is the forward dedupe working, not a row surviving the rollback. Scoped
+    // to the seeded key so the two facts stay distinguishable; a bare `count = 0` would now be
+    // asserting the absence of something this test deliberately creates.
     expect(
-      (await pool.query("select count(*)::int as n from alert_firings where org_id is null"))
-        .rows[0].n,
+      (
+        await pool.query(
+          `select count(*)::int as n from alert_firings
+             where org_id is null and alert_key <> 'catalog.update_requires_approval:*'`,
+        )
+      ).rows[0].n,
     ).toBe(0);
     expect(await rawRecordIndexExists()).toBe(true);
     expect(await machineConnectorsTableExists()).toBe(true);

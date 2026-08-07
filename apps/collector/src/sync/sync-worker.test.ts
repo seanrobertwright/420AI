@@ -374,7 +374,10 @@ describe("syncOnce (real node:http round-trip)", () => {
  * This callback is what lets the engine leave a durable local record instead.
  */
 describe("runSyncLoop (M16 16.7 — onSyncFailure reports the unreachable-archive streak)", () => {
-  it("fires with an INCREASING count on consecutive failures", async () => {
+  it("fires with an INCREASING count on consecutive failures", { timeout: 15_000 }, async () => {
+    // The bound is the QUEUE BACKOFF, not taste: `markFailed` backs an item off
+    // `1000 * 2^attempts` ms, so consecutive real POST attempts land at t ~ 0, 1 s, 3 s. The
+    // default 5 s vitest timeout left under a second of slack on a cold runner.
     const queue = tmpQueue();
     const post = vi.fn().mockRejectedValue(new IngestHttpError(503, "down"));
     const counts: number[] = [];
@@ -465,109 +468,121 @@ describe("runSyncLoop (M16 16.7 — onSyncFailure reports the unreachable-archiv
    * A clean non-401 4xx is positive proof of reachability, so it resets the streak exactly as a
    * delivered drain does.
    */
-  it("a REFUSED batch (clean 4xx) never grows the streak — it is proof the archive is UP", async () => {
-    const queue = tmpQueue();
-    const post = vi.fn().mockRejectedValue(new IngestHttpError(400, "malformed payload"));
-    const counts: number[] = [];
-    const refusals: number[] = [];
-    const controller = new AbortController();
-    try {
-      queue.enqueue("raw", "r1", { a: 1 });
-      await runSyncLoop(
-        {
-          queue,
-          url: "http://x",
-          token: "t",
-          post,
-          onSyncFailure: (n) => counts.push(n),
-          onSyncRefused: (status) => {
-            refusals.push(status);
-            if (refusals.length >= 3) controller.abort();
+  it(
+    "a REFUSED batch (clean 4xx) never grows the streak — it is proof the archive is UP",
+    { timeout: 15_000 },
+    async () => {
+      const queue = tmpQueue();
+      const post = vi.fn().mockRejectedValue(new IngestHttpError(400, "malformed payload"));
+      const counts: number[] = [];
+      const refusals: number[] = [];
+      const controller = new AbortController();
+      try {
+        queue.enqueue("raw", "r1", { a: 1 });
+        await runSyncLoop(
+          {
+            queue,
+            url: "http://x",
+            token: "t",
+            post,
+            onSyncFailure: (n) => counts.push(n),
+            onSyncRefused: (status) => {
+              refusals.push(status);
+              if (refusals.length >= 3) controller.abort();
+            },
+            idleMs: 1,
+            retryMs: 1,
           },
-          idleMs: 1,
-          retryMs: 1,
-        },
-        controller.signal,
-      );
-      // Reported every time, as the operator's only signal for an undeliverable batch...
-      expect(refusals).toEqual([400, 400, 400]);
-      // ...and the unreachable streak never moved. This is the assertion the finding is about.
-      expect(counts).toEqual([]);
-    } finally {
-      queue.close();
-    }
-  });
+          controller.signal,
+        );
+        // Reported every time, as the operator's only signal for an undeliverable batch...
+        expect(refusals).toEqual([400, 400, 400]);
+        // ...and the unreachable streak never moved. This is the assertion the finding is about.
+        expect(counts).toEqual([]);
+      } finally {
+        queue.close();
+      }
+    },
+  );
 
-  it("a 5xx still counts as unreachable — the archive being DOWN is what the alert means", async () => {
-    // The complement of the test above, and the reason the predicate is `4xx` and not `any HTTP
-    // status`: a 502/503 is exactly the condition `archive.unreachable` exists to report.
-    const queue = tmpQueue();
-    const post = vi.fn().mockRejectedValue(new IngestHttpError(503, "down"));
-    const counts: number[] = [];
-    const refusals: number[] = [];
-    const controller = new AbortController();
-    try {
-      queue.enqueue("raw", "r1", { a: 1 });
-      await runSyncLoop(
-        {
-          queue,
-          url: "http://x",
-          token: "t",
-          post,
-          onSyncFailure: (n) => {
-            counts.push(n);
-            if (counts.length >= 2) controller.abort();
+  it(
+    "a 5xx still counts as unreachable — the archive being DOWN is what the alert means",
+    { timeout: 15_000 },
+    async () => {
+      // The complement of the test above, and the reason the predicate is `4xx` and not `any HTTP
+      // status`: a 502/503 is exactly the condition `archive.unreachable` exists to report.
+      const queue = tmpQueue();
+      const post = vi.fn().mockRejectedValue(new IngestHttpError(503, "down"));
+      const counts: number[] = [];
+      const refusals: number[] = [];
+      const controller = new AbortController();
+      try {
+        queue.enqueue("raw", "r1", { a: 1 });
+        await runSyncLoop(
+          {
+            queue,
+            url: "http://x",
+            token: "t",
+            post,
+            onSyncFailure: (n) => {
+              counts.push(n);
+              if (counts.length >= 2) controller.abort();
+            },
+            onSyncRefused: (status) => refusals.push(status),
+            idleMs: 1,
+            retryMs: 1,
           },
-          onSyncRefused: (status) => refusals.push(status),
-          idleMs: 1,
-          retryMs: 1,
-        },
-        controller.signal,
-      );
-      expect(counts).toEqual([1, 2]);
-      expect(refusals).toEqual([]);
-    } finally {
-      queue.close();
-    }
-  });
+          controller.signal,
+        );
+        expect(counts).toEqual([1, 2]);
+        expect(refusals).toEqual([]);
+      } finally {
+        queue.close();
+      }
+    },
+  );
 
-  it("a refusal RESETS an accumulated streak — same evidence standard as a delivered drain", async () => {
-    // Fail transport-wise twice, then get a clean 400. The archive answered, so the streak must go
-    // back to zero rather than continue climbing toward a false `archive_unreachable`.
-    const queue = tmpQueue();
-    let calls = 0;
-    const post = vi.fn().mockImplementation(() => {
-      calls += 1;
-      if (calls <= 2) return Promise.reject(new IngestHttpError(503, "down"));
-      return Promise.reject(new IngestHttpError(422, "unprocessable"));
-    });
-    const counts: number[] = [];
-    let refused = 0;
-    const controller = new AbortController();
-    try {
-      queue.enqueue("raw", "r1", { a: 1 });
-      await runSyncLoop(
-        {
-          queue,
-          url: "http://x",
-          token: "t",
-          post,
-          onSyncFailure: (n) => counts.push(n),
-          onSyncRefused: () => {
-            refused += 1;
-            if (refused >= 1) controller.abort();
+  it(
+    "a refusal RESETS an accumulated streak — same evidence standard as a delivered drain",
+    { timeout: 15_000 },
+    async () => {
+      // Fail transport-wise twice, then get a clean 400. The archive answered, so the streak must go
+      // back to zero rather than continue climbing toward a false `archive_unreachable`.
+      const queue = tmpQueue();
+      let calls = 0;
+      const post = vi.fn().mockImplementation(() => {
+        calls += 1;
+        if (calls <= 2) return Promise.reject(new IngestHttpError(503, "down"));
+        return Promise.reject(new IngestHttpError(422, "unprocessable"));
+      });
+      const counts: number[] = [];
+      let refused = 0;
+      const controller = new AbortController();
+      try {
+        queue.enqueue("raw", "r1", { a: 1 });
+        await runSyncLoop(
+          {
+            queue,
+            url: "http://x",
+            token: "t",
+            post,
+            onSyncFailure: (n) => counts.push(n),
+            onSyncRefused: () => {
+              refused += 1;
+              if (refused >= 1) controller.abort();
+            },
+            idleMs: 1,
+            retryMs: 1,
           },
-          idleMs: 1,
-          retryMs: 1,
-        },
-        controller.signal,
-      );
-      expect(counts).toEqual([1, 2]);
-      expect(refused).toBe(1);
-    } finally {
-      queue.close();
-    }
-  });
+          controller.signal,
+        );
+        expect(counts).toEqual([1, 2]);
+        expect(refused).toBe(1);
+      } finally {
+        queue.close();
+      }
+    },
+  );
 
   it("a THROWING onSyncRefused does not unwind the loop either (the F-16.3-2 shape)", async () => {
     const queue = tmpQueue();

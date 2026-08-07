@@ -380,7 +380,11 @@ describe.skipIf(!TEST_URL)("alert-firings repository (integration)", () => {
     const CATALOG_KEY = "catalog.update_requires_approval:*";
 
     it("opens ONE row with org_id NULL and scope 'deployment'", async () => {
-      const firings = await reconcileDeploymentFirings(dbh.db, userId, [catalogAlert()], t0);
+      await reconcileDeploymentFirings(dbh.db, userId, [catalogAlert()], t0);
+      // Read back separately: `reconcileDeploymentFirings` returns void (prp-review) because the
+      // wire list comes from `listAlertFirings`' union, so returning one here was a SELECT every
+      // caller discarded.
+      const firings = await listDeploymentFirings(dbh.db, t0);
       expect(firings).toHaveLength(1);
       expect(firings[0]!.scope).toBe("deployment");
       expect(firings[0]!.alertKey).toBe(CATALOG_KEY);
@@ -407,7 +411,8 @@ describe.skipIf(!TEST_URL)("alert-firings repository (integration)", () => {
     });
 
     it("is ackable from ANY org — one row, one ack, universally visible", async () => {
-      const [opened] = await reconcileDeploymentFirings(dbh.db, userId, [catalogAlert()], t0);
+      await reconcileDeploymentFirings(dbh.db, userId, [catalogAlert()], t0);
+      const [opened] = await listDeploymentFirings(dbh.db, t0);
       // Acked under org B's context, though org B did not open it and does not own it.
       const acked = await ackAlertFiring(dbh.db, orgB, opened!.id, t4);
       expect(acked?.ackedAt).toBe(t4.toISOString());

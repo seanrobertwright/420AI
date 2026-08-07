@@ -43,14 +43,47 @@ import { COLLECTOR_HOME, collectorHomeFor } from "./identity.js";
  * cause, and the server-side `archive.unreachable` alert cannot cover it because it derives from
  * heartbeat rows that have stopped arriving.
  */
-export type CaptureFaultCode = "auth_revoked" | "archive_unreachable";
+/**
+ * Every valid `CaptureFault.code`, and THE ARRAY IS THE SOURCE OF TRUTH — the union is derived from
+ * it, not the other way round.
+ *
+ * The direction is the whole point and it was backwards on the first cut of 16.7:
+ * `const FAULT_CODES: readonly CaptureFaultCode[] = [...]` merely ANNOTATES the array against a
+ * hand-written union, and an array missing an element satisfies that annotation perfectly. So
+ * adding a third code to the union and forgetting the array typechecked cleanly — and reproduced
+ * the exact bug 16.7 existed to fix, one code over: `saveFault` writes the record, `loadFault`
+ * rejects it as corrupt, the startup announcement says nothing, and `saveFault`'s `(code, url)`
+ * continuity restarts the `since` clock on every observation. The feature silently does nothing
+ * while every test that writes and never reads stays green.
+ *
+ * Written this way round, a code that exists in the union NECESSARILY exists in the validator,
+ * because there is only one list.
+ */
+const FAULT_CODES = ["auth_revoked", "archive_unreachable"] as const;
 
-/** Every valid `CaptureFault.code`. The single source `loadFault`'s validator checks against. */
-const FAULT_CODES: readonly CaptureFaultCode[] = ["auth_revoked", "archive_unreachable"];
+export type CaptureFaultCode = (typeof FAULT_CODES)[number];
 
-export interface CaptureFault {
+/**
+ * M16 16.7 — the FATAL fault, spelled as its own type.
+ *
+ * Until this slice `CaptureFault.code` was the single literal `"auth_revoked"`, so `CaptureFault`
+ * WAS the fatal type and "a degraded fault never sets `WatchRunResult.fault`" was enforced by the
+ * compiler for free. Widening the union quietly demoted that invariant to prose in three separate
+ * comments — and prose is not a mechanism (CLAUDE.md 15.5). These two aliases put it back in the
+ * type system: `onFatal` and `result.fault` take `FatalCaptureFault`, `onDegraded` takes
+ * `DegradedCaptureFault`, so routing a degraded fault into the fatal channel is a compile error
+ * rather than a WinSW restart loop discovered in production (D-16.7-8).
+ *
+ * `saveFault` / `loadFault` deliberately keep the WIDE type — the file on disk holds either.
+ */
+export type FatalCaptureFault = CaptureFault<"auth_revoked">;
+
+/** M16 16.7 — the DEGRADED fault. See `FatalCaptureFault` for why the two are distinct types. */
+export type DegradedCaptureFault = CaptureFault<"archive_unreachable">;
+
+export interface CaptureFault<C extends CaptureFaultCode = CaptureFaultCode> {
   /** Which fault this is, and how severe — see `CaptureFaultCode`. */
-  code: CaptureFaultCode;
+  code: C;
   /** Operator-facing explanation, including the remedy. Never contains a token. */
   message: string;
   /**
@@ -71,6 +104,49 @@ export interface CaptureFault {
   lastObservedAt?: string;
   /** The archive base URL that rejected the credential — the URL, never the bearer. */
   url: string;
+}
+
+/**
+ * M16 16.7 — which codes STOP capture and which do not, as an EXHAUSTIVE map.
+ *
+ * A `Record<CaptureFaultCode, …>` is the point: adding a code to `FAULT_CODES` makes `tsc` demand
+ * an entry here. The two entrypoints previously each carried
+ * `code === "archive_unreachable" ? DEGRADED : FATAL`, whose `else` arm is an open default — so a
+ * third code would have been announced as "capture had stopped" whether or not it had, which is
+ * the precise failure `describeFault` below exists to prevent.
+ */
+const FAULT_SEVERITY: Record<CaptureFaultCode, "fatal" | "degraded"> = {
+  auth_revoked: "fatal",
+  archive_unreachable: "degraded",
+};
+
+/**
+ * The operator-facing sentence for a fault on record, shared by `cli.ts` and `serve.ts`.
+ *
+ * COMPOSITION, NOT I/O — this returns a string and writes nothing, so it does not cross CLAUDE.md's
+ * entrypoint-logging boundary. Each entrypoint still owns HOW it emits (`opts.logger?.()` versus an
+ * `emit({type:"error"})` event); what it must not own is a second copy of WHAT IT SAYS. The two
+ * copies were byte-identical, `serve.ts`'s comment said "mirroring cli.ts", and nothing failed if
+ * only one was edited.
+ *
+ * Naming the severity correctly is the entire job of this sentence: `archive_unreachable` means
+ * capture KEPT RUNNING and the queue buffered, and telling an operator that capture stopped when it
+ * did not is worse than saying nothing at all.
+ *
+ * `at` is the record's path, included by `cli.ts` (an operator at a terminal can open it) and
+ * omitted by `serve.ts` (the desktop surfaces the message in a UI where a path is noise).
+ */
+export function describeFault(fault: CaptureFault, at?: string): string {
+  const kind =
+    FAULT_SEVERITY[fault.code] === "degraded"
+      ? "a DEGRADED capture fault (capture kept running; the archive was unreachable)"
+      : "a FATAL capture fault (capture had stopped)";
+  const where = at ? ` at ${at}` : "";
+  const lastObserved = fault.lastObservedAt ? `, last observed ${fault.lastObservedAt}` : "";
+  return (
+    `${kind} is on record${where}: ${fault.message} (since ${fault.since}${lastObserved}). ` +
+    `It clears on the next sync that actually delivers.`
+  );
 }
 
 /** Where a fatal capture fault is recorded, beside `credentials.json` and `queue.sqlite`. */
