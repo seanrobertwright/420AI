@@ -518,6 +518,17 @@ export async function runCaptureEngine(opts: CaptureEngineOptions): Promise<void
         onSync: opts.onSyncSuccess,
         // M16 16.7: the streak the heartbeat could never deliver during an outage of the archive.
         onSyncFailure: reportDegraded,
+        // M16 16.7: the archive is UP and refused the batch. Deliberately NOT routed to
+        // `reportDegraded` — that record says "cannot reach the archive", which would be false and
+        // would send an operator to check the wrong thing. It is also not fatal: capture continues
+        // and the queue keeps the data. A log line is the honest surface for it, because the batch
+        // is retried forever (no dead-letter path) and 16.7 adds no alert code.
+        onSyncRefused: (status) =>
+          log(
+            `the archive REFUSED this batch with HTTP ${status} — it is reachable, so this is not ` +
+              `an outage. The batch stays queued and will be retried; a persistent refusal needs ` +
+              `an operator (check the ingest logs for why the payload was rejected).`,
+          ),
         onStop: () => {
           // M16 16.6: leave a DURABLE trace before unwinding. The engine is about to end normally,
           // which is exactly how INC-2026-07 stayed invisible for eight days.

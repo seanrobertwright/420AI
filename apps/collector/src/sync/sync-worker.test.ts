@@ -452,6 +452,153 @@ describe("runSyncLoop (M16 16.7 — onSyncFailure reports the unreachable-archiv
     },
   );
 
+  /**
+   * M16 16.7 code-review finding 2 — REACHED AND REFUSED IS NOT UNREACHABLE.
+   *
+   * `syncOnce` collapses every non-401 failure into "retry", and the queue has NO dead-letter path,
+   * so a batch the archive will never accept is retried forever. Once the streak stopped resetting
+   * on a no-op drain (the fix directly above), such a batch grew it without bound — and the streak
+   * is the only input to `ARCHIVE_UNREACHABLE_MIN_FAILURES` on BOTH surfaces. The result would have
+   * been a permanent `archive_unreachable` fault, and a permanent server-side alert, naming the
+   * wrong cause for an archive that was answering every request.
+   *
+   * A clean non-401 4xx is positive proof of reachability, so it resets the streak exactly as a
+   * delivered drain does.
+   */
+  it("a REFUSED batch (clean 4xx) never grows the streak — it is proof the archive is UP", async () => {
+    const queue = tmpQueue();
+    const post = vi.fn().mockRejectedValue(new IngestHttpError(400, "malformed payload"));
+    const counts: number[] = [];
+    const refusals: number[] = [];
+    const controller = new AbortController();
+    try {
+      queue.enqueue("raw", "r1", { a: 1 });
+      await runSyncLoop(
+        {
+          queue,
+          url: "http://x",
+          token: "t",
+          post,
+          onSyncFailure: (n) => counts.push(n),
+          onSyncRefused: (status) => {
+            refusals.push(status);
+            if (refusals.length >= 3) controller.abort();
+          },
+          idleMs: 1,
+          retryMs: 1,
+        },
+        controller.signal,
+      );
+      // Reported every time, as the operator's only signal for an undeliverable batch...
+      expect(refusals).toEqual([400, 400, 400]);
+      // ...and the unreachable streak never moved. This is the assertion the finding is about.
+      expect(counts).toEqual([]);
+    } finally {
+      queue.close();
+    }
+  });
+
+  it("a 5xx still counts as unreachable — the archive being DOWN is what the alert means", async () => {
+    // The complement of the test above, and the reason the predicate is `4xx` and not `any HTTP
+    // status`: a 502/503 is exactly the condition `archive.unreachable` exists to report.
+    const queue = tmpQueue();
+    const post = vi.fn().mockRejectedValue(new IngestHttpError(503, "down"));
+    const counts: number[] = [];
+    const refusals: number[] = [];
+    const controller = new AbortController();
+    try {
+      queue.enqueue("raw", "r1", { a: 1 });
+      await runSyncLoop(
+        {
+          queue,
+          url: "http://x",
+          token: "t",
+          post,
+          onSyncFailure: (n) => {
+            counts.push(n);
+            if (counts.length >= 2) controller.abort();
+          },
+          onSyncRefused: (status) => refusals.push(status),
+          idleMs: 1,
+          retryMs: 1,
+        },
+        controller.signal,
+      );
+      expect(counts).toEqual([1, 2]);
+      expect(refusals).toEqual([]);
+    } finally {
+      queue.close();
+    }
+  });
+
+  it("a refusal RESETS an accumulated streak — same evidence standard as a delivered drain", async () => {
+    // Fail transport-wise twice, then get a clean 400. The archive answered, so the streak must go
+    // back to zero rather than continue climbing toward a false `archive_unreachable`.
+    const queue = tmpQueue();
+    let calls = 0;
+    const post = vi.fn().mockImplementation(() => {
+      calls += 1;
+      if (calls <= 2) return Promise.reject(new IngestHttpError(503, "down"));
+      return Promise.reject(new IngestHttpError(422, "unprocessable"));
+    });
+    const counts: number[] = [];
+    let refused = 0;
+    const controller = new AbortController();
+    try {
+      queue.enqueue("raw", "r1", { a: 1 });
+      await runSyncLoop(
+        {
+          queue,
+          url: "http://x",
+          token: "t",
+          post,
+          onSyncFailure: (n) => counts.push(n),
+          onSyncRefused: () => {
+            refused += 1;
+            if (refused >= 1) controller.abort();
+          },
+          idleMs: 1,
+          retryMs: 1,
+        },
+        controller.signal,
+      );
+      expect(counts).toEqual([1, 2]);
+      expect(refused).toBe(1);
+    } finally {
+      queue.close();
+    }
+  });
+
+  it("a THROWING onSyncRefused does not unwind the loop either (the F-16.3-2 shape)", async () => {
+    const queue = tmpQueue();
+    const post = vi.fn().mockRejectedValue(new IngestHttpError(413, "too large"));
+    let fired = 0;
+    const controller = new AbortController();
+    try {
+      queue.enqueue("raw", "r1", { a: 1 });
+      const reason = await runSyncLoop(
+        {
+          queue,
+          url: "http://x",
+          token: "t",
+          post,
+          onSyncRefused: () => {
+            fired += 1;
+            if (fired >= 2) controller.abort();
+            throw new Error("logger exploded");
+          },
+          idleMs: 1,
+          retryMs: 1,
+        },
+        controller.signal,
+      );
+      expect(reason).toBe("aborted");
+      expect(fired).toBe(2);
+    } finally {
+      queue.close();
+    }
+  });
+
   it("a THROWING onSyncFailure does not unwind the loop (the F-16.3-2 shape)", async () => {
     // The callback writes a FILE. An unguarded throw would unwind the sync loop through a rejected
     // promise, turning "the archive is down" into "capture stopped" — in the component whose job is

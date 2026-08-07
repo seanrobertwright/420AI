@@ -247,6 +247,57 @@ describe.skipIf(!TEST_URL)("migration rollback (rollbackLast, integration)", () 
     return (r.rows[0] as { is_nullable: string }).is_nullable === "YES";
   }
 
+  /**
+   * Seed ONE user holding an open firing with the SAME `alert_key` in TWO different orgs — the
+   * shape that is legal under 0027's `(org_id, alert_key)` index and forbidden by the pre-16.7
+   * global `(user_id, alert_key)` one. Returns the user id.
+   *
+   * Uses a connector-keyed key on purpose: `connector.failing:claude-code` is how this arises in
+   * production, because the connector name is not org-scoped. Runs on the OWNER handle (this file's
+   * pool), which is the only role that may write while the drill is mid-flight.
+   */
+  async function seedCrossOrgDuplicateFirings(): Promise<string> {
+    // Idempotent: this file mutates the schema and may be re-run against a dirty DB, and `users`
+    // has a UNIQUE email. Clear any prior seed first, children before parents.
+    await pool.query(
+      `delete from alert_firings where user_id in
+         (select id from users where email = 'rollback-dup-0027@example.test')`,
+    );
+    await pool.query(`delete from users where email = 'rollback-dup-0027@example.test'`);
+    await pool.query(`delete from organizations where name in ('rollback-dup-a','rollback-dup-b')`);
+    const u = await pool.query<{ id: string }>(
+      `insert into users (email) values ('rollback-dup-0027@example.test') returning id`,
+    );
+    const userId = u.rows[0]!.id;
+    const orgs: string[] = [];
+    for (const name of ["rollback-dup-a", "rollback-dup-b"]) {
+      const o = await pool.query<{ id: string }>(
+        `insert into organizations (name) values ($1) returning id`,
+        [name],
+      );
+      orgs.push(o.rows[0]!.id);
+    }
+    for (const orgId of orgs) {
+      await pool.query(
+        `insert into alert_firings
+           (org_id, user_id, alert_key, code, severity, message, connector, status)
+         values ($1, $2, 'connector.failing:claude-code', 'connector.failing', 'warning',
+                 'seeded by the 0027 rollback drill', 'claude-code', 'open')`,
+        [orgId, userId],
+      );
+    }
+    return userId;
+  }
+
+  /** How many OPEN firings this user holds, across every org. */
+  async function openFiringCountForUser(userId: string): Promise<number> {
+    const r = await pool.query<{ n: number }>(
+      `select count(*)::int as n from alert_firings where user_id = $1 and status = 'open'`,
+      [userId],
+    );
+    return Number(r.rows[0]!.n);
+  }
+
   /** Whether the org policy admits the deployment scope (`OR org_id IS NULL`). */
   async function alertFiringsPolicyAdmitsDeployment(): Promise<boolean> {
     const r = await pool.query(
@@ -375,8 +426,29 @@ describe.skipIf(!TEST_URL)("migration rollback (rollbackLast, integration)", () 
     expect(await eventsRlsFlags()).toEqual({ enabled: true, forced: true });
     expect(await mixedCaseEmailCount()).toBe(0);
 
+    // SEED THE SHAPE THAT BREAKS THE DOWN SCRIPT, because an empty table cannot exercise it — and
+    // an empty table is exactly what every retarget above ran against.
+    //
+    // The restored pre-16.7 index is GLOBAL on ("user_id","alert_key") with NO org term, so what it
+    // needs is that no USER holds two open rows with the same key ANYWHERE. 0027's dedupe guaranteed
+    // only per-(org, key) uniqueness, and the post-16.7 org index preserves only that — neither
+    // implies the global property. One user is routinely the reconcile user for two orgs
+    // (`ensurePersonalOrg` plus an invite), and connector-keyed alert keys carry a connector NAME
+    // (`connector.failing:claude-code`) which is not org-scoped. So this row pair is LEGAL after
+    // 0027 and FORBIDDEN by the index the down script rebuilds.
+    //
+    // Without the down script's own global dedupe this `rollbackLast` raises
+    // `could not create unique index "alert_firings_open_key"` — a rollback that aborts during an
+    // incident, which is the worst possible time to be hand-writing SQL. Found in the 16.7 code
+    // review, and unreachable by `tsc`, by `rls.int.test.ts` and by every other suite.
+    const dupUser = await seedCrossOrgDuplicateFirings();
+
     const result = await rollbackLast(TEST_URL!, { downDir, journalPath });
     expect(result).toEqual({ rolledBack: "0027_strange_white_queen" });
+    // Both rows survived as ROWS (the down script resolves the loser, it does not delete it — a
+    // resolved firing is a correct terminal state), and exactly ONE is still open, which is what
+    // let the global unique index build.
+    expect(await openFiringCountForUser(dupUser)).toBe(1);
     expect(await trackedCount()).toBe(27);
     // THE DEPLOYMENT SCOPE IS GONE, and the schema is genuinely back to its pre-16.7 shape. The
     // ORDER assertion is implicit but total: if the down script had restored the indexes or the

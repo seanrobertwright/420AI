@@ -31,14 +31,39 @@ DELETE FROM "alert_firings" WHERE "org_id" IS NULL;--> statement-breakpoint
 DROP POLICY IF EXISTS "alert_firings_org_isolation" ON "alert_firings";--> statement-breakpoint
 CREATE POLICY "alert_firings_org_isolation" ON "alert_firings" USING (org_id = nullif(current_setting('app.current_org', true), '')::uuid);--> statement-breakpoint
 
--- 3. Restore the pre-16.7 indexes. The old `(user_id, alert_key)` unique index can only build if no
---    org holds two open rows with the same key under DIFFERENT users — which is exactly what 0027
---    step 4 guaranteed and what the post-16.7 org index kept true, so this builds.
+-- 3. Collapse per-(user, key) duplicates ACROSS ALL ORGS, so the old index can build.
+--
+--    THIS STEP IS NOT REDUNDANT WITH 0027 STEP 4, and assuming it was is the trap. The old index is
+--    GLOBAL on ("user_id","alert_key") — it carries NO org term — so what it requires is that no
+--    USER holds two open rows with the same `alert_key` anywhere in the table. 0027 step 4
+--    guaranteed something strictly weaker (uniqueness WITHIN an org), and the post-16.7 org index
+--    preserves only that weaker property. Neither implies this one.
+--
+--    The gap is reachable, not theoretical. `ensurePersonalOrg` gives every user a personal org and
+--    an invited teammate holds a membership in a second, so ONE user is routinely the reconcile
+--    `user_id` for two orgs (`alert-evaluator.ts` resolves the owner; `routes/monitor.ts` uses
+--    whoever loaded the page). And the connector-keyed codes build their `alert_key` from the
+--    connector NAME (`connector.failing:claude-code`), which is not org-scoped — so two orgs each
+--    with a failing `claude-code` connector produce two open rows with an identical
+--    ("user_id","alert_key") and different `org_id`. Legal after 0027; forbidden by this index.
+--
+--    Without this the rollback aborts on `could not create unique index "alert_firings_open_key"`.
+--    `rollback.ts` wraps the whole script in one transaction so that failure is clean rather than
+--    partial — but it leaves the operator hand-writing SQL during an incident, which is the worst
+--    possible time. Same shape as step 1's ordering trap: a down migration must re-derive the
+--    property its target index needs, never inherit the forward migration's.
+UPDATE "alert_firings" SET "status" = 'resolved', "resolved_at" = now()
+ WHERE "status" = 'open' AND "id" NOT IN (
+   SELECT DISTINCT ON ("user_id", "alert_key") "id" FROM "alert_firings"
+    WHERE "status" = 'open'
+    ORDER BY "user_id", "alert_key", "first_fired_at" ASC, "id" ASC);--> statement-breakpoint
+
+-- 4. Restore the pre-16.7 indexes, which step 3 has now made buildable.
 DROP INDEX IF EXISTS "alert_firings_open_key";--> statement-breakpoint
 DROP INDEX IF EXISTS "alert_firings_open_global_key";--> statement-breakpoint
 DROP INDEX IF EXISTS "alert_firings_by_org_status";--> statement-breakpoint
 CREATE UNIQUE INDEX "alert_firings_open_key" ON "alert_firings" USING btree ("user_id","alert_key") WHERE "alert_firings"."status" = 'open';--> statement-breakpoint
 CREATE INDEX "alert_firings_by_user_status" ON "alert_firings" USING btree ("user_id","status");--> statement-breakpoint
 
--- 4. …and only now can the column narrow again.
+-- 5. …and only now can the column narrow again.
 ALTER TABLE "alert_firings" ALTER COLUMN "org_id" SET NOT NULL;
