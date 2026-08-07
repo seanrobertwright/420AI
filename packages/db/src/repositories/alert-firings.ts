@@ -8,27 +8,70 @@ import {
   type AlertSeverity,
   type OperationalAlert,
 } from "@420ai/shared";
-import type { Db, DbClient } from "../client.js";
-import { withOrg } from "../org-context.js";
+import type { Db, DbClient, Tx } from "../client.js";
+import { withOrg, withDeployment } from "../org-context.js";
 import { alertFirings } from "../schema.js";
 
 /**
  * M10 3c persisted Alert-Firing repository (PRD §20). A DIRECT clone of the
- * attribution.ts upsert/status/return mechanism: an `onConflictDoUpdate` against the
- * PARTIAL unique index `(user_id, alert_key) WHERE status='open'` (the `targetWhere`
- * is MANDATORY — a bare target won't match a partial index), then a guarded `update`
- * that resolves the open firings no longer derived, then a re-select → typed-row map.
+ * attribution.ts upsert/status/return mechanism: an `onConflictDoUpdate` against a
+ * PARTIAL unique index (the `targetWhere` is MANDATORY — a bare target won't match a
+ * partial index), then a guarded `update` that resolves the open firings no longer
+ * derived, then a re-select → typed-row map.
  *
  * Evaluate-on-read (D1): `reconcileAlertFirings` is called from the ingest
  * `buildSnapshot` path; the route owns the wall clock and passes `now`. Silent library
- * (CLAUDE.md): throws, never logs. Every query is scoped by userId.
+ * (CLAUDE.md): throws, never logs.
+ *
+ * ---
+ *
+ * M16 16.7 — TWO SCOPES, AND THEY ARE DISJOINT BY CONSTRUCTION.
+ *
+ * Firings were keyed `(user_id, alert_key)` until this slice, which answered "who is looking at
+ * this?" when the question is "what is broken?". Every operation here is now parameterized by a
+ * `FiringScope`:
+ *
+ *   - `{ kind: "org", orgId }` — arbiter `alert_firings_open_key` on `(org_id, alert_key)`,
+ *     predicate `org_id = orgId`. Seven of the nine alert codes.
+ *   - `{ kind: "deployment" }` — arbiter `alert_firings_open_global_key` on `alert_key` alone,
+ *     predicate `org_id IS NULL`. The two codes that derive from tables with no `org_id`
+ *     (`catalog.update_requires_approval`, `ingest.auth_failure`).
+ *
+ * WHY DISJOINTNESS MATTERS MORE THAN IT LOOKS. `reconcileFirings` resolves every open firing whose
+ * key is absent from the derived set, so two callers deriving different code sets would make every
+ * firing in the difference FLAP — one closing what the other opens, with a resolve notice per cycle
+ * for an outage that never ended. That is prevented here STRUCTURALLY rather than by agreement:
+ * the org resolve filters `eq(orgId, …)`, which never matches a NULL row, and the deployment
+ * resolve filters `isNull(orgId)`, which never matches an org row. Neither scope can resolve the
+ * other's firings, whatever either caller derives.
+ *
+ * DO NOT MERGE THE TWO UPSERTS into one statement with a computed arbiter. Postgres suppresses
+ * conflicts only on the INFERRED arbiter index, so using the org arbiter against a global row does
+ * not silently insert a duplicate — it RAISES `duplicate key value violates unique constraint
+ * "alert_firings_open_global_key"`. Measured, and a feature: the split is enforced by the database,
+ * loudly. It stays that way only while the two remain separate statements.
  */
 
 const SEVERITY_RANK: Record<AlertSeverity, number> = { critical: 0, warning: 1, info: 2 };
 
+/**
+ * M16 16.7 — which scope an operation acts in. See the module doc.
+ *
+ * A discriminated union rather than a nullable `orgId?: string`, deliberately: `undefined` and
+ * "the deployment" are not the same statement, and a caller that forgot to thread an org id would
+ * silently become a deployment-wide write under the nullable spelling. Here it cannot compile.
+ */
+export type FiringScope = { kind: "org"; orgId: string } | { kind: "deployment" };
+
 /** All firing columns (reused by reconcile/list/ack so the row shape stays in one place). */
 const firingColumns = {
   id: alertFirings.id,
+  // M16 16.7 — selected so `toFiring` can DERIVE `scope`; NOT surfaced on the wire itself (the
+  // caller gets `scope: "org" | "deployment"`, never a raw org id belonging to nobody). Same
+  // precedent as `deliveryAttemptedAt` below: selected, documented, not on the wire shape.
+  // Explicit column lists rather than a bare `select()` are the M15 15.1 rule — no ingest route
+  // declares a Fastify response schema, so a bare select puts every future column on the wire.
+  orgId: alertFirings.orgId,
   alertKey: alertFirings.alertKey,
   code: alertFirings.code,
   severity: alertFirings.severity,
@@ -50,6 +93,7 @@ const firingColumns = {
 /** Map a raw firing row (text unions, Date timestamps) onto the typed AlertFiring wire shape. */
 function toFiring(r: {
   id: string;
+  orgId: string | null; // M16 16.7 — selected by firingColumns; becomes `scope`, never the wire id
   alertKey: string;
   code: string;
   severity: string;
@@ -76,6 +120,9 @@ function toFiring(r: {
     connector: r.connector,
     since: r.since,
     status: r.status as AlertFiringStatus,
+    // M16 16.7: the scope IS the nullability of `org_id` — a NULL org means the row belongs to the
+    // deployment. Derived here rather than stored, so the wire value cannot disagree with the row.
+    scope: r.orgId === null ? "deployment" : "org",
     // Plain timestamptz columns come back as JS Date via the driver — normalize to ISO.
     firstFiredAt: r.firstFiredAt.toISOString(),
     lastSeenAt: r.lastSeenAt.toISOString(),
@@ -91,12 +138,119 @@ function rank(f: AlertFiring): number {
 }
 
 /**
- * Evaluate-on-read reconcile (D1/D3/D4/D5). For each derived alert, idempotently upsert
- * ONE open firing per (user, alert_key) — INSERT a fresh open row (stamping
- * first_fired_at) or, when one is already open, DO UPDATE touching only
- * last_seen_at/message/severity/since (first_fired_at is NEVER overwritten, D4). Then
- * resolve every open firing whose key is no longer derived (`notInArray([])` → true
- * resolves all open, D5). Returns the current firing list (open + recently resolved).
+ * The rows an operation in `scope` MAY act on — the predicate that makes the two scopes disjoint.
+ *
+ * `eq(orgId, …)` never matches a NULL row and `isNull(orgId)` never matches an org row, so an org
+ * reconcile cannot resolve a deployment firing and vice versa. That is the whole non-flapping
+ * argument, and it holds whatever either caller derives (module doc, D-16.7-3).
+ */
+function scopePredicate(scope: FiringScope) {
+  return scope.kind === "org" ? eq(alertFirings.orgId, scope.orgId) : isNull(alertFirings.orgId);
+}
+
+/**
+ * Open the RLS context matching `scope` around one statement — `withOrg` for a tenant, its 16.7
+ * sibling `withDeployment` for the deployment (which sets the ROLE and deliberately leaves
+ * `app.current_org` unset; an unset org context IS the deployment scope).
+ *
+ * Used only by the two deliverers, which are the only functions here that take the UNWRAPPED `Db`
+ * and own their context internally. Everything else receives an already-scoped `DbClient` from a
+ * caller that opened one transaction for a whole snapshot.
+ */
+function inScope<T>(
+  db: Db,
+  scope: FiringScope,
+  role: string,
+  fn: (tx: Tx) => Promise<T>,
+): Promise<T> {
+  return scope.kind === "org" ? withOrg(db, scope.orgId, role, fn) : withDeployment(db, role, fn);
+}
+
+/**
+ * Evaluate-on-read reconcile (D1/D3/D4/D5), in ONE scope. For each derived alert, idempotently
+ * upsert ONE open firing — INSERT a fresh open row (stamping first_fired_at) or, when one is
+ * already open, DO UPDATE touching only last_seen_at/message/severity/since (first_fired_at is
+ * NEVER overwritten, D4). Then resolve every open firing IN THIS SCOPE whose key is no longer
+ * derived (`notInArray([])` → true resolves all open in scope, D5).
+ *
+ * The two `onConflictDoUpdate` blocks below name DIFFERENT indexes and must stay separate
+ * statements — see the module doc for what happens when the arbiters are crossed.
+ *
+ * `userId` is written on INSERT only and is PROVENANCE (D-16.7-2): the upsert's `set:` omits it,
+ * so a second caller updating an existing row leaves the OPENER's id in place. "Who first saw
+ * this" is the only question the column can now honestly answer.
+ */
+async function reconcileFirings(
+  db: DbClient,
+  scope: FiringScope,
+  userId: string,
+  alerts: OperationalAlert[],
+  now: Date,
+): Promise<void> {
+  const keys = alerts.map(alertKey);
+  for (const a of alerts) {
+    const values = {
+      orgId: scope.kind === "org" ? scope.orgId : null,
+      userId,
+      alertKey: alertKey(a),
+      code: a.code,
+      severity: a.severity,
+      message: a.message,
+      machineId: a.machineId ?? null,
+      machineName: a.machineName ?? null,
+      connector: a.connector ?? null,
+      since: a.since,
+      status: "open",
+      firstFiredAt: now,
+      lastSeenAt: now,
+    };
+    // M15 15.1: `orgId` is absent from BOTH `set:` blocks for the same reason as in ingest.ts —
+    // an existing open firing keeps the scope it was opened under. `userId` is absent for the
+    // 16.7 reason above.
+    const set = { lastSeenAt: now, message: a.message, severity: a.severity, since: a.since };
+    if (scope.kind === "org") {
+      await db
+        .insert(alertFirings)
+        .values(values)
+        .onConflictDoUpdate({
+          // arbiter: alert_firings_open_key
+          target: [alertFirings.orgId, alertFirings.alertKey],
+          targetWhere: sql`${alertFirings.status} = 'open' AND ${alertFirings.orgId} IS NOT NULL`,
+          set,
+        });
+    } else {
+      await db
+        .insert(alertFirings)
+        .values(values)
+        .onConflictDoUpdate({
+          // arbiter: alert_firings_open_global_key — a DIFFERENT index, one column
+          target: [alertFirings.alertKey],
+          targetWhere: sql`${alertFirings.status} = 'open' AND ${alertFirings.orgId} IS NULL`,
+          set,
+        });
+    }
+  }
+  // Resolve open firings whose condition is no longer derived (zero alerts → resolve all IN
+  // SCOPE, D5). `scopePredicate` is what stops that "resolve all" from reaching the other scope.
+  await db
+    .update(alertFirings)
+    .set({ status: "resolved", resolvedAt: now })
+    .where(
+      and(
+        scopePredicate(scope),
+        eq(alertFirings.status, "open"),
+        notInArray(alertFirings.alertKey, keys),
+      ),
+    );
+}
+
+/**
+ * Reconcile ONE ORG's alerts, then return the org's full firing surface (which INCLUDES the
+ * deployment-scoped rows — see `listAlertFirings`).
+ *
+ * M16 16.7: the signature is unchanged from 15.4, but `userId` no longer scopes anything. Two
+ * members of one org reconciling the same condition now converge on ONE row, one ack and one
+ * delivery, where before they opened one row each.
  */
 export async function reconcileAlertFirings(
   db: DbClient,
@@ -105,82 +259,87 @@ export async function reconcileAlertFirings(
   alerts: OperationalAlert[],
   now: Date,
 ): Promise<AlertFiring[]> {
-  const keys = alerts.map(alertKey);
-  if (alerts.length > 0) {
-    for (const a of alerts) {
-      await db
-        .insert(alertFirings)
-        .values({
-          orgId,
-          userId,
-          alertKey: alertKey(a),
-          code: a.code,
-          severity: a.severity,
-          message: a.message,
-          machineId: a.machineId ?? null,
-          machineName: a.machineName ?? null,
-          connector: a.connector ?? null,
-          since: a.since,
-          status: "open",
-          firstFiredAt: now,
-          lastSeenAt: now,
-        })
-        .onConflictDoUpdate({
-          target: [alertFirings.userId, alertFirings.alertKey],
-          targetWhere: sql`${alertFirings.status} = 'open'`,
-          // M15 15.1: `orgId` is absent here for the same reason as in ingest.ts —
-          // an existing open firing keeps the org it was opened under.
-          set: { lastSeenAt: now, message: a.message, severity: a.severity, since: a.since },
-        });
-    }
-  }
-  // Resolve open firings whose condition is no longer derived (zero alerts → resolve all, D5).
-  await db
-    .update(alertFirings)
-    .set({ status: "resolved", resolvedAt: now })
-    .where(
-      and(
-        // M15 15.4: org AND user. The `orgId` predicate closes the 15.2 backlog — with two
-        // users in one org `userId` alone is no longer a proxy for the tenant, and RLS was
-        // the only thing scoping this UPDATE (D-M15-3 says that must be the other way round).
-        eq(alertFirings.orgId, orgId),
-        eq(alertFirings.userId, userId),
-        eq(alertFirings.status, "open"),
-        notInArray(alertFirings.alertKey, keys),
-      ),
-    );
-  return listAlertFirings(db, orgId, userId, now);
+  await reconcileFirings(db, { kind: "org", orgId }, userId, alerts, now);
+  return listAlertFirings(db, orgId, now);
 }
 
 /**
- * The current firing surface: all OPEN firings plus firings RESOLVED within
+ * M16 16.7 — reconcile the DEPLOYMENT's alerts (the two codes with no owning tenant), then return
+ * the deployment-scoped firing list.
+ *
+ * Must run under `withDeployment` (or the owner handle in a test): an org context can SEE these
+ * rows but the write is the deployment's, not any tenant's. Passing `[]` resolves every open
+ * deployment firing and leaves every org row untouched — that asymmetry is the point.
+ *
+ * RETURNS NOTHING, deliberately asymmetric with `reconcileAlertFirings`. That sibling returns the
+ * org's list because the list IS the snapshot's `alertFirings` — a read the caller needs anyway.
+ * Nothing wants this one: the wire list comes from `listAlertFirings`, which already unions the
+ * deployment rows into the org read. Returning it would be a second `SELECT` per tick that both
+ * call sites discard — and in the throttled-but-diverged path, the second `listDeploymentFirings`
+ * inside the same transaction. A signature promising a value the codebase never wants is the same
+ * shape as a parameter accepted and ignored (see `ackAlertFiring`).
+ */
+export async function reconcileDeploymentFirings(
+  db: DbClient,
+  userId: string,
+  alerts: OperationalAlert[],
+  now: Date,
+): Promise<void> {
+  await reconcileFirings(db, { kind: "deployment" }, userId, alerts, now);
+}
+
+/** The open + recently-resolved window every list read shares. */
+function visibleWindow(now: Date) {
+  const cutoff = new Date(now.getTime() - ALERT_FIRINGS_RESOLVED_WINDOW_MS);
+  return or(
+    eq(alertFirings.status, "open"),
+    and(eq(alertFirings.status, "resolved"), gte(alertFirings.resolvedAt, cutoff)),
+  );
+}
+
+/**
+ * The current firing surface for an ORG: all OPEN firings plus firings RESOLVED within
  * ALERT_FIRINGS_RESOLVED_WINDOW_MS (a just-resolved alert lingers briefly as
  * confirmation). Ordered open&unacked → open&acked → resolved, then severity, then
  * oldest-first.
  *
- * M15 15.4 — scoped by org AND user (`orgId` second, the 15.2 convention). It was `userId`-only,
- * which was correct only while every org held exactly one user — the property this slice ends.
+ * M16 16.7 — `userId` is GONE from the signature (it scoped the read until 15.4 and merely
+ * narrowed it after; either way two members of one org saw different lists for the same
+ * conditions), and the predicate is WIDENED to include the deployment rows.
+ *
+ * Including them is not a convenience. The dashboard renders `snapshot.alertFirings` and nothing
+ * else, so a list that omitted `org_id IS NULL` rows would stop showing the two global codes
+ * entirely. The caller that must be careful is the RECONCILE-throttle check: comparing this union
+ * against a single scope's derived alerts reports divergence forever — partition on
+ * `firing.scope` first.
  */
 export async function listAlertFirings(
   db: DbClient,
   orgId: string,
-  userId: string,
   now: Date,
 ): Promise<AlertFiring[]> {
-  const cutoff = new Date(now.getTime() - ALERT_FIRINGS_RESOLVED_WINDOW_MS);
   const rows = await db
     .select(firingColumns)
     .from(alertFirings)
-    .where(
-      and(
-        eq(alertFirings.orgId, orgId),
-        eq(alertFirings.userId, userId),
-        or(
-          eq(alertFirings.status, "open"),
-          and(eq(alertFirings.status, "resolved"), gte(alertFirings.resolvedAt, cutoff)),
-        ),
-      ),
-    );
+    .where(and(or(eq(alertFirings.orgId, orgId), isNull(alertFirings.orgId)), visibleWindow(now)));
+  return sortFirings(rows);
+}
+
+/**
+ * M16 16.7 — the DEPLOYMENT-scoped firing list alone (`org_id IS NULL`). This is the list the
+ * deployment reconcile compares against for divergence; `listAlertFirings` is the one the
+ * dashboard renders, and it deliberately unions both scopes.
+ */
+export async function listDeploymentFirings(db: DbClient, now: Date): Promise<AlertFiring[]> {
+  const rows = await db
+    .select(firingColumns)
+    .from(alertFirings)
+    .where(and(isNull(alertFirings.orgId), visibleWindow(now)));
+  return sortFirings(rows);
+}
+
+/** Shared row-map + ordering for both list reads. */
+function sortFirings(rows: Parameters<typeof toFiring>[0][]): AlertFiring[] {
   return rows
     .map(toFiring)
     .sort(
@@ -194,31 +353,51 @@ export async function listAlertFirings(
 /**
  * Acknowledge a firing — sets `acked_at` (it stops drawing the eye) but does NOT
  * resolve it; resolution happens only when the condition clears. Mirrors
- * attribution.ts `setLinkStatus` (update by (id,userId) → re-select → map). Scoped by
- * userId; returns undefined for an unknown / other-user id.
+ * attribution.ts `setLinkStatus` (update by id + scope → re-select → map).
+ *
+ * M16 16.7 — the `userId` PARAMETER IS GONE, and its absence is the honest spelling.
+ *
+ * An org's condition is now ONE row, so any member may ack it and every other member sees it
+ * acked — the behaviour the per-user key made impossible, and the reason `userId` can no longer
+ * appear in the `where`. A DEPLOYMENT firing (`org_id IS NULL`) is ackable from any org,
+ * deliberately: one row, one ack, one notice, universally visible. The alternative (a deployment
+ * admin who alone sees it) has no schema support, since roles are org-scoped.
+ *
+ * The 16.7 plan called for keeping the parameter "only to stamp who acked". There is nowhere to
+ * stamp it: `alert_firings` has an `acked_at` but no `acked_by_user_id`, and `user_id` is the
+ * OPENER's id (D-16.7-2 provenance) which an ack must not overwrite. A parameter that is accepted
+ * and then ignored is the 15.5 defect in miniature — a signature asserting a behaviour the body
+ * does not have — so it is dropped rather than carried.
+ *
+ * WORTH KNOWING, because this slice is what loses it: before 16.7 the acker was necessarily the
+ * row's `user_id`, so "who silenced this?" was answerable by accident. With a shared row it is
+ * not, and answering it again needs a column and a migration nobody has written. Recorded here
+ * rather than papered over with an unused argument.
+ *
+ * A miss still returns undefined, which the route turns into 404 (never 403 — no existence leak).
  */
 export async function ackAlertFiring(
   db: DbClient,
   orgId: string,
-  userId: string,
   id: string,
   now: Date,
 ): Promise<AlertFiring | undefined> {
-  const [updated] = await db
+  // ONE statement: `RETURNING` the full column list rather than an id followed by a re-`SELECT`.
+  // The two deliverers below already do this (16.6's atomic claim needs it), which left this as the
+  // only update-then-select in the file — and, more to the point, the only read with NO scope
+  // predicate at all: the re-select was `where(eq(id))` alone, leaning entirely on RLS against
+  // D-M15-3 ("RLS backstops application scoping, it does not replace it"). Not exploitable as it
+  // stood (the UPDATE above had just proved the row was in scope, in the same transaction), but it
+  // is exactly the call site that survives a later refactor onto an unwrapped handle. Collapsing it
+  // removes the unscoped read rather than adding a predicate to it. Semantics are identical —
+  // `RETURNING` yields the post-update row, which is what the re-select was fetching.
+  const [row] = await db
     .update(alertFirings)
     .set({ ackedAt: now })
-    // M15 15.2: org AND user, matching setLinkStatus / listReportArtifacts. A miss returns
-    // undefined, which the route already turns into 404 (never 403 — no existence leak).
     .where(
-      and(eq(alertFirings.id, id), eq(alertFirings.orgId, orgId), eq(alertFirings.userId, userId)),
+      and(eq(alertFirings.id, id), or(eq(alertFirings.orgId, orgId), isNull(alertFirings.orgId))),
     )
-    .returning({ id: alertFirings.id });
-  if (!updated) return undefined;
-  const [row] = await db
-    .select(firingColumns)
-    .from(alertFirings)
-    .where(eq(alertFirings.id, id))
-    .limit(1);
+    .returning(firingColumns);
   return row ? toFiring(row) : undefined;
 }
 
@@ -254,12 +433,19 @@ export async function ackAlertFiring(
  * restrictive UPDATE policy reject the `delivery_attempted_at` stamp, so an org whose only
  * active user is a viewer would silently stop delivering every webhook and email — the exact
  * bug class the paragraph above records.
+ *
+ * M16 16.7 — takes a `FiringScope` instead of a bare `orgId`, and the `userId` predicate is GONE.
+ * Dropping it is the delivery half of the fix: one condition was previously N rows across N
+ * members, hence N claims and N notices. It is now one row, and 16.6's atomic claim
+ * (`UPDATE … WHERE delivery_attempted_at IS NULL … RETURNING`) already guarantees exactly one
+ * caller can win it — so collapsing the rows collapses the notices with no new dedupe machinery.
+ * The deployment scope runs under `withDeployment` (no org context at all) and claims the
+ * `org_id IS NULL` rows; see `withDeployment` for why an unset context IS that scope.
  */
 export async function deliverPendingFirings(
   db: Db,
-  orgId: string,
+  scope: FiringScope,
   role: string,
-  userId: string,
   deliverer: { deliver(firing: AlertFiring): Promise<void> } | null,
   now: Date,
   log?: (err: unknown) => void,
@@ -285,14 +471,13 @@ export async function deliverPendingFirings(
   // is unchanged and if anything strengthened: the stamp now lands BEFORE the attempt, so a crash
   // mid-delivery costs one notice rather than duplicating it. It is also fewer round trips — the
   // per-firing UPDATE loop is gone.
-  const rows = await withOrg(db, orgId, role, (tx) =>
+  const rows = await inScope(db, scope, role, (tx) =>
     tx
       .update(alertFirings)
       .set({ deliveryAttemptedAt: now })
       .where(
         and(
-          eq(alertFirings.orgId, orgId),
-          eq(alertFirings.userId, userId),
+          scopePredicate(scope),
           eq(alertFirings.status, "open"),
           isNull(alertFirings.deliveryAttemptedAt),
         ),
@@ -324,12 +509,15 @@ export async function deliverPendingFirings(
  *
  * M15 15.4: `role` is threaded from the caller (`SERVICE_ROLE` at the route) for the same
  * reason as `deliverPendingFirings` — see its note.
+ *
+ * M16 16.7: same `FiringScope` conversion and same dropped `userId` predicate as
+ * `deliverPendingFirings` — a resolve notice duplicated across N members exactly as an open one
+ * did, and `resolve_delivered_at` is its `delivery_attempted_at`.
  */
 export async function deliverResolvedFirings(
   db: Db,
-  orgId: string,
+  scope: FiringScope,
   role: string,
-  userId: string,
   deliverer: { deliver(firing: AlertFiring): Promise<void> } | null,
   now: Date,
   log?: (err: unknown) => void,
@@ -338,14 +526,13 @@ export async function deliverResolvedFirings(
   // M16 16.6 — the same atomic claim as `deliverPendingFirings`, for the same reason and against
   // the same second caller. See that function's note; a resolve notice duplicates just as readily
   // as an open one, and `resolve_delivered_at` is its `delivery_attempted_at`.
-  const rows = await withOrg(db, orgId, role, (tx) =>
+  const rows = await inScope(db, scope, role, (tx) =>
     tx
       .update(alertFirings)
       .set({ resolveDeliveredAt: now })
       .where(
         and(
-          eq(alertFirings.orgId, orgId),
-          eq(alertFirings.userId, userId),
+          scopePredicate(scope),
           eq(alertFirings.status, "resolved"),
           isNotNull(alertFirings.resolvedAt),
           isNotNull(alertFirings.deliveryAttemptedAt),

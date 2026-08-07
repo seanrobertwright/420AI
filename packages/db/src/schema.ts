@@ -942,19 +942,45 @@ export const ingestAuthFailures = pgTable(
 
 /**
  * M10 3c persisted Operational-Alert firings (PRD §20). Evaluate-on-read
- * reconcile (D1) upserts ONE open firing per (user, alert_key) — the PARTIAL
- * unique index below is the idempotency backbone (D3). first_fired_at records
- * when the firing opened (the stateless deriveAlerts could not). `since` is an
- * opaque ISO display label (text — never compared temporally).
+ * reconcile (D1) upserts firings idempotently — the PARTIAL unique indexes
+ * below are the idempotency backbone (D3). first_fired_at records when the
+ * firing opened (the stateless deriveAlerts could not). `since` is an opaque
+ * ISO display label (text — never compared temporally).
+ *
+ * M16 16.7 — THE KEY IS THE ORG, AND `org_id IS NULL` IS THE DEPLOYMENT SCOPE.
+ *
+ * Until this slice the key was `(user_id, alert_key)`, which answered "who is looking at
+ * this?" when the question is "what is broken?". That grain is wrong on BOTH axes:
+ *
+ *   - too FINE for an org condition — N members opening the monitor opened N rows, each
+ *     separately acked and separately delivered for one outage;
+ *   - entirely ABSENT for a deployment condition — `catalog.update_requires_approval` and
+ *     `ingest.auth_failure` derive from tables with no `org_id` at all, so with 16.6's
+ *     per-org tick ONE pending catalog opened a firing in EVERY org. `ensurePersonalOrg`
+ *     makes org count track USER count, so that is not a multi-tenant hypothetical.
+ *
+ * So there are TWO scopes and TWO partial unique indexes (D-16.7-1). Two, not one: under a
+ * unique index `NULL <> NULL`, so `(org_id, alert_key)` constrains NOTHING when `org_id` is
+ * NULL — measured in the planning spike, not assumed. A single composite index would have
+ * "fixed" the per-org duplication by permitting unlimited deployment duplicates instead. The
+ * org index carries an explicit `AND org_id IS NOT NULL` so the two PARTITION the table.
+ *
+ * `user_id` stays NOT NULL and becomes PROVENANCE (D-16.7-2): who or what OPENED the firing.
+ * It is no longer part of any key, any read predicate or any delivery predicate, and the
+ * upsert preserves the opener's id rather than overwriting it with the second caller's — so
+ * "who first saw this" is the only question it can now honestly answer. It is stated here
+ * because a column whose meaning silently changed is worse than a renamed one.
  */
 export const alertFirings = pgTable(
   "alert_firings",
   {
     id: uuid("id").primaryKey().defaultRandom(),
     // M15 15.1 tenancy (D-M15-1). Resolved from the owning user (getOrgIdForUser).
-    orgId: uuid("org_id")
-      .notNull()
-      .references(() => organizations.id),
+    // M16 16.7: NULLABLE — `NULL` means "this firing belongs to the DEPLOYMENT, not to a
+    // tenant". Every org SEES such a row (the amended policy in 0027 ors in `org_id IS NULL`)
+    // while exactly one row, one ack and one delivery exist for it.
+    orgId: uuid("org_id").references(() => organizations.id),
+    // M16 16.7 (D-16.7-2): PROVENANCE, not a key. See the table doc above.
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id),
@@ -979,11 +1005,22 @@ export const alertFirings = pgTable(
     resolveDeliveredAt: timestamp("resolve_delivered_at", { withTimezone: true }),
   },
   (t) => [
-    // At most ONE open firing per (user, alert_key) — the reconcile idempotency key (D3).
+    // ORG scope — at most ONE open firing per (org, alert_key). The `IS NOT NULL` predicate is
+    // NOT decoration: without it this index would also (fail to) cover the deployment rows, and
+    // `NULL <> NULL` means it constrains none of them (D-16.7-1).
     uniqueIndex("alert_firings_open_key")
-      .on(t.userId, t.alertKey)
-      .where(sql`${t.status} = 'open'`),
-    index("alert_firings_by_user_status").on(t.userId, t.status),
+      .on(t.orgId, t.alertKey)
+      .where(sql`${t.status} = 'open' AND ${t.orgId} IS NOT NULL`),
+    // DEPLOYMENT scope — at most ONE open firing per alert_key across the WHOLE deployment.
+    // One column, a DIFFERENT index. Using the org arbiter against a global row raises a hard
+    // `duplicate key … "alert_firings_open_global_key"`, which is why the repository keeps the
+    // two upserts as two separate statements: the split is enforced by the database, loudly.
+    uniqueIndex("alert_firings_open_global_key")
+      .on(t.alertKey)
+      .where(sql`${t.status} = 'open' AND ${t.orgId} IS NULL`),
+    // M16 16.7: replaces `alert_firings_by_user_status` — it indexed a column nothing keys on
+    // any more (D-16.7-2), while every read is now `(org_id, status)`-shaped.
+    index("alert_firings_by_org_status").on(t.orgId, t.status),
     index("alert_firings_by_org").on(t.orgId),
   ],
 );

@@ -1,8 +1,15 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from "vitest";
 import { sql } from "drizzle-orm";
 import type { IngestBatch } from "@420ai/shared";
-import { createDb, ingestBatch, withOrg } from "../index.js";
-import { events, machines, reportArtifacts, searchDocuments, users } from "../schema.js";
+import { createDb, ingestBatch, withOrg, withDeployment } from "../index.js";
+import {
+  alertFirings,
+  events,
+  machines,
+  reportArtifacts,
+  searchDocuments,
+  users,
+} from "../schema.js";
 import { ensurePersonalOrg } from "./organizations.js";
 import { issueIngestToken } from "./tokens.js";
 import { findMachineIdByToken } from "./tokens.js";
@@ -105,7 +112,6 @@ const STRICT_TABLES = [
   "git_commit_files",
   "session_git_links",
   "machine_heartbeats",
-  "alert_firings",
   "search_documents",
   // M15 15.4: a new tenant table with the same strict org policy as the other twelve.
   "project_grants",
@@ -168,6 +174,46 @@ const ROLE_GATED_BOOTSTRAP_TABLES = ["invites"] as const;
  * adding this constant moves no literal integer. If you find yourself editing one, stop.
  */
 const APPEND_ONLY_TABLES = ["audit_events"] as const;
+
+/**
+ * M16 16.7 (D-16.7-4) — a SIXTH classification: DEPLOYMENT-SCOPED. `alert_firings` moved out of
+ * STRICT_TABLES to get here, and the move is the whole point of the constant.
+ *
+ * Its policy qual is
+ *
+ *     (org_id = NULLIF(current_setting('app.current_org', true), '')::uuid) OR (org_id IS NULL)
+ *
+ * because a firing whose `org_id` is NULL belongs to the DEPLOYMENT rather than to a tenant — the
+ * two alert codes deriving from tables that carry no `org_id` at all. Every org must SEE that row
+ * (it is one condition, one ack, one notice for the whole installation) while no org may see
+ * another's.
+ *
+ * WHY IT CANNOT JOIN AN EXISTING LIST, AND WHY A SUBSTRING CHECK CANNOT POLICE IT. The strict loop
+ * asserts a qual does NOT contain "IS NULL"; the bootstrap loop asserts it DOES. This qual contains
+ * "IS NULL" and is neither, and the difference is not cosmetic — read the two side by side:
+ *
+ *     BOOTSTRAP: NULLIF(current_setting('app.current_org', true), '') IS NULL   ← tests the SETTING
+ *                "no context ⇒ see EVERYTHING"
+ *     16.7:      org_id IS NULL                                                 ← tests the ROW
+ *                "this row belongs to the deployment ⇒ everyone sees it"
+ *
+ * Those are OPPOSITE security properties, and `toContain("IS NULL")` cannot tell them apart. So
+ * dropping `alert_firings` into BOOTSTRAP_TABLES would have made this whole file pass while
+ * asserting that an unset context sees EVERY firing in the deployment — the precise "a structural
+ * grep cannot decide semantics" failure the repo has now recorded three times (15.2's `tsc`
+ * file-level lesson, 15.3's `withOrg(` per-file grep, and this).
+ *
+ * Hence: its own list, its own STRUCTURAL assertion (test 8b) that pins the shape rather than a
+ * substring, and — because a structural check still cannot prove what the policy DOES — a
+ * BEHAVIOURAL pair (test 8c) driving the app role through both halves.
+ *
+ * It keeps its three RESTRICTIVE role policies (it has a real per-tenant write path) and it keeps
+ * ENABLE + FORCE (D-16.7-5): unlike 15.10's `audit_events`, whose only reader is the owner's
+ * break-glass query, this table has a real per-tenant READ path — the dashboard — so the owner
+ * exemption must stay removed. It therefore stays inside the "all 19 tenant tables" count; it only
+ * moved between the POLICY-SHAPE lists, which is why no literal integer in this file changes.
+ */
+const DEPLOYMENT_SCOPED_TABLES = ["alert_firings"] as const;
 
 /** No policy at all: identity tables (D-15.3-4) + deployment-global tables (D-M15-9). */
 const NO_RLS_TABLES = [
@@ -537,7 +583,8 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.3 RLS enforcement (two-role integ
       STRICT_TABLES.length +
         BOOTSTRAP_TABLES.length +
         ROLE_GATED_BOOTSTRAP_TABLES.length +
-        APPEND_ONLY_TABLES.length,
+        APPEND_ONLY_TABLES.length +
+        DEPLOYMENT_SCOPED_TABLES.length,
     );
     const orgByTable = new Map(org.map((r) => [r.tablename, r.qual!]));
     expect(orgByTable.size).toBe(org.length); // exactly one org policy per table
@@ -578,16 +625,69 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.3 RLS enforcement (two-role integ
       // It appears in NO other classification. Without this, moving the table into a tenant list
       // later would leave both sets of expectations passing while describing different designs.
       expect(
-        [...STRICT_TABLES, ...BOOTSTRAP_TABLES, ...ROLE_GATED_BOOTSTRAP_TABLES, ...NO_RLS_TABLES],
+        [
+          ...STRICT_TABLES,
+          ...BOOTSTRAP_TABLES,
+          ...ROLE_GATED_BOOTSTRAP_TABLES,
+          ...NO_RLS_TABLES,
+          ...DEPLOYMENT_SCOPED_TABLES,
+        ],
+        `${t} belongs to exactly one classification`,
+      ).not.toContain(t);
+    }
+
+    /**
+     * M16 16.7 (D-16.7-4) — the DEPLOYMENT-SCOPED shape, asserted STRUCTURALLY rather than by
+     * substring. The qual must contain BOTH halves: the org equality (or it is not isolation) and
+     * the ROW-column `org_id IS NULL` (or the deployment rows are invisible to everyone).
+     *
+     * The `not.toContain("current_setting('app.current_org', true) IS NULL")` is the load-bearing
+     * one: it is what distinguishes this table from a BOOTSTRAP table, whose "IS NULL" tests the
+     * SETTING and therefore means "no context ⇒ see everything". A plain `toContain("IS NULL")`
+     * would pass for both, which is exactly why this table is not in that list.
+     */
+    for (const t of DEPLOYMENT_SCOPED_TABLES) {
+      const qual = orgByTable.get(t);
+      expect(qual, `${t} must carry an org policy`).toBeTruthy();
+      const upper = qual!.toUpperCase().replace(/\s+/g, " ");
+      expect(upper, `${t} must still scope by org`).toContain("CURRENT_SETTING('APP.CURRENT_ORG'");
+      expect(upper, `${t} must admit the deployment scope`).toContain("ORG_ID IS NULL");
+      // NOT the bootstrap shape: the escape hatch must test the ROW, never the SETTING.
+      expect(upper, `${t} must NOT be BOOTSTRAP-shaped`).not.toMatch(
+        /NULLIF\(CURRENT_SETTING\('APP\.CURRENT_ORG', TRUE\), ''::TEXT\) IS NULL/,
+      );
+      // It also carries an explicit WITH CHECK — 0015's org policies have USING only (Postgres
+      // copies it), so spelling both out is a deliberate 16.7 change and is asserted as one.
+      const policy = all.find((r) => r.tablename === t && r.permissive === "PERMISSIVE")!;
+      expect(policy.with_check, `${t} must spell WITH CHECK explicitly`).toBeTruthy();
+      expect(policy.with_check!.toUpperCase().replace(/\s+/g, " ")).toContain("ORG_ID IS NULL");
+      // Exactly one classification, same guard as APPEND_ONLY above.
+      expect(
+        [
+          ...STRICT_TABLES,
+          ...BOOTSTRAP_TABLES,
+          ...ROLE_GATED_BOOTSTRAP_TABLES,
+          ...NO_RLS_TABLES,
+          ...APPEND_ONLY_TABLES,
+        ],
         `${t} belongs to exactly one classification`,
       ).not.toContain(t);
     }
 
     // ── the 15.4 role-write backstop: 3 per STRICT table, plus (15.5) 3 on `invites` ──
+    // M16 16.7: `alert_firings` keeps its three role policies — it has a real per-tenant WRITE
+    // path (an ack), so a viewer's write must still be refused. Only its ORG-axis shape changed.
     expect(restrictive).toHaveLength(
-      (STRICT_TABLES.length + ROLE_GATED_BOOTSTRAP_TABLES.length) * 3,
+      (STRICT_TABLES.length +
+        ROLE_GATED_BOOTSTRAP_TABLES.length +
+        DEPLOYMENT_SCOPED_TABLES.length) *
+        3,
     );
-    for (const t of [...STRICT_TABLES, ...ROLE_GATED_BOOTSTRAP_TABLES]) {
+    for (const t of [
+      ...STRICT_TABLES,
+      ...ROLE_GATED_BOOTSTRAP_TABLES,
+      ...DEPLOYMENT_SCOPED_TABLES,
+    ]) {
       const forTable = restrictive.filter((r) => r.tablename === t);
       expect(forTable.map((r) => r.cmd).sort(), `${t} restrictive commands`).toEqual([
         "DELETE",
@@ -634,7 +734,18 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.3 RLS enforcement (two-role integ
     // M15 15.10 does NOT move it. `audit_events` has a policy but is not a TENANT table in this
     // file's sense — nothing reads it per-tenant — and it deliberately does not FORCE, so it is
     // asserted separately in test 10 rather than added here.
-    const all = [...STRICT_TABLES, ...BOOTSTRAP_TABLES, ...ROLE_GATED_BOOTSTRAP_TABLES];
+    //
+    // M16 16.7 does NOT move it either. `alert_firings` left STRICT_TABLES for
+    // DEPLOYMENT_SCOPED_TABLES, but it is still a TENANT table and still FORCEs (D-16.7-5) — it has
+    // a real per-tenant read path, the dashboard, so the owner exemption must stay removed. The
+    // count in the title therefore stays 19: the table moved between policy-SHAPE lists, not in or
+    // out of this one.
+    const all = [
+      ...STRICT_TABLES,
+      ...BOOTSTRAP_TABLES,
+      ...ROLE_GATED_BOOTSTRAP_TABLES,
+      ...DEPLOYMENT_SCOPED_TABLES,
+    ];
     const rows = await owner.db.execute<{
       relname: string;
       relrowsecurity: boolean;
@@ -670,5 +781,199 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.3 RLS enforcement (two-role integ
       expect(r.relrowsecurity, `${r.relname} ENABLE`).toBe(true);
       expect(r.relforcerowsecurity, `${r.relname} must NOT force (break-glass read)`).toBe(false);
     }
+  });
+
+  /**
+   * 11 ── M16 16.7 (D-16.7-4) — THE BEHAVIOURAL PAIR. The structural check above cannot do this.
+   *
+   * Test 8b asserts the policy's SHAPE. But the repo has now been bitten three times by a
+   * structural check that reads the right source text and proves the wrong thing (15.2's `tsc`
+   * file-level errors, 15.3's `withOrg(` per-file grep, and 16.7's own "IS NULL" substring, which
+   * cannot tell a bootstrap policy from this one). So the shape assertion is PAIRED with a
+   * behavioural one, driven on the NON-OWNER app role — the only role RLS is not inert against.
+   *
+   * These four cases are the ones that decide whether "deployment scope" is real:
+   *
+   *   a) an org context sees its own rows AND the deployment rows, never another org's;
+   *   b) an UNSET org context sees ONLY the deployment rows — that is what makes a role-only
+   *      transaction (`withDeployment`) a scope rather than an accident;
+   *   c) an unset-org transaction may INSERT a deployment row (WITH CHECK passes on `org_id IS NULL`);
+   *   d) an unset-org transaction is STILL REFUSED an org-scoped insert — no tenancy hole was
+   *      opened in exchange for (c).
+   *
+   * (d) is the one that would be quietly catastrophic to lose, and it is the reason the amended
+   * policy spells `WITH CHECK` out explicitly instead of letting Postgres copy `USING`.
+   */
+  describe("M16 16.7 — the deployment scope, behaviourally (D-16.7-4)", () => {
+    const GLOBAL_KEY = "catalog.update_requires_approval:*";
+
+    /** Seed one org-A firing, one org-B firing and one DEPLOYMENT firing, as the owner. */
+    async function seedThree(): Promise<void> {
+      await owner.db.insert(alertFirings).values([
+        {
+          orgId: orgA,
+          userId: userA,
+          alertKey: `collector.offline:${machineA}`,
+          code: "collector.offline",
+          severity: "critical",
+          message: "a",
+          status: "open",
+        },
+        {
+          orgId: orgB,
+          userId: userB,
+          alertKey: `collector.offline:${machineB}`,
+          code: "collector.offline",
+          severity: "critical",
+          message: "b",
+          status: "open",
+        },
+        {
+          orgId: null,
+          userId: userA,
+          alertKey: GLOBAL_KEY,
+          code: "catalog.update_requires_approval",
+          severity: "warning",
+          message: "global",
+          status: "open",
+        },
+      ]);
+    }
+
+    it("an ORG context sees its own rows AND the deployment row, never the other org's", async () => {
+      await seedThree();
+      const seen = await withOrg(appRole.db, orgA, WRITE_ROLE, async (tx) => {
+        const r = await tx.execute<{ message: string }>(
+          sql`select message from alert_firings order by message`,
+        );
+        return r.rows.map((x) => x.message);
+      });
+      expect(seen).toEqual(["a", "global"]);
+    });
+
+    it("an UNSET org context sees ONLY the deployment rows (a role-only txn IS the scope)", async () => {
+      await seedThree();
+      const seen = await withDeployment(appRole.db, WRITE_ROLE, async (tx) => {
+        const r = await tx.execute<{ message: string }>(
+          sql`select message from alert_firings order by message`,
+        );
+        return r.rows.map((x) => x.message);
+      });
+      expect(seen).toEqual(["global"]);
+    });
+
+    it("an unset-org transaction MAY insert a deployment row", async () => {
+      await withDeployment(appRole.db, WRITE_ROLE, async (tx) => {
+        await tx.insert(alertFirings).values({
+          orgId: null,
+          userId: userA,
+          alertKey: GLOBAL_KEY,
+          code: "catalog.update_requires_approval",
+          severity: "warning",
+          message: "written with no org context",
+          status: "open",
+        });
+      });
+      const rows = await owner.db.execute<{ n: number }>(
+        sql`select count(*)::int as n from alert_firings where org_id is null`,
+      );
+      expect(rows.rows[0]!.n).toBe(1);
+    });
+
+    it("an unset-org transaction is STILL REFUSED an org-scoped insert (no tenancy hole)", async () => {
+      // The half that makes the previous test safe. If this ever passes, `withDeployment` has
+      // become a way to write into any tenant with no context at all.
+      await expectRlsRejection(
+        withDeployment(appRole.db, WRITE_ROLE, async (tx) => {
+          await tx.insert(alertFirings).values({
+            orgId: orgA,
+            userId: userA,
+            alertKey: `collector.offline:${machineA}`,
+            code: "collector.offline",
+            severity: "critical",
+            message: "should be refused",
+            status: "open",
+          });
+        }),
+      );
+      const rows = await owner.db.execute<{ n: number }>(
+        sql`select count(*)::int as n from alert_firings`,
+      );
+      expect(rows.rows[0]!.n).toBe(0);
+    });
+
+    it("an ORG context is still refused a write into ANOTHER org (unchanged by the amendment)", async () => {
+      await expectRlsRejection(
+        withOrg(appRole.db, orgA, WRITE_ROLE, async (tx) => {
+          await tx.insert(alertFirings).values({
+            orgId: orgB,
+            userId: userB,
+            alertKey: `collector.offline:${machineB}`,
+            code: "collector.offline",
+            severity: "critical",
+            message: "cross-tenant",
+            status: "open",
+          });
+        }),
+      );
+    });
+
+    /**
+     * THE NEGATIVE CONTROL, run in-process rather than described (CLAUDE.md: verify a negative test
+     * FAILS with the fix removed, and remove it the RIGHT way).
+     *
+     * The RIGHT way here is to replace the policy with the PRE-16.7 strict one, not to DROP it:
+     * dropping a policy while RLS stays ENABLED makes Postgres deny everything, so the test would
+     * fail for the wrong reason and prove nothing about the `OR org_id IS NULL` clause specifically.
+     *
+     * Under the unamended policy the deployment row is invisible to EVERY org — which is what makes
+     * the amendment load-bearing rather than cosmetic: without it the dashboard (which renders
+     * `alertFirings` and nothing else) would stop showing both global alert codes entirely.
+     *
+     * The policy is restored in a `finally`. A test that holds the database in a modified state on
+     * failure takes every later test in the file down with it — the 15.5 lesson about releasing a
+     * held transaction, one level up.
+     */
+    it("NEGATIVE CONTROL: without `OR org_id IS NULL` the deployment row is invisible to every org", async () => {
+      await seedThree();
+      const AMENDED = sql`
+        create policy "alert_firings_org_isolation" on "alert_firings"
+          using (org_id = nullif(current_setting('app.current_org', true), '')::uuid or org_id is null)
+          with check (org_id = nullif(current_setting('app.current_org', true), '')::uuid or org_id is null)`;
+      try {
+        await owner.db.execute(sql`drop policy "alert_firings_org_isolation" on "alert_firings"`);
+        await owner.db.execute(sql`
+          create policy "alert_firings_org_isolation" on "alert_firings"
+            using (org_id = nullif(current_setting('app.current_org', true), '')::uuid)`);
+
+        const seenA = await withOrg(appRole.db, orgA, WRITE_ROLE, async (tx) => {
+          const r = await tx.execute<{ message: string }>(sql`select message from alert_firings`);
+          return r.rows.map((x) => x.message);
+        });
+        // Org A still sees its OWN row — so the policy is working, just not admitting the
+        // deployment scope. That is what makes this a control and not a smoke test.
+        expect(seenA).toEqual(["a"]);
+        expect(seenA).not.toContain("global");
+
+        // And the deployment scope itself now reads nothing at all.
+        const seenGlobal = await withDeployment(appRole.db, WRITE_ROLE, async (tx) => {
+          const r = await tx.execute<{ n: number }>(
+            sql`select count(*)::int as n from alert_firings`,
+          );
+          return r.rows[0]!.n;
+        });
+        expect(seenGlobal).toBe(0);
+      } finally {
+        await owner.db.execute(sql`drop policy "alert_firings_org_isolation" on "alert_firings"`);
+        await owner.db.execute(AMENDED);
+      }
+
+      // Restored: the amended policy admits the deployment row again.
+      const restored = await withOrg(appRole.db, orgA, WRITE_ROLE, async (tx) => {
+        const r = await tx.execute<{ message: string }>(sql`select message from alert_firings`);
+        return r.rows.map((x) => x.message);
+      });
+      expect(restored.sort()).toEqual(["a", "global"]);
+    });
   });
 });

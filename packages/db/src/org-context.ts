@@ -85,6 +85,54 @@ export async function withOrg<T>(
 }
 
 /**
+ * M16 16.7 — the DEPLOYMENT-scope sibling of `withOrg` (D-16.7-1/D-16.7-4).
+ *
+ * `alert_firings` gained a second scope in 16.7: a row whose `org_id IS NULL` belongs to the
+ * DEPLOYMENT rather than to any tenant (a pending pricing catalog, an ingest auth-failure
+ * streak — conditions derived from tables that have no `org_id` at all). `withOrg` cannot
+ * express that scope: it REJECTS a blank org id by design (see its note above), and passing a
+ * real org would make the deployment write look like that org's.
+ *
+ * So this sets `app.current_role` and DELIBERATELY DOES NOT SET `app.current_org`. Four
+ * consequences, each measured against real Postgres in the 16.7 planning spike rather than
+ * reasoned about:
+ *
+ *   - an unset org context reads ONLY `org_id IS NULL` rows — a role-only transaction IS the
+ *     deployment scope, it does not need a predicate to become one;
+ *   - it may INSERT a deployment row (the amended policy's `WITH CHECK` passes on `org_id IS NULL`);
+ *   - it is still REFUSED an org-scoped insert (`new row violates row-level security policy`),
+ *     so this opens no tenancy hole;
+ *   - every ORG context still SEES the deployment rows, which is what makes one shared ack coherent.
+ *
+ * Do NOT "complete the symmetry" by setting `app.current_org` to `''`. `withOrg` rejects a blank
+ * org precisely because the BOOTSTRAP policies read `nullif(…, '')` as no-context and open up for
+ * the whole transaction — a half-open context is worse than either extreme because nothing errors.
+ * Leaving the setting genuinely UNSET is what the spike measured.
+ *
+ * The parameter is `Db`, NEVER `DbClient`, for the identical reason `withOrg` gives: a `Tx` would
+ * silently produce a SAVEPOINT whose `set_config` scope is the OUTER transaction, and
+ * `DbClient.transaction()` typechecks, so this parameter type is the only guard.
+ */
+export async function withDeployment<T>(
+  db: Db,
+  role: string,
+  fn: (tx: Tx) => Promise<T>,
+): Promise<T> {
+  // A blank role is rejected for exactly the reason `withOrg` rejects one: the 0016 policies
+  // coalesce '' to 'member', so a blank role silently grants WRITE capability. Deployment work
+  // has no membership role at all, so every caller passes SERVICE_ROLE explicitly.
+  if (!role.trim()) {
+    throw new Error("withDeployment requires a non-empty role — pass SERVICE_ROLE");
+  }
+  return db.transaction(async (tx) => {
+    // set_config(..., true) == SET LOCAL, but PARAMETERIZED — see `withOrg` for why the plain
+    // `SET LOCAL app.current_role = ${role}` spelling is not available.
+    await tx.execute(sql`SELECT set_config('app.current_role', ${role}, true)`);
+    return fn(tx);
+  });
+}
+
+/**
  * The non-owner application role the ingest server connects as. RLS is INERT against the
  * owner/superuser in `DATABASE_URL` (`rolbypassrls`), and `FORCE ROW LEVEL SECURITY` removes
  * only the table-OWNER exemption, not the superuser one — two distinct exemptions, two

@@ -74,6 +74,64 @@ describe("fault record (M16 16.6)", () => {
     expect(stored?.lastObservedAt).toBe("2026-08-14T09:31:04.220Z");
   });
 
+  /**
+   * M16 16.7 — THE `!== "auth_revoked"` TRAP, closed by a test.
+   *
+   * `loadFault`'s validator read `if (rec.code !== "auth_revoked") return undefined` when that was
+   * the only code. Adding a second code without widening it would have made every
+   * `archive_unreachable` record read back as a CORRUPT FILE — written by `saveFault`, rejected by
+   * `loadFault` — so the startup announcement would say nothing, the `(code, url)` continuity would
+   * restart the `since` clock on every observation, and the whole feature would silently do nothing
+   * while every test that only WRITES stayed green. This is the read-back that catches it.
+   */
+  it("round-trips the DEGRADED archive_unreachable code (the !== auth_revoked trap)", () => {
+    const path = faultPathFor(tempHome());
+    const degraded: CaptureFault = { ...sample, code: "archive_unreachable", message: "down" };
+    saveFault(degraded, path);
+    const stored = loadFault(path);
+    expect(stored).toEqual({ ...degraded, lastObservedAt: degraded.since });
+    expect(stored?.code).toBe("archive_unreachable");
+  });
+
+  it("rejects an UNKNOWN code as corrupt (the check is set membership, not `!== undefined`)", () => {
+    const path = faultPathFor(tempHome());
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, JSON.stringify({ ...sample, code: "disk_full" }));
+    expect(loadFault(path)).toBeUndefined();
+  });
+
+  /**
+   * M16 16.7 — a code change is a DIFFERENT fault, so it starts a new clock. That is `saveFault`'s
+   * existing `(code, url)` continuity rule and this is the case it was written for but could never
+   * previously exercise, there having been only one code.
+   *
+   * The sequence is the real one: the archive is unreachable for a while, comes back, and answers
+   * 401 because the credential was revoked in the meantime. The 401's `since` must be when the 401
+   * started — reporting it as "since the network went down" would attribute a revocation to an
+   * outage that had already ended.
+   */
+  it("unreachable → auth_revoked starts a NEW since (a different code is a different fault)", () => {
+    const path = faultPathFor(tempHome());
+    saveFault({ ...sample, code: "archive_unreachable" }, path);
+    saveFault({ ...sample, code: "auth_revoked", since: "2026-08-14T09:31:04.220Z" }, path);
+
+    const stored = loadFault(path);
+    expect(stored?.code).toBe("auth_revoked");
+    expect(stored?.since).toBe("2026-08-14T09:31:04.220Z");
+  });
+
+  it("preserves since across re-stamps of the SAME degraded fault (the sparse re-stamp path)", () => {
+    const path = faultPathFor(tempHome());
+    const degraded: CaptureFault = { ...sample, code: "archive_unreachable" };
+    saveFault(degraded, path);
+    // What the engine's every-60th-failure re-stamp does: same code, same url, a later instant.
+    saveFault({ ...degraded, since: "2026-08-06T12:01:00.000Z" }, path);
+
+    const stored = loadFault(path);
+    expect(stored?.since).toBe("2026-08-06T12:00:00.000Z");
+    expect(stored?.lastObservedAt).toBe("2026-08-06T12:01:00.000Z");
+  });
+
   it("creates the collector home if it does not exist yet (fresh --home)", () => {
     const path = faultPathFor(tempHome());
     expect(existsSync(dirname(path))).toBe(false);

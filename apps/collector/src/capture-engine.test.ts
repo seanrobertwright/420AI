@@ -1,8 +1,14 @@
 import { describe, it, expect, afterEach } from "vitest";
+import { ARCHIVE_UNREACHABLE_MIN_FAILURES } from "@420ai/shared";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { drainBeforeExit, pollLoop, runCaptureEngine } from "./capture-engine.js";
+import {
+  degradedStampDecision,
+  drainBeforeExit,
+  pollLoop,
+  runCaptureEngine,
+} from "./capture-engine.js";
 import { QueueStore, type SyncOutcome } from "./queue/queue-store.js";
 import { IngestHttpError } from "./ingest-client.js";
 import type { CaptureFault } from "./fault.js";
@@ -14,6 +20,65 @@ import type { Connector } from "./connectors/connector.js";
  * so a ~200k-item queue hung exit for minutes and held the SQLite handle open. drainBeforeExit
  * caps the drain by a wall-clock deadline so exit is always prompt; leftovers stay queued.
  */
+/**
+ * M16 16.7 (prp-review) — the SPARSE RE-STAMP policy, tested where it can actually fail.
+ *
+ * The engine-level test below asserts `seen.length < failures` over a 20 s window, which is true
+ * (1 < 5) — and stays true if `DEGRADED_RESTAMP_EVERY` were 1 (3 < 5). It never observes a
+ * re-stamp, because reaching one costs 60 backed-off drains ~ half an hour at the queue's 30 s
+ * backoff cap. So the property D-16.7-9 exists to guarantee was pinned by nothing at all. Driving
+ * the pure decision directly is the only way to check it in milliseconds.
+ */
+describe("degradedStampDecision (M16 16.7 — write on the crossing, then sparsely)", () => {
+  /** Replay a whole failure streak through the policy, collecting the failures that stamped. */
+  function stampsOver(lastConsecutive: number): { at: number; crossing: boolean }[] {
+    const stamps: { at: number; crossing: boolean }[] = [];
+    let sinceStamp = 0;
+    for (let n = 1; n <= lastConsecutive; n += 1) {
+      const d = degradedStampDecision(n, sinceStamp);
+      sinceStamp = d.failuresSinceStamp;
+      if (d.stamp) stamps.push({ at: n, crossing: d.crossing });
+    }
+    return stamps;
+  }
+
+  it("writes NOTHING below the threshold", () => {
+    expect(stampsOver(ARCHIVE_UNREACHABLE_MIN_FAILURES - 1)).toEqual([]);
+  });
+
+  it("writes exactly once AT the threshold, and marks it the crossing", () => {
+    expect(stampsOver(ARCHIVE_UNREACHABLE_MIN_FAILURES)).toEqual([
+      { at: ARCHIVE_UNREACHABLE_MIN_FAILURES, crossing: true },
+    ]);
+  });
+
+  it("then re-stamps every 60th failure — NOT every failure (the assertion that was missing)", () => {
+    // THIS is the test the engine-level one could not be: it observes real re-stamps and would fail
+    // loudly if `DEGRADED_RESTAMP_EVERY` were changed to 1 (which would produce ~121 stamps here).
+    const stamps = stampsOver(ARCHIVE_UNREACHABLE_MIN_FAILURES + 120);
+    expect(stamps).toEqual([
+      { at: ARCHIVE_UNREACHABLE_MIN_FAILURES, crossing: true },
+      { at: ARCHIVE_UNREACHABLE_MIN_FAILURES + 60, crossing: false },
+      { at: ARCHIVE_UNREACHABLE_MIN_FAILURES + 120, crossing: false },
+    ]);
+    // Only the crossing logs; the re-stamps are silent by design (one operator line per outage).
+    expect(stamps.filter((s) => s.crossing)).toHaveLength(1);
+  });
+
+  it("a streak that RECOVERS and re-crosses announces again immediately", () => {
+    // The engine resets `consecutive` via the sync loop, not this function; what matters here is
+    // that a fresh crossing stamps without waiting out any remaining re-stamp interval.
+    const first = degradedStampDecision(ARCHIVE_UNREACHABLE_MIN_FAILURES, 0);
+    expect(first).toEqual({ stamp: true, crossing: true, failuresSinceStamp: 0 });
+    const mid = degradedStampDecision(ARCHIVE_UNREACHABLE_MIN_FAILURES + 1, 0);
+    expect(mid.stamp).toBe(false);
+    // …archive recovers, streak resets to 0, then fails 3 more times. `failuresSinceStamp` is
+    // whatever it was (1) — the crossing must still stamp, and must reset the counter.
+    const again = degradedStampDecision(ARCHIVE_UNREACHABLE_MIN_FAILURES, mid.failuresSinceStamp);
+    expect(again).toEqual({ stamp: true, crossing: true, failuresSinceStamp: 0 });
+  });
+});
+
 describe("drainBeforeExit (C.8 — bounded shutdown drain)", () => {
   it("stops at the deadline instead of draining a huge backlog forever", async () => {
     let calls = 0;
@@ -543,4 +608,198 @@ describe("runCaptureEngine shutdown-drain delivery (M16 16.6 F-D)", () => {
 
     expect(syncs.every((s) => s.delivered === 0)).toBe(true);
   });
+});
+
+/**
+ * M16 16.7 — the DEGRADED reporter: an unreachable archive is no longer silent, and no longer
+ * fatal either.
+ *
+ * `consecutiveSyncFailures` was reported ONLY through the heartbeat — the one channel that by
+ * definition cannot arrive when the archive is what is down. So a 500/ECONNREFUSED loop grew the
+ * queue without bound, wrote no record, exited 0 and left WinSW seeing a healthy service:
+ * INC-2026-07's observable symptom reached by a different cause.
+ *
+ * The four properties under test are the ones that make it DEGRADED rather than FATAL (D-16.7-8):
+ * it fires at the threshold, it re-stamps sparsely rather than on every failed drain, it never
+ * aborts the engine, and it does not consume the fatal path's `reported` guard.
+ */
+describe("runCaptureEngine onDegraded (M16 16.7 — an unreachable archive)", () => {
+  const homes: string[] = [];
+  afterEach(() => {
+    for (const h of homes.splice(0)) {
+      try {
+        rmSync(h, { recursive: true, force: true });
+      } catch {
+        /* best effort */
+      }
+    }
+  });
+
+  /** A temp home seeded with one queued item — an empty queue never POSTs, so never fails. */
+  function seededHome(tag: string): string {
+    const home = mkdtempSync(join(tmpdir(), tag));
+    homes.push(home);
+    const seed = new QueueStore(join(home, "queue.sqlite"));
+    seed.enqueue("event", "fp-1", { fingerprint: "fp-1" });
+    seed.close();
+    return home;
+  }
+
+  /**
+   * Drive the real engine against an archive that always 503s, stopping once `stopAfter` degraded
+   * reports have arrived, or on the wall-clock bound. Returns what was reported and how many POST
+   * attempts actually happened.
+   */
+  async function runUntilDegraded(
+    stopAfter: number,
+    opts: { timeoutMs?: number } = {},
+  ): Promise<{ seen: CaptureFault[]; failures: number }> {
+    const home = seededHome("m16-degraded-");
+    const controller = new AbortController();
+    const seen: CaptureFault[] = [];
+    let failures = 0;
+    const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 12_000);
+    try {
+      await runCaptureEngine({
+        creds: { url: "https://archive.example", token: "tok-degraded", machineId: "m1" },
+        signal: controller.signal,
+        queuePath: join(home, "queue.sqlite"),
+        home,
+        connectors: [],
+        gitIntervalMs: 0,
+        intervalMs: 5,
+        post: async () => {
+          failures += 1;
+          throw new IngestHttpError(503, "service unavailable");
+        },
+        onDegraded: (f) => {
+          seen.push(f);
+          if (seen.length >= stopAfter) controller.abort();
+        },
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+    return { seen, failures };
+  }
+
+  it(
+    "fires at the THRESHOLD with a token-free archive_unreachable record",
+    { timeout: 20_000 },
+    async () => {
+      const { seen } = await runUntilDegraded(1);
+      expect(seen).toHaveLength(1);
+      expect(seen[0]!.code).toBe("archive_unreachable");
+      expect(seen[0]!.url).toBe("https://archive.example");
+      // The message must say capture is still running — the operator's decision hangs on it.
+      expect(seen[0]!.message).toMatch(/STILL RUNNING/);
+      expect(seen[0]!.message).toContain(String(ARCHIVE_UNREACHABLE_MIN_FAILURES));
+      expect(Date.parse(seen[0]!.since)).not.toBeNaN();
+      expect(JSON.stringify(seen[0])).not.toContain("tok-degraded");
+      expect(Object.keys(seen[0]!).sort()).toEqual(["code", "message", "since", "url"]);
+    },
+  );
+
+  it(
+    "keeps the engine RUNNING past the threshold, and re-stamps sparsely",
+    { timeout: 40_000 },
+    async () => {
+      // Stop on the WALL CLOCK rather than on a report count, so the engine's own liveness is what
+      // ends the test.
+      //
+      // THE BOUND IS DICTATED BY THE QUEUE'S BACKOFF, NOT BY TASTE — it was 6 s and went red on CI
+      // while passing locally, which is the signature of a bound with no margin rather than a bug.
+      // `markFailed` backs an item off `1000 * 2^attempts` ms, so consecutive failed drains land at
+      // t ≈ 0, 1 s, 3 s, 7 s, 15 s (the loop's own `retryMs` is irrelevant — in between, the claim
+      // finds nothing due and returns "ok"). The two assertions below need the 3rd failure
+      // (`ARCHIVE_UNREACHABLE_MIN_FAILURES`, t ≈ 3 s) AND a 4th (`failures > 3`, t ≈ 7 s), so 6 s
+      // left under a second of slack for engine boot, sqlite open and watcher start on a cold
+      // runner. 20 s clears the 4th failure by 13 s and still ends well inside the test timeout.
+      const { seen, failures } = await runUntilDegraded(999, { timeoutMs: 20_000 });
+      // It reported, so the threshold was crossed…
+      expect(seen.length).toBeGreaterThanOrEqual(1);
+      // …and the engine was STILL RUNNING when the external abort arrived, which is the whole
+      // distinction from `onFatal`. Had `reportDegraded` called `internal.abort()`, the engine
+      // would have unwound at the threshold and `failures` would have stopped climbing there.
+      expect(failures).toBeGreaterThan(ARCHIVE_UNREACHABLE_MIN_FAILURES);
+      // SPARSE: one report per 60 further failures, not one per failed drain. Without that,
+      // `saveFault` (a read-modify-write of a file) runs once a second for the whole outage.
+      expect(seen.length).toBeLessThan(failures);
+    },
+  );
+
+  it("a THROWING degraded reporter does not unwind the engine", { timeout: 20_000 }, async () => {
+    const home = seededHome("m16-degraded-throw-");
+    const controller = new AbortController();
+    let fired = 0;
+    const timer = setTimeout(() => controller.abort(), 12_000);
+    try {
+      await expect(
+        runCaptureEngine({
+          creds: { url: "https://archive.example", token: "t", machineId: "m1" },
+          signal: controller.signal,
+          queuePath: join(home, "queue.sqlite"),
+          home,
+          connectors: [],
+          gitIntervalMs: 0,
+          intervalMs: 5,
+          post: async () => {
+            throw new IngestHttpError(503, "down");
+          },
+          onDegraded: () => {
+            fired += 1;
+            controller.abort();
+            throw new Error("disk full");
+          },
+        }),
+      ).resolves.toBeUndefined();
+    } finally {
+      clearTimeout(timer);
+    }
+    expect(fired).toBe(1);
+  });
+
+  it(
+    "does NOT consume the fatal `reported` guard — unreachable, then 401, still reports the 401",
+    { timeout: 20_000 },
+    async () => {
+      // THE SUBTLE ONE. If `reportDegraded` set `reported = true`, an archive that is down now and
+      // rejects the credential once it comes back would never produce an `auth_revoked` record —
+      // the fatal path silently consumed by the non-fatal one.
+      const home = seededHome("m16-degraded-then-401-");
+      const degraded: CaptureFault[] = [];
+      const fatal: CaptureFault[] = [];
+      const controller = new AbortController();
+      let unauthorized = false;
+      const timer = setTimeout(() => controller.abort(), 15_000);
+      try {
+        await runCaptureEngine({
+          creds: { url: "https://archive.example", token: "t", machineId: "m1" },
+          signal: controller.signal,
+          queuePath: join(home, "queue.sqlite"),
+          home,
+          connectors: [],
+          gitIntervalMs: 0,
+          intervalMs: 5,
+          post: async () => {
+            // The archive comes back — with a revoked credential.
+            if (unauthorized) throw new IngestHttpError(401, "unauthorized");
+            throw new IngestHttpError(503, "down");
+          },
+          onDegraded: (f) => {
+            degraded.push(f);
+            unauthorized = true; // threshold crossed; now flip the archive to 401
+          },
+          onFatal: (f) => fatal.push(f),
+        });
+      } finally {
+        clearTimeout(timer);
+      }
+      expect(degraded.length).toBeGreaterThanOrEqual(1);
+      expect(degraded[0]!.code).toBe("archive_unreachable");
+      // The fatal path still fired, after the degraded one.
+      expect(fatal).toHaveLength(1);
+      expect(fatal[0]!.code).toBe("auth_revoked");
+    },
+  );
 });

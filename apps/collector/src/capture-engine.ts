@@ -1,5 +1,9 @@
 import { homedir } from "node:os";
-import { toRawRecordPayload, toEventPayload } from "@420ai/shared";
+import {
+  toRawRecordPayload,
+  toEventPayload,
+  ARCHIVE_UNREACHABLE_MIN_FAILURES,
+} from "@420ai/shared";
 import { QUEUE_PATH, type Credentials } from "./identity.js";
 import { QueueStore, type SyncOutcome } from "./queue/queue-store.js";
 import { connectors as defaultConnectors } from "./connectors/connector.js";
@@ -9,7 +13,7 @@ import { FileWatcher } from "./watcher/file-watcher.js";
 import { syncOnce, runSyncLoop } from "./sync/sync-worker.js";
 import { captureGitCommits } from "./discovery/git-capture.js";
 import { postGit, isUnauthorized } from "./ingest-client.js";
-import type { CaptureFault } from "./fault.js";
+import type { DegradedCaptureFault, FatalCaptureFault } from "./fault.js";
 import { runPushServer } from "./push/push-server.js";
 import { loadOrCreatePushToken } from "./push/push-token.js";
 
@@ -24,6 +28,65 @@ const DEFAULT_GIT_INTERVAL_MS = 5 * 60_000;
  * hanging exit for minutes and holding the SQLite handle ("locks the database").
  */
 const SHUTDOWN_DRAIN_MS = 5_000;
+
+/**
+ * M16 16.7 — how many FURTHER consecutive sync failures between re-stamps of the degraded fault
+ * record's `lastObservedAt`, after the initial threshold crossing has written it.
+ *
+ * THE CADENCE IS SET BY THE QUEUE'S BACKOFF, NOT BY `retryMs`. This comment originally justified the
+ * number with "`retryMs` defaults to 1000, so this is ≈ once a minute" — and 16.7's own change to
+ * `runSyncLoop` falsifies both halves of that. `onSyncFailure` fires only on the non-"ok" branch,
+ * and `markFailed` backs items off exponentially to `BACKOFF_CAP_MS` (30 s, `queue-store.ts`) while
+ * the intervening drains claim nothing and return "ok". That is the very argument `sync-worker.ts`
+ * makes for why the old `consecutiveSyncFailures = 0` could not count. So during a sustained outage
+ * the FAILURE cadence converges to one per 30 s, not one per second: 60 failures is ≈ 30 MINUTES,
+ * and the write rate this guards against was never more than ~1 per 30 s to begin with.
+ *
+ * The number is kept anyway, because the property that matters is unchanged — `saveFault` is a
+ * read-modify-write of a file on disk and a fault reporter must not become a second fault — and
+ * `lastObservedAt` is the coarse half of a duration whose unit is hours or days. `since` is
+ * preserved across every re-stamp by `saveFault`'s `(code, url)` continuity, so the cost of a stale
+ * `lastObservedAt` is bounded by this interval and nothing else depends on it. What is corrected
+ * here is the STATED cadence: ~30 min, not ~1 min. (If minute-grained freshness is ever wanted, gate
+ * the re-stamp on elapsed wall time rather than a failure count — a count cannot express it while
+ * the failure cadence is itself variable.)
+ */
+const DEGRADED_RESTAMP_EVERY = 60;
+
+/**
+ * M16 16.7 — should THIS failure write the degraded fault record, and what is the new counter?
+ *
+ * PURE, EXPORTED AND SEPARATE FROM THE ENGINE BECAUSE OTHERWISE IT CANNOT BE TESTED. Inline in the
+ * engine's closure, the only way to observe the sparse re-stamp is to drive a real archive failure
+ * for 60+ backed-off drains — which at the queue's 30 s backoff cap is half an hour of wall clock,
+ * so no test did. The engine test asserted `seen.length < failures` (1 < 5), which passes just as
+ * happily when `DEGRADED_RESTAMP_EVERY` is 1: it never observes a re-stamp at all, so the one
+ * property D-16.7-9 exists to guarantee was pinned by nothing. A pure function is checkable at
+ * failure 63 without waiting for it.
+ *
+ * `stamp` is "write the record now"; `crossing` is "this is the FIRST failure at or past the
+ * threshold", which is the only one that also logs (an operator wants one line, not one per hour).
+ * `failuresSinceStamp` is returned rather than mutated so the caller owns the state and the
+ * function stays pure.
+ */
+export function degradedStampDecision(
+  consecutive: number,
+  failuresSinceStamp: number,
+): { stamp: boolean; crossing: boolean; failuresSinceStamp: number } {
+  if (consecutive < ARCHIVE_UNREACHABLE_MIN_FAILURES) {
+    // Below the threshold nothing is written and the re-stamp counter stays put. It is reset by the
+    // crossing itself, not here, so a streak that dips and re-crosses re-announces immediately.
+    return { stamp: false, crossing: false, failuresSinceStamp };
+  }
+  if (consecutive === ARCHIVE_UNREACHABLE_MIN_FAILURES) {
+    return { stamp: true, crossing: true, failuresSinceStamp: 0 };
+  }
+  const next = failuresSinceStamp + 1;
+  if (next < DEGRADED_RESTAMP_EVERY) {
+    return { stamp: false, crossing: false, failuresSinceStamp: next };
+  }
+  return { stamp: true, crossing: false, failuresSinceStamp: 0 };
+}
 
 /**
  * Best-effort queue drain bounded by a wall-clock deadline. Drains while the archive keeps
@@ -110,7 +173,24 @@ export interface CaptureEngineOptions {
    * The engine still unwinds exactly as before — this only makes the reason SURVIVE the unwind.
    * INC-2026-07: the 401 was known here, at this line, for eight days, and went no further.
    */
-  onFatal?: (fault: CaptureFault) => void;
+  onFatal?: (fault: FatalCaptureFault) => void;
+  /**
+   * M16 16.7: report a DEGRADED capture state — today only "the archive has been unreachable for
+   * `ARCHIVE_UNREACHABLE_MIN_FAILURES` consecutive drains". The sibling of `onFatal`, and separate
+   * from it deliberately.
+   *
+   * `cli.ts` turns `onFatal` into `WatchRunResult.fault`, which `watchExitCode` turns into exit 1,
+   * which WinSW's `<onfailure action="restart"/>` turns into a restart. Restarting does not make an
+   * unreachable archive reachable, so routing this through `onFatal` would produce a restart loop
+   * exactly while the durable queue is the only thing preserving the data. So this callback writes
+   * the fault file and changes nothing else: capture keeps running, the queue keeps growing, and
+   * the process still exits 0 on Ctrl-C. `result.fault` keeps its meaning, "capture STOPPED".
+   *
+   * Called on the THRESHOLD CROSSING and then sparsely (see the wiring below) — `saveFault` is a
+   * read-modify-write of a file and the retry delay is ~1 s, so "write it on every failed drain"
+   * would be a file write per second for as long as the outage lasts.
+   */
+  onDegraded?: (fault: DegradedCaptureFault) => void;
   /** M14 14.7: push-receiver port override (default `DEFAULT_PUSH_PORT`). Tests pass 0 for ephemeral. */
   pushPort?: number;
   /**
@@ -395,6 +475,52 @@ export async function runCaptureEngine(opts: CaptureEngineOptions): Promise<void
       }
     };
 
+    /**
+     * M16 16.7 — report a DEGRADED (non-fatal) unreachable archive, on the threshold CROSSING and
+     * then sparsely.
+     *
+     * THE THRESHOLD IS `ARCHIVE_UNREACHABLE_MIN_FAILURES` FROM `@420ai/shared`, not a local
+     * constant: it is the SAME number the server-side `archive.unreachable` alert derives from
+     * (`deriveArchiveUnreachableAlerts`), so the local record and the server alert cannot disagree
+     * about when an archive counts as unreachable. Two spellings of one threshold is two things to
+     * drift.
+     *
+     * THE RE-STAMP IS SPARSE. `saveFault` reads, merges and rewrites a file; `runSyncLoop`'s
+     * `retryMs` defaults to 1000, so re-stamping on every failed drain is one file write per second
+     * for the entire outage. Writing on the crossing and then every 60th failure (≈ once a minute
+     * at the default cadence) keeps `lastObservedAt` fresh enough to be the "duration" half of the
+     * record while making the write rate negligible. `saveFault`'s existing `(code, url)` continuity
+     * preserves `since` across every re-stamp AND across process restarts, unchanged.
+     *
+     * IT MUST NOT `internal.abort()` AND MUST NOT SET `reported`. Aborting would stop capture for a
+     * condition capture is designed to ride out. Consuming the fatal `reported` guard would be
+     * worse and subtler: an archive that is unreachable NOW and 401s once it comes back must still
+     * be able to report the 401, which is the fatal one.
+     */
+    let failuresSinceStamp = 0;
+    const reportDegraded = (consecutive: number): void => {
+      const decision = degradedStampDecision(consecutive, failuresSinceStamp);
+      failuresSinceStamp = decision.failuresSinceStamp;
+      if (!decision.stamp) return;
+      const crossing = decision.crossing;
+      const message =
+        `cannot reach the archive (${consecutive} consecutive sync failures). ` +
+        `Capture is STILL RUNNING and the queue is buffering; this clears on the next sync that ` +
+        `actually delivers.`;
+      if (crossing) log(message);
+      try {
+        opts.onDegraded?.({
+          code: "archive_unreachable",
+          message,
+          since: new Date().toISOString(),
+          // The URL that could not be reached — never the credential.
+          url: opts.creds.url,
+        });
+      } catch {
+        /* a fault reporter that throws must not become the outage it was reporting */
+      }
+    };
+
     const watcherLoop = watcher.runLoop(internal.signal, opts.intervalMs);
     const syncLoop = runSyncLoop(
       {
@@ -432,6 +558,19 @@ export async function runCaptureEngine(opts: CaptureEngineOptions): Promise<void
         post: opts.post,
         postHeartbeat: opts.postHeartbeat,
         onSync: opts.onSyncSuccess,
+        // M16 16.7: the streak the heartbeat could never deliver during an outage of the archive.
+        onSyncFailure: reportDegraded,
+        // M16 16.7: the archive is UP and refused the batch. Deliberately NOT routed to
+        // `reportDegraded` — that record says "cannot reach the archive", which would be false and
+        // would send an operator to check the wrong thing. It is also not fatal: capture continues
+        // and the queue keeps the data. A log line is the honest surface for it, because the batch
+        // is retried forever (no dead-letter path) and 16.7 adds no alert code.
+        onSyncRefused: (status) =>
+          log(
+            `the archive REFUSED this batch with HTTP ${status} — it is reachable, so this is not ` +
+              `an outage. The batch stays queued and will be retried; a persistent refusal needs ` +
+              `an operator (check the ingest logs for why the payload was rejected).`,
+          ),
         onStop: () => {
           // M16 16.6: leave a DURABLE trace before unwinding. The engine is about to end normally,
           // which is exactly how INC-2026-07 stayed invisible for eight days.

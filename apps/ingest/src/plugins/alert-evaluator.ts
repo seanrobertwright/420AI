@@ -73,11 +73,14 @@ export default fp(async function alertEvaluatorPlugin(app: FastifyInstance): Pro
         now: new Date(),
         onError: (err) => app.log.error(err),
         // THE SAME MAP AND THE SAME THRESHOLD `routes/monitor.ts` uses, so the tick and the route
-        // share ONE throttle per `(org, user)` rather than each keeping its own idea of when the
-        // last reconcile happened. Stamped BEFORE the caller awaits anything, exactly as the route
+        // share ONE throttle per key rather than each keeping its own idea of when the last
+        // reconcile happened. Stamped BEFORE the caller awaits anything, exactly as the route
         // does it, so two overlapping evaluations cannot both observe a stale `last`.
-        shouldReconcile: (orgId, userId, now) => {
-          const key = `${orgId}:${userId}`;
+        //
+        // M16 16.7: the key is opaque here. `alert-set.ts` owns both spellings —
+        // `reconcileThrottleKey(orgId, userId)` for an org and the `DEPLOYMENT_THROTTLE_KEY`
+        // sentinel for the once-per-tick deployment pass — so this closure stays a pure throttle.
+        shouldReconcile: (key, now) => {
           const last = app.reconcileLastRunAt.get(key) ?? 0;
           const due = now.getTime() - last >= app.reconcileThrottleMs;
           if (due) app.reconcileLastRunAt.set(key, now.getTime());

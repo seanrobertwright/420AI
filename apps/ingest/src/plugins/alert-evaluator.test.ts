@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
 import type { Db } from "@420ai/db";
 import alertEvaluatorPlugin from "./alert-evaluator.js";
+import { reconcileThrottleKey, DEPLOYMENT_THROTTLE_KEY } from "../alert-set.js";
 
 /**
  * M16 16.6 — the evaluator PLUGIN, unit-tested with no database.
@@ -23,7 +24,7 @@ vi.mock("../alert-evaluator.js", () => ({
 const { runEvaluatorTick } = await import("../alert-evaluator.js");
 const tickMock = vi.mocked(runEvaluatorTick);
 
-const OK = { orgs: 1, skipped: 0, alerts: 0, failed: 0 };
+const OK = { orgs: 1, skipped: 0, alerts: 0, deploymentAlerts: 0, failed: 0 };
 
 /** One captured pino line, reduced to the two things these tests care about. */
 interface LogLine {
@@ -225,7 +226,7 @@ describe("M16 16.6 alert-evaluator plugin (timer contract)", () => {
     await a.close();
 
     const noisy: LogLine[] = [];
-    tickMock.mockResolvedValue({ orgs: 1, skipped: 0, alerts: 2, failed: 0 });
+    tickMock.mockResolvedValue({ orgs: 1, skipped: 0, alerts: 2, deploymentAlerts: 0, failed: 0 });
     const b = await buildTestApp(60_000, noisy);
     await vi.advanceTimersByTimeAsync(0);
     expect(
@@ -252,11 +253,17 @@ describe("M16 16.6 alert-evaluator plugin (timer contract)", () => {
     );
     // And the throttle really is the APP's map, not a private one — the whole point of sharing it
     // with `routes/monitor.ts` is that a route reconcile and a tick reconcile cannot both fire.
-    const deps = tickMock.mock.calls[0]![0] as {
-      shouldReconcile: (o: string, u: string, n: Date) => boolean;
-    };
-    expect(deps.shouldReconcile("org-1", "user-1", new Date(10_000))).toBe(true);
+    // M16 16.7: the closure takes an opaque KEY, because there is now a third caller with no org
+    // and no user (the deployment pass). `alert-set.ts` owns both spellings.
+    const deps = tickMock.mock.calls[0]![0] as { shouldReconcile: (k: string, n: Date) => boolean };
+    expect(deps.shouldReconcile(reconcileThrottleKey("org-1", "user-1"), new Date(10_000))).toBe(
+      true,
+    );
     expect(app.reconcileLastRunAt.get("org-1:user-1")).toBe(10_000);
+    // …and the deployment sentinel throttles through the SAME map, which is what stops N connected
+    // dashboards and the tick each writing the single shared deployment row.
+    expect(deps.shouldReconcile(DEPLOYMENT_THROTTLE_KEY, new Date(20_000))).toBe(true);
+    expect(app.reconcileLastRunAt.get(DEPLOYMENT_THROTTLE_KEY)).toBe(20_000);
     await app.close();
   });
 

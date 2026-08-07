@@ -254,8 +254,42 @@ describe("every route that touches tenant data is org-scoped", () => {
     // delivery is TRIGGERED by whoever opened the monitor but the ACTION belongs to the org,
     // and a viewer's role would make the 0016 restrictive UPDATE policy silently reject the
     // `delivery_attempted_at` stamp — reviving this exact bug one layer down.
-    expect(src).toMatch(/deliverPendingFirings\(\s*app\.db,\s*orgId,\s*SERVICE_ROLE,/);
-    expect(src).toMatch(/deliverResolvedFirings\(\s*app\.db,\s*orgId,\s*SERVICE_ROLE,/);
+    //
+    // M16 16.7 replaced the bare `orgId` argument with a `FiringScope`, so the shape this pins is
+    // now `(app.db, <scope>, SERVICE_ROLE, …)`. The SERVICE_ROLE position is the load-bearing half
+    // and it is unchanged. `orgScope` and `deploymentScope` are the two local consts in
+    // `deliverFirings`; matching them by name is deliberately stricter than `\w+` — a delivery pass
+    // handed some other object would fail here rather than pass on a shape coincidence.
+    expect(src).toMatch(
+      /deliverPendingFirings\(\s*app\.db,\s*(orgScope|deploymentScope),\s*SERVICE_ROLE,/,
+    );
+    expect(src).toMatch(
+      /deliverResolvedFirings\(\s*app\.db,\s*(orgScope|deploymentScope),\s*SERVICE_ROLE,/,
+    );
+    // BOTH scopes must be delivered, or one of them is silently never sent. The deployment scope
+    // is the easier one to lose: it is a single row for the whole installation, so a missing pass
+    // shows up as "we just never got an email about the pricing catalog" and nothing else.
+    expect(src, "the org delivery pass must exist").toContain("orgScope");
+    expect(src, "the deployment delivery pass must exist").toContain("deploymentScope");
+    // …and the deployment scope must be spelled as the deployment, never as a borrowed org id.
+    expect(src).toMatch(/deploymentScope\s*=\s*\{\s*kind:\s*"deployment"\s*\}/);
+  });
+
+  it("the deployment reconcile runs under withDeployment, not a borrowed org context", () => {
+    // M16 16.7 (D-16.7-4). The two deployment-scoped alert codes derive from tables with no
+    // `org_id`, so their firing row has `org_id IS NULL` and must be written with NO org context —
+    // `withDeployment`, whose whole contract is that it sets the role and deliberately leaves
+    // `app.current_org` unset. Wrapping it in some org's `withOrg` instead would typecheck, pass
+    // every test that only counts rows, and quietly re-attribute a deployment-wide condition to
+    // whichever org happened to load the monitor first — which is the defect 16.7 exists to fix,
+    // reintroduced in the fix itself.
+    const src = readFileSync(join(ROUTES_DIR, "monitor.ts"), "utf8");
+    expect(src, "the deployment reconcile must open a deployment context").toMatch(
+      /withDeployment\(\s*app\.db,\s*SERVICE_ROLE,/,
+    );
+    // Throttled through the shared sentinel, not unconditionally: the SSE path reconciles every
+    // 3 s per connected client, and this is ONE row shared by the whole deployment.
+    expect(src, "the deployment reconcile must be throttled").toContain("DEPLOYMENT_THROTTLE_KEY");
   });
 
   it("the deployment-wide maintenance ops iterate per org rather than escaping the policy", () => {

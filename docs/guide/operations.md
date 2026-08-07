@@ -538,12 +538,24 @@ npm run db:provision-app-role
 ### What the policies do
 
 Fifteen tables carry a policy keyed on a transaction-local setting, `app.current_org`, which the
-server sets via `withOrg` at the start of every request's DB work:
+server sets via `withOrg` at the start of every request's DB work — plus one that reads that
+setting but is deliberately not strict about it (see DEPLOYMENT-SCOPED below):
 
-- **12 STRICT tables** (`events`, `raw_source_records`, `projects`, `workspaces`, `workspace_keys`,
+- **11 STRICT tables** (`events`, `raw_source_records`, `projects`, `workspaces`, `workspace_keys`,
   `report_artifacts`, `git_commits`, `git_commit_files`, `session_git_links`, `machine_heartbeats`,
-  `alert_firings`, `search_documents`) — with no context set, a read returns **zero rows**. Not an
+  `search_documents`) — with no context set, a read returns **zero rows**. Not an
   error: a backstop must fail closed and quiet.
+- **1 DEPLOYMENT-SCOPED table** (`alert_firings`, M16 16.7 / D-16.7-4) — an org context sees its own
+  rows **plus** the deployment's (`org_id IS NULL`), and with **no** context set a read returns
+  exactly the deployment rows rather than zero. An org-scoped INSERT is still refused, so this opens
+  no tenancy hole; it is what `withDeployment` is built on. Two of the nine alert codes
+  (`catalog.update_requires_approval`, `ingest.auth_failure`) derive from tables with no `org_id` at
+  all, so they belong to the installation rather than to a tenant — one row, one ack, one notice,
+  visible to everyone. **Note carefully what the `IS NULL` in this policy tests: the ROW's column
+  ("this row is the deployment's ⇒ everyone sees it"), which is the OPPOSITE property to a BOOTSTRAP
+  table's `current_setting(...) IS NULL` ("no context ⇒ see everything").** `alert_firings` was in
+  the STRICT list before 16.7; if you are debugging "why is a read returning rows with no org set",
+  this table is the answer.
 - **3 BOOTSTRAP-PERMISSIVE tables** (`machines`, `ingest_tokens`, `pairing_codes`) — enforced when a
   context is set, permissive when it is not. These are the credential tables, and the lookups that
   read them are _circular_: `POST /v1/pair` reads a pairing code **in order to discover** the org,

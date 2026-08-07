@@ -229,7 +229,164 @@ describe.skipIf(!TEST_URL)("migration rollback (rollbackLast, integration)", () 
     return r.rowCount === 1;
   }
 
-  it("rolls back the latest migration (0026 raw-record index) and a re-migrate restores it", async () => {
+  /** The `alert_firings` indexes, sorted — the 16.7 shape lives here. */
+  async function alertFiringIndexes(): Promise<string[]> {
+    const r = await pool.query(
+      `select indexname from pg_indexes where schemaname = 'public'
+         and tablename = 'alert_firings' order by indexname`,
+    );
+    return (r.rows as { indexname: string }[]).map((x) => x.indexname);
+  }
+
+  /** Whether `alert_firings.org_id` is nullable — the property 0027 exists to create. */
+  async function alertFiringsOrgIdNullable(): Promise<boolean> {
+    const r = await pool.query(
+      `select is_nullable from information_schema.columns
+         where table_name = 'alert_firings' and column_name = 'org_id'`,
+    );
+    return (r.rows[0] as { is_nullable: string }).is_nullable === "YES";
+  }
+
+  /**
+   * Seed ONE user holding an open firing with the SAME `alert_key` in TWO different orgs — the
+   * shape that is legal under 0027's `(org_id, alert_key)` index and forbidden by the pre-16.7
+   * global `(user_id, alert_key)` one. Returns the user id.
+   *
+   * Uses a connector-keyed key on purpose: `connector.failing:claude-code` is how this arises in
+   * production, because the connector name is not org-scoped. Runs on the OWNER handle (this file's
+   * pool), which is the only role that may write while the drill is mid-flight.
+   */
+  async function seedCrossOrgDuplicateFirings(): Promise<string> {
+    // Idempotent: this file mutates the schema and may be re-run against a dirty DB, and `users`
+    // has a UNIQUE email. Clear any prior seed first, children before parents.
+    await pool.query(
+      `delete from alert_firings where user_id in
+         (select id from users where email = 'rollback-dup-0027@example.test')`,
+    );
+    await pool.query(
+      `delete from alert_firings where user_id in
+         (select id from users where email = 'rollback-dup2-0027@example.test')`,
+    );
+    await pool.query(
+      `delete from users where email in
+         ('rollback-dup-0027@example.test','rollback-dup2-0027@example.test')`,
+    );
+    await pool.query(`delete from organizations where name in ('rollback-dup-a','rollback-dup-b')`);
+    const u = await pool.query<{ id: string }>(
+      `insert into users (email) values ('rollback-dup-0027@example.test') returning id`,
+    );
+    const userId = u.rows[0]!.id;
+    // A SECOND user, created here so `seedPre167DefectShapes` (which runs after the rollback, when
+    // the old `(user_id, alert_key)` index is back) has two distinct users to hang duplicate rows
+    // on. Both defect shapes need it — one user cannot hold two open rows with the same key.
+    await pool.query(
+      `insert into users (email) values ('rollback-dup2-0027@example.test') returning id`,
+    );
+    const orgs: string[] = [];
+    for (const name of ["rollback-dup-a", "rollback-dup-b"]) {
+      const o = await pool.query<{ id: string }>(
+        `insert into organizations (name) values ($1) returning id`,
+        [name],
+      );
+      orgs.push(o.rows[0]!.id);
+    }
+    for (const orgId of orgs) {
+      await pool.query(
+        `insert into alert_firings
+           (org_id, user_id, alert_key, code, severity, message, connector, status)
+         values ($1, $2, 'connector.failing:claude-code', 'connector.failing', 'warning',
+                 'seeded by the 0027 rollback drill', 'claude-code', 'open')`,
+        [orgId, userId],
+      );
+    }
+    return userId;
+  }
+
+  /**
+   * Seed the TWO PRE-16.7 DEFECT SHAPES that migration 0027's forward data statements exist to
+   * clean up. Must run AFTER `rollbackLast` and BEFORE the re-migrate, because both shapes are
+   * ILLEGAL under 0027's own indexes — which is precisely why the forward dedupe has to run before
+   * those indexes are built, and precisely why it cannot be seeded any earlier in this test.
+   *
+   * Without this, the re-migrate executes all three of 0027's UPDATEs against rows that none of
+   * their predicates select, so `split_part(alert_key, ':', 1) IN (…)`, the `DISTINCT ON` key vs
+   * `ORDER BY` prefix, and the "oldest `first_fired_at` wins" tie-break are asserted NOWHERE. An
+   * error in any of them would surface as `CREATE UNIQUE INDEX "alert_firings_open_global_key"`
+   * aborting the migration on the first real multi-org deployment — mid-deploy, with the column
+   * already widened and the old indexes already dropped.
+   *
+   * Both shapes need TWO users, because the restored pre-16.7 index is unique on
+   * `(user_id, alert_key)`: one user cannot hold two open rows with the same key, which is the very
+   * constraint 16.7 removed.
+   */
+  async function seedPre167DefectShapes(): Promise<{ orgA: string; orgB: string }> {
+    const [orgA, orgB] = (
+      await pool.query<{ id: string }>(
+        `select id from organizations where name in ('rollback-dup-a','rollback-dup-b') order by name`,
+      )
+    ).rows.map((r) => r.id) as [string, string];
+    const users = (
+      await pool.query<{ id: string }>(
+        `select id from users where email in
+           ('rollback-dup-0027@example.test','rollback-dup2-0027@example.test') order by email`,
+      )
+    ).rows.map((r) => r.id);
+    const [user1, user2] = users as [string, string];
+
+    // DEFECT 1 — one deployment-wide condition open in EVERY org. Distinct `first_fired_at` so
+    // "the OLDEST row is the one promoted to the deployment scope" is an assertable claim rather
+    // than a coin flip: org A's is a month older and must be the survivor.
+    await pool.query(
+      `insert into alert_firings (org_id, user_id, alert_key, code, severity, message, status, first_fired_at)
+       values ($1, $3, 'catalog.update_requires_approval:*', 'catalog.update_requires_approval',
+               'warning', 'seeded: global fan-out (older)', 'open', '2026-01-01T00:00:00Z'),
+              ($2, $4, 'catalog.update_requires_approval:*', 'catalog.update_requires_approval',
+               'warning', 'seeded: global fan-out (newer)', 'open', '2026-02-01T00:00:00Z')`,
+      [orgA, orgB, user1, user2],
+    );
+    // DEFECT 2 — two MEMBERS of ONE org holding their own row for the same condition. Org A's is
+    // older and must survive step 4.
+    await pool.query(
+      `insert into alert_firings (org_id, user_id, alert_key, code, severity, message, status, first_fired_at)
+       values ($1, $2, 'collector.offline:seed', 'collector.offline', 'critical',
+               'seeded: per-user duplicate (older)', 'open', '2026-03-01T00:00:00Z'),
+              ($1, $3, 'collector.offline:seed', 'collector.offline', 'critical',
+               'seeded: per-user duplicate (newer)', 'open', '2026-04-01T00:00:00Z')`,
+      [orgA, user1, user2],
+    );
+    return { orgA, orgB };
+  }
+
+  /** The open rows for one `alert_key`, as `[org_id, message]` pairs — null org = deployment. */
+  async function openFiringsForKey(key: string): Promise<{ orgId: string | null; msg: string }[]> {
+    const r = await pool.query<{ orgId: string | null; msg: string }>(
+      `select org_id as "orgId", message as msg from alert_firings
+         where alert_key = $1 and status = 'open' order by message`,
+      [key],
+    );
+    return r.rows;
+  }
+
+  /** How many OPEN firings this user holds, across every org. */
+  async function openFiringCountForUser(userId: string): Promise<number> {
+    const r = await pool.query<{ n: number }>(
+      `select count(*)::int as n from alert_firings where user_id = $1 and status = 'open'`,
+      [userId],
+    );
+    return Number(r.rows[0]!.n);
+  }
+
+  /** Whether the org policy admits the deployment scope (`OR org_id IS NULL`). */
+  async function alertFiringsPolicyAdmitsDeployment(): Promise<boolean> {
+    const r = await pool.query(
+      `select qual from pg_policies where tablename = 'alert_firings'
+         and policyname = 'alert_firings_org_isolation'`,
+    );
+    const qual = (r.rows[0] as { qual: string } | undefined)?.qual ?? "";
+    return /org_id IS NULL/i.test(qual);
+  }
+
+  it("rolls back the latest migration (0027 deployment-scoped alert firings) and a re-migrate restores it", async () => {
     // M15 D-M15-13 drill, run in CI rather than by hand. `rollbackLast` reverses THE LATEST
     // migration, so this test retargets with every slice that adds one — 15.5's version named 0017,
     // 15.6's named 0018, 15.7's named 0019 and 15.8's named 0020. The assertions those made survive
@@ -284,9 +441,37 @@ describe.skipIf(!TEST_URL)("migration rollback (rollbackLast, integration)", () 
     // 446,378,008, no result in seven minutes), so the endpoint hangs, writes nothing, logs nothing,
     // and the operator sees a spinner. A rollback of 0026 is therefore SILENT in production, which
     // is precisely why it is pinned here — this drill is the only place that can notice.
-    expect(await trackedCount()).toBe(27);
-    expect(await policyCount()).toBe(72); // UNMOVED by 0026 — index-only, no policy
-    expect(await restrictivePolicyCount()).toBe(51); // likewise unmoved
+    //
+    // M16 16.7 RETARGETS THE DRILL TO 0027, and it is the first retarget whose down-migration
+    // ORDER is the hazard rather than its content. `alert_firings.org_id` becomes NULLABLE, and
+    // `ALTER COLUMN … SET NOT NULL` FAILS while any NULL row exists — at the END of the down
+    // script, after the indexes have already been swapped. So the deployment rows must be disposed
+    // of FIRST. Nothing in `tsc` or in any other suite can notice a mis-ordered down script; this
+    // drill is the only place that runs one.
+    //
+    // The POLICY COUNT DOES NOT MOVE (72/51 both ways) even though 0027 does touch a policy, and
+    // that is the interesting number: 0027 DROPs and re-CREATEs `alert_firings_org_isolation`
+    // rather than adding one, so the count is unchanged while the QUAL is not. A count-only
+    // assertion would therefore have passed against a migration that never ran — hence
+    // `alertFiringsPolicyAdmitsDeployment()` beside it, which reads the qual.
+    //
+    // The DATA LOSS is real, deliberate and bounded: rolling back deletes the open deployment-
+    // scoped firings, because the pre-16.7 schema has no honest place to put them (`org_id` is NOT
+    // NULL there, and re-homing them onto an arbitrary org recreates the very defect 0027 removed).
+    // `alert_firings` is a re-derivable projection of a projection, so the next reconcile re-opens
+    // the condition within one tick; what is lost is the `first_fired_at` of at most two rows.
+    expect(await trackedCount()).toBe(28);
+    expect(await policyCount()).toBe(72); // UNMOVED by 0027 — it REPLACES a policy, not adds one
+    expect(await restrictivePolicyCount()).toBe(51); // likewise unmoved (the role policies stay)
+    expect(await alertFiringsOrgIdNullable()).toBe(true);
+    expect(await alertFiringsPolicyAdmitsDeployment()).toBe(true);
+    expect(await alertFiringIndexes()).toEqual([
+      "alert_firings_by_org",
+      "alert_firings_by_org_status",
+      "alert_firings_open_global_key",
+      "alert_firings_open_key",
+      "alert_firings_pkey",
+    ]);
     expect(await rawRecordIndexExists()).toBe(true);
     expect(await machineConnectorsTableExists()).toBe(true);
     expect(await machineConnectorPolicyShape()).toEqual([
@@ -319,15 +504,48 @@ describe.skipIf(!TEST_URL)("migration rollback (rollbackLast, integration)", () 
     expect(await eventsRlsFlags()).toEqual({ enabled: true, forced: true });
     expect(await mixedCaseEmailCount()).toBe(0);
 
+    // SEED THE SHAPE THAT BREAKS THE DOWN SCRIPT, because an empty table cannot exercise it — and
+    // an empty table is exactly what every retarget above ran against.
+    //
+    // The restored pre-16.7 index is GLOBAL on ("user_id","alert_key") with NO org term, so what it
+    // needs is that no USER holds two open rows with the same key ANYWHERE. 0027's dedupe guaranteed
+    // only per-(org, key) uniqueness, and the post-16.7 org index preserves only that — neither
+    // implies the global property. One user is routinely the reconcile user for two orgs
+    // (`ensurePersonalOrg` plus an invite), and connector-keyed alert keys carry a connector NAME
+    // (`connector.failing:claude-code`) which is not org-scoped. So this row pair is LEGAL after
+    // 0027 and FORBIDDEN by the index the down script rebuilds.
+    //
+    // Without the down script's own global dedupe this `rollbackLast` raises
+    // `could not create unique index "alert_firings_open_key"` — a rollback that aborts during an
+    // incident, which is the worst possible time to be hand-writing SQL. Found in the 16.7 code
+    // review, and unreachable by `tsc`, by `rls.int.test.ts` and by every other suite.
+    const dupUser = await seedCrossOrgDuplicateFirings();
+
     const result = await rollbackLast(TEST_URL!, { downDir, journalPath });
-    expect(result).toEqual({ rolledBack: "0026_living_loners" });
-    expect(await trackedCount()).toBe(26);
-    // THE INDEX IS GONE AND NOTHING ELSE IS. No rows were lost, because an index holds none — the
-    // lossless case 0022 established, now confirmed for a second index-only migration. And unlike
-    // every destructive down above, NOTHING BREAKS LOUDLY: every query still returns exactly the
-    // same rows. Only the audit endpoint stops completing, silently. That asymmetry is the reason
-    // this assertion exists.
-    expect(await rawRecordIndexExists()).toBe(false);
+    expect(result).toEqual({ rolledBack: "0027_strange_white_queen" });
+    // Both rows survived as ROWS (the down script resolves the loser, it does not delete it — a
+    // resolved firing is a correct terminal state), and exactly ONE is still open, which is what
+    // let the global unique index build.
+    expect(await openFiringCountForUser(dupUser)).toBe(1);
+    expect(await trackedCount()).toBe(27);
+    // THE DEPLOYMENT SCOPE IS GONE, and the schema is genuinely back to its pre-16.7 shape. The
+    // ORDER assertion is implicit but total: if the down script had restored the indexes or the
+    // policy before disposing of the NULL-org rows, `SET NOT NULL` would have raised
+    // `column "org_id" ... contains null values` and `rollbackLast` above would have thrown.
+    expect(await alertFiringsOrgIdNullable()).toBe(false);
+    expect(await alertFiringsPolicyAdmitsDeployment()).toBe(false); // strict again
+    expect(await alertFiringIndexes()).toEqual([
+      "alert_firings_by_org",
+      "alert_firings_by_user_status",
+      "alert_firings_open_key",
+      "alert_firings_pkey",
+    ]);
+    // The policy was REPLACED, not dropped — so the counts are the same on both sides of the
+    // rollback while the behaviour is not. This is why the qual assertion above exists.
+    expect(await policyCount()).toBe(72);
+    expect(await restrictivePolicyCount()).toBe(51);
+    // 0026's index is UNTOUCHED — 0027 names `events` nowhere.
+    expect(await rawRecordIndexExists()).toBe(true);
     // 0025's table and all four of its policies are UNTOUCHED — 0026 names them nowhere — so the
     // counts that moved for 0025 stay put. An index-only migration must not disturb them.
     expect(await machineConnectorsTableExists()).toBe(true);
@@ -382,12 +600,73 @@ describe.skipIf(!TEST_URL)("migration rollback (rollbackLast, integration)", () 
     // Note also that the hand-appended policy block survives the round trip, which is what proves
     // the migration FILE (not `db:generate`) is the source of truth for it — the property 0023
     // established and 0024 confirmed, now checked for a THIRD hand-edited migration.
+    // SEED THE TWO PRE-16.7 DEFECT SHAPES FIRST, so the forward dedupe runs against rows it
+    // actually matches. Both are illegal under 0027's indexes and legal under the restored
+    // pre-16.7 one, so THIS — after the rollback, before the re-migrate — is the only point in the
+    // test where they can exist. Without them, 0027's three data statements execute against a
+    // table none of their predicates select, and the migration's whole reason for existing is
+    // exercised by nothing.
+    const { orgA, orgB } = await seedPre167DefectShapes();
+    expect(await openFiringsForKey("catalog.update_requires_approval:*")).toHaveLength(2);
+    expect(await openFiringsForKey("collector.offline:seed")).toHaveLength(2);
+
     await runMigrations(TEST_URL!);
-    expect(await trackedCount()).toBe(27);
-    // 0026 comes back. There is no "…but the rows are gone" caveat to make here for the first time
-    // in the file — an index has no rows to lose, so for THIS migration the round trip really is
-    // total. Said explicitly because every other re-apply above is followed by an emptiness
-    // assertion, and a reader skimming for the pattern should see why this one has none.
+    expect(await trackedCount()).toBe(28);
+
+    // THE FORWARD DEDUPE ACTUALLY RAN, and it picked the right winners.
+    //
+    // Defect 1 — the deployment-wide condition that had a row in every org is now ONE row whose
+    // `org_id IS NULL`, and it is the OLDER of the two (steps 2 + 3: promote the oldest by
+    // `first_fired_at`, resolve the rest). If the `split_part(...) IN (...)` list, the
+    // `DISTINCT ON` key or the `ORDER BY` prefix were wrong, this is where it shows — rather than
+    // as a failed `CREATE UNIQUE INDEX` on someone's production deploy.
+    const globals = await openFiringsForKey("catalog.update_requires_approval:*");
+    expect(globals).toEqual([{ orgId: null, msg: "seeded: global fan-out (older)" }]);
+    // Defect 2 — the two members' rows in one org collapse to the older one, still org-scoped.
+    const perUser = await openFiringsForKey("collector.offline:seed");
+    expect(perUser).toEqual([{ orgId: orgA, msg: "seeded: per-user duplicate (older)" }]);
+    // The losers are RESOLVED, not deleted — and stamped as already-notified, so the first tick
+    // after a real migration does not emit a burst of false "resolved" notices for conditions
+    // whose surviving row is still open (`deliverResolvedFirings` has no age filter).
+    const losers = await pool.query<{ n: number }>(
+      `select count(*)::int as n from alert_firings
+         where message like 'seeded:%' and status = 'resolved' and resolve_delivered_at is null`,
+    );
+    expect(losers.rows[0]!.n).toBe(0);
+    expect(orgB).toBeTruthy();
+
+    // 0027 comes back, WHOLE — the nullable column, BOTH partial unique indexes, the re-keyed
+    // status index and the amended policy. This is the forward half of the D-M15-13 drill and the
+    // acceptance criterion the 16.7 plan calls "run it, forward and back, with matching schema":
+    // the index list and the policy qual here are byte-identical to the pre-rollback assertions
+    // above.
+    //
+    // …but the deployment-scoped ROWS do not come back, which the down script deleted on purpose.
+    // For this table that is benign (the next reconcile re-opens the condition within a tick), and
+    // it is asserted rather than assumed for the same reason every other re-apply in this file
+    // asserts emptiness: "the rollback round-trips" must never be read as "the rows came back".
+    expect(await alertFiringsOrgIdNullable()).toBe(true);
+    expect(await alertFiringsPolicyAdmitsDeployment()).toBe(true);
+    expect(await alertFiringIndexes()).toEqual([
+      "alert_firings_by_org",
+      "alert_firings_by_org_status",
+      "alert_firings_open_global_key",
+      "alert_firings_open_key",
+      "alert_firings_pkey",
+    ]);
+    // The deployment-scoped rows the DOWN script deleted do not resurrect. The only `org_id IS
+    // NULL` row now present is the ONE the re-migrate's step 2 just promoted from the defect shape
+    // seeded above — which is the forward dedupe working, not a row surviving the rollback. Scoped
+    // to the seeded key so the two facts stay distinguishable; a bare `count = 0` would now be
+    // asserting the absence of something this test deliberately creates.
+    expect(
+      (
+        await pool.query(
+          `select count(*)::int as n from alert_firings
+             where org_id is null and alert_key <> 'catalog.update_requires_approval:*'`,
+        )
+      ).rows[0].n,
+    ).toBe(0);
     expect(await rawRecordIndexExists()).toBe(true);
     expect(await machineConnectorsTableExists()).toBe(true);
     expect(await machineConnectorPolicyShape()).toEqual([

@@ -21,9 +21,15 @@ export default async function alertRoutes(app: FastifyInstance): Promise<void> {
     if (!isUuid(request.params.id)) {
       return reply.code(404).send({ error: "alert firing not found" });
     }
-    const userId = principal.userId;
+    // M16 16.7 — `withOrg(..., principal.role, ...)` STAYS, unlike the reconcile and delivery paths
+    // which run as SERVICE_ROLE. The 15.4 test is "whose action is this?", and here the answer is
+    // genuinely "theirs": an ack is a user-initiated write, so the 0016 restrictive policy should
+    // and does reject a viewer's. An org context also SEES the deployment rows (`org_id IS NULL`
+    // satisfies the amended policy under any context), so a deployment firing is ackable from any
+    // org — one row, one ack, universally visible. `ackAlertFiring` no longer takes a user id:
+    // there is no `acked_by_user_id` column to stamp, and `user_id` is the OPENER's (provenance).
     const firing = await withOrg(app.db, principal.orgId, principal.role, (tx) =>
-      ackAlertFiring(tx, principal.orgId, userId, request.params.id, new Date()),
+      ackAlertFiring(tx, principal.orgId, request.params.id, new Date()),
     );
     if (!firing) return reply.code(404).send({ error: "alert firing not found" });
     return reply.code(200).send(firing);

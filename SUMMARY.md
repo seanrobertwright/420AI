@@ -284,8 +284,8 @@ through the deferral-audit + scope conversation that produced M12/M13/M14. Full 
   contaminate the <1% duplicate-rate metric) and D-16.0-1…3. Slices: **16.0** ✅ Truth + research
   scaffold · **16.1** ✅ Outcome label model + API · **16.2** ✅ Label capture (desktop) + review (dashboard) ·
   **16.3** ✅ Capture health scorecard · **16.4** ✅ Data-quality audit report · **16.5** ✅ Audit
-  raw-record index (fix) · **16.6** ✅ Capture-liveness detection (INC-2026-07, PR #80) · **16.7** ⬜
-  Deployment-scoped alert firings (split out of 16.6's triage — needs a migration). The §7 P1.6
+  raw-record index (fix) · **16.6** ✅ Capture-liveness detection (INC-2026-07, PR #80) · **16.7** ✅
+  Deployment-scoped alert firings (migration `0027`, PR #81). The §7 P1.6
   hero-workflow evidence panel is deliberately **not** a slice —
   the hero workflow is selected from evidence in research Phase 2 (weeks 5–8).
   **The 2026-08-05 pre-sign-off pass ran five of the six checklist boxes green** (evidence:
@@ -1117,34 +1117,68 @@ records` and `0 ÷ 4000` are opposite facts. An HTTP test asserts the literal st
     non-401 heartbeat error, and a pre-existing fault is announced at startup.
     Full detail in
     [`.agents/code-reviews/m16-slice6-capture-liveness-detection.md`](./.agents/code-reviews/m16-slice6-capture-liveness-detection.md).
-  - **16.7** ⬜ **PLANNED** — Deployment-scoped alert firings. Split out of 16.6's triage rather than
-    folded in, because it needs a **migration** and 16.6's acceptance criteria state "no migration,
-    no new table, no new alert code". Two findings, one underlying design issue — **global
-    conditions are stored as per-org, per-user rows**. (a) `catalog.update_requires_approval` and
-    `ingest.auth_failure` derive from tables with no `org_id`, so ONE pending catalog opens a firing
-    in EVERY org and sends one notice per org; and because `ensurePersonalOrg` gives every user their
-    own org, org count tracks USER count, so this is not dormant until a second tenant signs up —
-    inviting two teammates is enough. (b) `alert_firings_open_key` is unique on
-    `(user_id, alert_key)`, so a non-owner opening the monitor opens a SECOND row and a second
-    delivery for one condition; 16.6 makes that the default rather than an edge case, because the
-    tick now guarantees the owner's row always exists.
-    **Why it is a slice and not a fix**: the derive list is now shared between the tick and the
-    route (16.6's `alert-set.ts`), so gating the global codes on the tick side alone would make the
-    tick derive fewer codes than the dashboard and reintroduce exactly the flapping the sharing
-    prevents — any fix therefore changes the dashboard's alert semantics too. And re-keying the
-    index to `(org_id, alert_key)` **fails on any deployment already holding two users' open firings
-    for the same key**, so it needs a dedupe/merge data migration first, plus five repository
-    functions, three call sites in `routes/monitor.ts`, three in `alert-evaluator.ts`, the ack route,
-    and a rollback drill. Needs its own decision on whether global alerts get a deployment scope
-    (nullable `org_id` + a partial index) or stay org-scoped and deduplicate at delivery.
-    A third item joined it from 16.6's `prp-review`: **a persistently UNREACHABLE archive (non-401)
-    is entirely silent.** `consecutiveSyncFailures` is reported only via the heartbeat — the one
-    channel that cannot arrive when the archive is what is down — so a 500/ECONNREFUSED loop grows
-    the queue without bound, writes no fault, exits 0, and leaves WinSW seeing a healthy service.
-    That is INC-2026-07's observable symptom reached by a different cause, and the server-side
-    `archive.unreachable` alert cannot cover it because it derives from heartbeat rows that by
-    definition stop arriving. The cheap fix is a second `CaptureFault.code`, which 16.6's "no new
-    alert code" criterion excludes.
+  - **16.7** ✅ **DONE `2026-08-06`** (PR #81) — Deployment-scoped alert firings (migration `0027`).
+    Split out of 16.6's triage rather than folded in, because it needs a **migration** and 16.6's acceptance
+    criteria state "no migration, no new table, no new alert code". Two findings, one underlying
+    design issue — **global conditions were stored as per-org, per-user rows**.
+    (a) `catalog.update_requires_approval` and `ingest.auth_failure` derive from tables with no
+    `org_id`, so ONE pending catalog opened a firing in EVERY org and sent one notice per org; and
+    because `ensurePersonalOrg` gives every user their own org, org count tracks USER count, so this
+    was not dormant until a second tenant signed up — inviting two teammates was enough.
+    (b) `alert_firings_open_key` was unique on `(user_id, alert_key)`, so a non-owner opening the
+    monitor opened a SECOND row and a second delivery for one condition.
+    **The fix makes the number of ROWS correct and lets delivery follow for free**: 16.6 already
+    made delivery an atomic claim, so exactly one caller can win a row — collapse N rows to 1 and the
+    duplicate-notice problem disappears with no new dedupe machinery. Nine decisions:
+    **D-16.7-1 — the deployment scope is `org_id IS NULL`, and it needs TWO partial unique indexes,
+    not one.** `NULL <> NULL` under a unique index, so `(org_id, alert_key)` constrains _nothing_
+    when `org_id` is NULL — a single composite index would have "fixed" defect (a) by permitting
+    unlimited duplicates. Measured, not assumed. **D-16.7-2 — `user_id` stays NOT NULL and becomes
+    PROVENANCE**: the upsert preserves the OPENER's id, so it answers "who first saw this", the only
+    question it can now honestly answer. **D-16.7-3 — the two scopes are DISJOINT, which is what
+    makes this non-flapping.** The org reconcile filters `org_id = :orgId` (never matching a NULL
+    row) and the deployment reconcile filters `org_id IS NULL` (never matching an org row), so
+    neither can resolve the other's firings _however the two derive lists diverge_. That is strictly
+    stronger than 16.6's "one shared list", and it is why splitting the list is safe where merely
+    duplicating it was not — `alert-set.ts`'s thesis was rewritten rather than appended to, and
+    `alert-set.test.ts` asserts the disjointness as an executable claim. **D-16.7-4 —
+    `alert_firings` moves to a SIXTH RLS classification, and a substring check cannot police it.**
+    The amended qual's `IS NULL` tests the ROW's column ("this row belongs to the deployment ⇒
+    everyone sees it"); a BOOTSTRAP table's tests the SETTING ("no context ⇒ see everything"). Those
+    are opposite security properties and `toContain("IS NULL")` cannot tell them apart, so dropping
+    the table into `BOOTSTRAP_TABLES` would have made the whole file pass while asserting the
+    opposite of the truth — the repo's "a structural grep cannot decide semantics" lesson for the
+    third time. Hence `DEPLOYMENT_SCOPED_TABLES` with its own structural assertion **paired with a
+    behavioural one**: an unset-org app-role transaction reads ONLY global rows and is still refused
+    an org-scoped insert. **D-16.7-5 — FORCE stays ON** (unlike 15.10's `audit_events`, this table
+    has a real per-tenant read path). **D-16.7-6 — `AlertFiring` gains `scope`, load-bearing not
+    cosmetic**: `listAlertFirings` must union both scopes or the dashboard stops showing the two
+    global codes entirely, but feeding that union to `openFiringsDiverge` would report divergence
+    forever and silently defeat the 15.4 throttle — so callers partition on `scope`.
+    **D-16.7-7 — the deployment reconcile runs from BOTH the route and the tick**, because the
+    evaluator is opt-in and default-off (~30 `buildApp` int tests would otherwise never derive the
+    two codes); throttled through the same map under a reserved `"*:deployment"` sentinel.
+    **D-16.7-8 — `archive_unreachable` is DEGRADED, not FATAL**: `watchExitCode` returns 1 on
+    `result.fault` and WinSW restarts on non-zero, but restarting does not make an unreachable
+    archive reachable — it would thrash the collector precisely while its queue is the only thing
+    preserving the data. So it is a separate `onDegraded` callback: it writes the fault file, capture
+    keeps running, and the process still exits 0. **D-16.7-9 — written on a threshold CROSSING then
+    re-stamped sparsely** (every 60th failure ≈ once a minute), because `saveFault` is a
+    read-modify-write of a file and the retry delay is ~1 s.
+    **A defect the plan did not anticipate, found by a test that would not go green.**
+    `consecutiveSyncFailures` reset on EVERY `"ok"` outcome — including the empty-queue drain that
+    makes no request at all. Combined with the queue's exponential backoff (a failed item is
+    unclaimable for 1→2→…→30 s while `retryMs` stays at 1 s), the streak oscillated 1→0→1→0 and could
+    never reach `ARCHIVE_UNREACHABLE_MIN_FAILURES` = 3. **Both** consumers were therefore detectors
+    that could not fire: this slice's new fault record _and the pre-existing server-side
+    `archive.unreachable` alert_, which has been unfirable for a sustained outage since M12. The fix
+    is 16.6's own F1 lesson applied one layer up — reset only on `delivered > 0`, the same evidence
+    `clearFault` already required ("only bytes the archive accepted prove it is reachable").
+    **A gate-integrity finding**: `npm run typecheck` (`tsc -b`, incremental) reported CLEAN while
+    `routes/monitor.ts` referenced a deleted local — the error (TS18004) appeared only under
+    `tsc -b --force`. The stale `.tsbuildinfo` produced a false green on Level 1, and it was an
+    integration test, not the compiler, that caught the 500. Treat a clean incremental `tsc -b` as
+    untrustworthy after any run that reported errors.
 
 - [ ] **M17–M20 remain committed scope, unsequenced** (§3, PRD §25). Each still needs its own
       deferral-audit + scope conversation before it is executable. (**M20** is Cloud-hosted SaaS,

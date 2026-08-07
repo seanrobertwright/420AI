@@ -687,7 +687,7 @@ describe("serve custom connectors (M10-S2)", () => {
         ControlEvent,
         { type: "error" }
       >;
-      expect(err.message).toContain("capture fault is on record");
+      expect(err.message).toContain("capture fault (capture had stopped) is on record");
       expect(err.message).toContain("since 2026-08-06T12:00:00.000Z");
 
       await h.send({ cmd: "stop" }, (e) => e.type === "stopped");
@@ -749,7 +749,9 @@ describe("serve custom connectors (M10-S2)", () => {
       // …and the read half: the harness never announced the operator's fault as its own.
       expect(
         h.events.filter(
-          (e) => e.type === "error" && /capture fault is on record/.test(e.message ?? ""),
+          // A plain substring, NOT a regex — the announcement now contains parentheses, which a
+          // regex would read as a capture group and match nothing.
+          (e) => e.type === "error" && (e.message ?? "").includes("is on record"),
         ),
       ).toHaveLength(0);
 

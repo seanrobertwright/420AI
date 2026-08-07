@@ -9,20 +9,43 @@ import {
   type AlertCode,
   type LiveMonitorSnapshot,
 } from "@420ai/shared";
-import { deriveAlertSet, openFiringsDiverge } from "./alert-set.js";
+import {
+  deriveAlertSet,
+  deriveDeploymentAlertSet,
+  openFiringsDiverge,
+  reconcileThrottleKey,
+  DEPLOYMENT_THROTTLE_KEY,
+} from "./alert-set.js";
+import { alertKey } from "@420ai/shared";
 
 /**
- * M16 16.6 — the shared alert composition, tested WITHOUT a database.
+ * M16 16.6 / 16.7 — the shared alert composition, tested WITHOUT a database.
  *
- * `deriveAlertSet` exists specifically to make the flap invariant structural: the background tick
- * and `GET /v1/monitor` must derive the same codes, because `reconcileAlertFirings` resolves every
- * open firing absent from the derived set, so two lists that disagree make firings flap. Yet its
- * only coverage was the integration suite, behind a DOUBLE env gate
- * (`skipIf(!TEST_URL || !APP_URL)`) — i.e. the invariant that exists to be provable was provable
- * only when Postgres happened to be running. `skipped ≠ passed`, applied to the guard rather than
- * the feature.
+ * WHY THIS FILE EXISTS (16.6). The composition makes the flap invariant structural: the background
+ * tick and `GET /v1/monitor` must derive the same codes, because the reconcile resolves every open
+ * firing absent from the derived set, so two lists that disagree make firings flap. Yet its only
+ * coverage was the integration suite, behind a DOUBLE env gate (`skipIf(!TEST_URL || !APP_URL)`) —
+ * i.e. the invariant that exists to be provable was provable only when Postgres happened to be
+ * running. `skipped ≠ passed`, applied to the guard rather than the feature.
  *
- * This file is pure: no DB, no clock of its own, always runs in `npm test`.
+ * WHAT 16.7 CHANGED, AND WHY THIS FILE'S THESIS IS REWRITTEN RATHER THAN EXTENDED.
+ *
+ * The mechanism this file was written to defend — "there is ONE list, so the two callers cannot
+ * disagree" — IS NO LONGER THE MECHANISM. There are now two lists, because two of the nine codes
+ * belong to the deployment rather than to any tenant, and deriving those per-org opened one firing
+ * per org for one condition.
+ *
+ * The property that replaces it is DISJOINTNESS: the org reconcile filters `org_id = :orgId` and
+ * the deployment reconcile filters `org_id IS NULL`, so neither scope can resolve the other's
+ * firings HOWEVER the two lists diverge. That is strictly stronger than a shared list — it survives
+ * a caller getting the split wrong — but it is only true while the two derive functions stay
+ * disjoint in the codes they emit, and NOTHING in the type system says so. Adding
+ * `deriveCatalogAlerts` back into `deriveAlertSet` typechecks perfectly and silently restores the
+ * bug 16.7 exists to fix.
+ *
+ * So the disjointness is asserted here, as an executable claim rather than a comment (D-16.7-3),
+ * alongside the surviving per-scope COMPLETENESS tests. This file is pure: no DB, no clock of its
+ * own, always runs in `npm test`.
  */
 
 /** A machine row already carrying its derived `status`/`backlogHigh`, as both callers pass. */
@@ -57,17 +80,18 @@ function snapshot(over: Partial<LiveMonitorSnapshot> = {}): LiveMonitorSnapshot 
 
 const NO_INPUTS = {
   samplesByMachine: new Map(),
-  pendingCatalogs: 0,
-  authFailureCount: 0,
   windowedConnectors: [],
 };
 
-describe("deriveAlertSet — the shared nine-code composition", () => {
+/** The two codes that belong to the DEPLOYMENT, not to any tenant (16.7). */
+const DEPLOYMENT_CODES: AlertCode[] = ["catalog.update_requires_approval", "ingest.auth_failure"];
+
+describe("deriveAlertSet — the shared ORG-scoped composition", () => {
   it("derives NOTHING from a healthy snapshot with no signals", () => {
     expect(deriveAlertSet(snapshot({ machines: [machine()] }), NO_INPUTS)).toEqual([]);
   });
 
-  it("emits ALL NINE codes when every condition is present", () => {
+  it("emits ALL SEVEN org codes when every org condition is present", () => {
     // THE PARITY TEST, at the pure layer. If a future edit drops a derive call from the shared
     // composition, this fails in `npm test` with no infrastructure — before the DB-gated suite
     // (which may be skipped) ever gets a chance to notice.
@@ -116,29 +140,22 @@ describe("deriveAlertSet — the shared nine-code composition", () => {
         machines: [offline, stale, backlog, unreachable, growing],
         connectors: [failingConnector as never],
       }),
-      {
-        samplesByMachine: samples,
-        pendingCatalogs: 1,
-        authFailureCount: AUTH_FAILURE_ALERT.minFailures,
-        windowedConnectors: [windowedConnector as never],
-      },
+      { samplesByMachine: samples, windowedConnectors: [windowedConnector as never] },
     );
 
     const codes = new Set<AlertCode>(alerts.map((a) => a.code));
     expect([...codes].sort()).toEqual(
       [
         "archive.unreachable",
-        "catalog.update_requires_approval",
         "collector.offline",
         "collector.stale",
         "connector.failing",
         "connector.failure_rate",
-        "ingest.auth_failure",
         "sync.backlog_growing",
         "sync.backlog_high",
       ].sort(),
     );
-    expect(codes.size).toBe(9);
+    expect(codes.size).toBe(7);
   });
 
   it("reads snapshot.connectors — passing [] would silently DROP connector.failing", () => {
@@ -184,6 +201,114 @@ describe("deriveAlertSet — the shared nine-code composition", () => {
       NO_INPUTS,
     );
     expect(alerts[0]!.severity).toBe("critical");
+  });
+});
+
+/**
+ * M16 16.7 — D-16.7-3 AS AN EXECUTABLE CLAIM.
+ *
+ * These are the tests that would fail if someone "completed the pattern" by putting the catalog or
+ * auth-failure derivation back into `deriveAlertSet`. Nothing else would: both call sites
+ * typecheck, both suites stay green, and the only symptom would be one firing per org for one
+ * deployment-wide condition — the exact defect 16.7 shipped to remove, silently restored.
+ */
+describe("the two scopes are DISJOINT (D-16.7-3)", () => {
+  /** Every org input turned maximally "loud", so any leaked global code would show up. */
+  function loudOrgAlerts() {
+    return deriveAlertSet(
+      snapshot({
+        machines: [
+          machine({ id: "m-off", status: "offline" }),
+          machine({ id: "m-stale", status: "stale" }),
+          machine({ id: "m-back", backlogHigh: true, queuePending: 5000 }),
+          machine({
+            id: "m-unreach",
+            consecutiveSyncFailures: ARCHIVE_UNREACHABLE_MIN_FAILURES,
+          }),
+        ],
+        connectors: [
+          {
+            sourceConnector: "claude-code",
+            toolCalls: ALERT_THRESHOLDS.connectorFailMinCalls,
+            toolsFailed: ALERT_THRESHOLDS.connectorFailMinCalls,
+            lastEventAt: "2026-08-06T11:59:00.000Z",
+          } as never,
+        ],
+      }),
+      {
+        samplesByMachine: new Map(),
+        windowedConnectors: [
+          {
+            sourceConnector: "codex",
+            toolCalls: CONNECTOR_RATE_ALERT.minCalls,
+            toolsFailed: CONNECTOR_RATE_ALERT.minCalls,
+            lastEventAt: "2026-08-06T11:59:00.000Z",
+          } as never,
+        ],
+      },
+    );
+  }
+
+  it("deriveAlertSet returns NONE of the deployment codes, for any input", () => {
+    const codes = loudOrgAlerts().map((a) => a.code);
+    for (const global of DEPLOYMENT_CODES) {
+      expect(codes, `${global} leaked into the ORG scope`).not.toContain(global);
+    }
+  });
+
+  it("deriveDeploymentAlertSet returns ONLY the deployment codes", () => {
+    const alerts = deriveDeploymentAlertSet({
+      pendingCatalogs: 3,
+      authFailureCount: AUTH_FAILURE_ALERT.minFailures,
+    });
+    expect(alerts.map((a) => a.code).sort()).toEqual([...DEPLOYMENT_CODES].sort());
+  });
+
+  it("the two ALERT-KEY sets never intersect — which is what makes neither able to flap the other", () => {
+    // Compared by `alertKey`, not by code, because `alertKey` is what the reconcile's
+    // `notInArray` predicate actually compares. A shared code with different keys would be
+    // harmless; a shared KEY is what would make one scope resolve the other's row.
+    const orgKeys = new Set(loudOrgAlerts().map(alertKey));
+    const deploymentKeys = new Set(
+      deriveDeploymentAlertSet({
+        pendingCatalogs: 1,
+        authFailureCount: AUTH_FAILURE_ALERT.minFailures,
+      }).map(alertKey),
+    );
+    expect(orgKeys.size).toBeGreaterThan(0);
+    expect(deploymentKeys.size).toBe(2);
+    for (const key of deploymentKeys) {
+      expect(orgKeys.has(key), `key ${key} appears in BOTH scopes`).toBe(false);
+    }
+  });
+
+  it("deriveDeploymentAlertSet is silent below both thresholds", () => {
+    expect(deriveDeploymentAlertSet({ pendingCatalogs: 0, authFailureCount: 0 })).toEqual([]);
+    // The auth-failure derivation is a THRESHOLD, not a presence check — one failure is noise.
+    expect(
+      deriveDeploymentAlertSet({
+        pendingCatalogs: 0,
+        authFailureCount: AUTH_FAILURE_ALERT.minFailures - 1,
+      }),
+    ).toEqual([]);
+  });
+});
+
+describe("reconcile throttle keys (M16 16.7)", () => {
+  it("the deployment sentinel cannot collide with a real (org, user) key", () => {
+    // `reconcileThrottleKey` composes two uuids; `*` is not a uuid character. A collision would
+    // make one org's reconcile throttle suppress the deployment's, or vice versa.
+    const real = reconcileThrottleKey(
+      "11111111-1111-1111-1111-111111111111",
+      "22222222-2222-2222-2222-222222222222",
+    );
+    expect(real).not.toBe(DEPLOYMENT_THROTTLE_KEY);
+    expect(DEPLOYMENT_THROTTLE_KEY).toContain("*");
+  });
+
+  it("is stable and org+user-grained", () => {
+    expect(reconcileThrottleKey("o", "u")).toBe(reconcileThrottleKey("o", "u"));
+    expect(reconcileThrottleKey("o", "u1")).not.toBe(reconcileThrottleKey("o", "u2"));
   });
 });
 

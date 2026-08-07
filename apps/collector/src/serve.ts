@@ -11,7 +11,14 @@ import {
   connectorApprovalsPathFor,
   type Credentials,
 } from "./identity.js";
-import { faultPathFor, saveFault, loadFault, clearFault, type CaptureFault } from "./fault.js";
+import {
+  faultPathFor,
+  saveFault,
+  loadFault,
+  clearFault,
+  describeFault,
+  type FatalCaptureFault,
+} from "./fault.js";
 import { QueueStore, type QueueStats } from "./queue/queue-store.js";
 import type { Connector } from "./connectors/connector.js";
 import { loadRegistry } from "./connectors/registry.js";
@@ -170,7 +177,7 @@ export function runServe(deps: ServeDeps = {}): Promise<void> {
    * the engine's `onFatal` and consumed by the `.then()` branch below, which already knew the engine
    * had ended on its own and could only say "unexpectedly".
    */
-  let fault: CaptureFault | undefined;
+  let fault: FatalCaptureFault | undefined;
   let closed = false;
   // Per-instance teardown; assigned once the Promise executor has rl + the timer.
   let cleanupAndExit: (code: number) => void = () => {};
@@ -242,13 +249,12 @@ export function runServe(deps: ServeDeps = {}): Promise<void> {
      */
     const priorFault = loadFault(faultPathFor(home));
     if (priorFault) {
-      emit({
-        type: "error",
-        message:
-          `a capture fault is on record: ${priorFault.message} (since ${priorFault.since}` +
-          (priorFault.lastObservedAt ? `, last observed ${priorFault.lastObservedAt}` : "") +
-          `). It clears on the next sync that actually delivers.`,
-      });
+      // M16 16.7: NAME WHICH KIND. The two codes mean opposite things about whether capture kept
+      // running, and this line is the operator's only report of it. The sentence itself is shared
+      // with `cli.ts` via `describeFault` — it was duplicated byte-for-byte here, with a comment
+      // saying "mirroring cli.ts" and nothing failing if only one copy were edited. No path is
+      // passed: the desktop shows this in a UI, where a file path is noise.
+      emit({ type: "error", message: describeFault(priorFault) });
     }
     // Slice 2 + 12.7b: re-read enablement AND approvals at each (re)start and hand the
     // engine the FILTERED registry. The M3/M4 capture core is unchanged — this is the
@@ -302,6 +308,18 @@ export function runServe(deps: ServeDeps = {}): Promise<void> {
         } catch (err) {
           log("warn", `could not record capture fault: ${(err as Error).message}`);
         }
+      },
+      // M16 16.7: the DEGRADED record. Deliberately does NOT assign `fault` — that variable is the
+      // engine's STOP reason, consumed by the `.then()` branch below to explain why capture ended.
+      // An unreachable archive does not end capture, so annotating a later stop with it would
+      // misreport the cause. It writes the file and surfaces one event; capture keeps running.
+      onDegraded: (f) => {
+        try {
+          saveFault(f, faultPathFor(home));
+        } catch (err) {
+          log("warn", `could not record capture fault: ${(err as Error).message}`);
+        }
+        emit({ type: "error", message: f.message });
       },
     })
       .then(() => {

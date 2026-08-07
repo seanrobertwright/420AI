@@ -129,6 +129,14 @@ Before any commit, `npm run repo-health` must pass. It is the enforced gate and 
 
 1. **Root `tsc -b`** (`npm run typecheck`) — must exit 0. Per-workspace `build` is NOT a substitute;
    it misses cross-project/test-only imports (this is how a broken typecheck shipped through M2).
+   **A clean INCREMENTAL `tsc -b` can be a false green** (M16): `tsc -b` trusts `.tsbuildinfo`, so
+   after a run that reported errors it can skip a project whose inputs it believes unchanged and
+   exit 0 over genuinely broken source — `routes/monitor.ts` referenced a deleted local (TS18004)
+   through a passing `npm run typecheck`, and an integration test, not the compiler, caught the 500.
+   Treat a clean incremental build as untrustworthy immediately after any failing run and re-run
+   with `tsc -b --force`. This is the third member of the "`tsc` is a FILE-level checklist, not a
+   CALL-SITE one" family (15.2's deleted-import, 15.2's arity change), and it undermines this gate
+   item directly rather than merely narrowing it.
 2. **Full `vitest run`** — units always; integration self-skips without `DATABASE_URL_TEST`.
 3. **NUL-byte scan** of tracked text sources — a source file written with embedded NULs passes
    typecheck + tests (the compiler tolerates NULs in comments) yet is corrupt; this catches it.
@@ -298,6 +306,19 @@ than from memory.
 - A `GROUP BY <col>` over the full event stream collapses rows with a NULL `<col>` into a phantom group;
   restrict the WHERE to the relevant `event_type`s when a null-keyed all-zero row would be noise (e.g.
   `usageByModel` filters to `usage.reported`/`cost.estimated`).
+- **A partial unique index over a NULLABLE column constrains NOTHING for the NULL rows** (M16 16.7).
+  `NULL <> NULL` under a unique index, so `unique (org_id, alert_key)` places no constraint at all on
+  rows whose `org_id` is NULL — measured against real Postgres, not assumed: a second NULL-org row
+  for the same key inserted cleanly. This is worst precisely when NULL is meaningful (16.7 uses
+  `org_id IS NULL` for "belongs to the deployment, not a tenant"), because the index then looks like
+  it covers the case it is silently ignoring: a single composite index would have "fixed" a
+  one-row-per-org fan-out by permitting **unlimited** duplicates instead. Use **two** partial indexes
+  that PARTITION rather than overlap — the org one carrying an explicit `AND org_id IS NOT NULL`.
+  Corollary, also measured: **crossing the two arbiters in `ON CONFLICT` is LOUD.** Postgres
+  suppresses conflicts only on the INFERRED arbiter index, so using the org arbiter against a global
+  row raises `duplicate key value violates unique constraint "…_global_key"` rather than silently
+  inserting a duplicate. That makes the split DB-enforced — but only while the two upserts remain two
+  separate statements, so never merge them into one "clever" one with a computed target.
 - **An aggregate over a tenancy/ownership column is a SMELL** (M15 15.1). `min(org_id)` in a query
   whose `GROUP BY` does not include `org_id` collapses two tenants into one row and silently picks a
   winner. In 15.1 this shipped into `indexSessions` — grouping by `session_id` alone (a

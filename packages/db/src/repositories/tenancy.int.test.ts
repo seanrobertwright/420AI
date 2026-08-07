@@ -86,7 +86,6 @@ const TENANT_TABLES = [
   "git_commit_files",
   "session_git_links",
   "machine_heartbeats",
-  "alert_firings",
   "search_documents",
   // M15 15.4 — per-project capability grants. Carries `org_id` (not merely reachable via
   // `project_id`) so it is coverable by the same one-column policy as every other tenant table.
@@ -118,6 +117,27 @@ const TENANT_TABLES = [
   // the collector — a machine cannot nominate whose data it is.
   "machine_connectors",
 ] as const;
+
+/**
+ * M16 16.7 — tenant tables whose `org_id` is deliberately NULLABLE, because NULL MEANS SOMETHING.
+ *
+ * `alert_firings` left `TENANT_TABLES` for this list, and the distinction is exactly the narrow
+ * structural question this file asks. It still HAS an `org_id` and still has the FK to
+ * `organizations` — so it is not a `GLOBAL_TABLE` either — but a NULL there is not "we forgot to
+ * stamp the owner". It is a positive statement: this firing belongs to the DEPLOYMENT rather than
+ * to any tenant, which is what the two alert codes deriving from `pricing_catalogs` and
+ * `ingest_auth_failures` need (neither of those tables has an `org_id` to inherit).
+ *
+ * Its own list rather than a `TENANT_TABLES` entry with a NOT NULL exemption, because the
+ * exemption is the part worth asserting: the FK must still be there (a non-null `org_id` must
+ * still name a real organization) and the nullability must be DELIBERATE and asserted, so that a
+ * future migration cannot quietly `SET NOT NULL` it — which would delete the deployment scope and
+ * take both global alert codes with it.
+ *
+ * Nothing else moves. `rls.int.test.ts` classifies it by POLICY SHAPE, where it is likewise its own
+ * sixth classification (`DEPLOYMENT_SCOPED_TABLES`, D-16.7-4); the two files agree.
+ */
+const DEPLOYMENT_SCOPED_TABLES = ["alert_firings"] as const;
 
 /** Tables that must NOT gain org_id — identities and deployment-global data (D-M15-9). */
 const GLOBAL_TABLES = [
@@ -371,11 +391,25 @@ describe.skipIf(!TEST_URL)("M15 tenancy invariants (integration)", () => {
       `)
     ).rows as { table_name: string; is_nullable: string }[];
     // `memberships.org_id` is expected too — it is the join table, not a tenant table.
-    const tenantCols = cols.filter((c) => c.table_name !== "memberships");
+    const tenantCols = cols.filter(
+      (c) =>
+        c.table_name !== "memberships" &&
+        !(DEPLOYMENT_SCOPED_TABLES as readonly string[]).includes(c.table_name),
+    );
     expect(tenantCols.map((c) => c.table_name).sort()).toEqual([...TENANT_TABLES].sort());
     expect(tenantCols.every((c) => c.is_nullable === "NO")).toBe(true);
     for (const t of GLOBAL_TABLES) {
       expect(cols.map((c) => c.table_name)).not.toContain(t);
+    }
+
+    // M16 16.7 — the deployment-scoped tables: they HAVE an `org_id`, it IS nullable, and that is
+    // asserted rather than merely exempted. A future migration that "tidied" this to NOT NULL would
+    // delete the deployment scope and silently take both global alert codes with it, so the
+    // nullability is pinned as a positive claim.
+    for (const t of DEPLOYMENT_SCOPED_TABLES) {
+      const col = cols.find((c) => c.table_name === t);
+      expect(col, `${t} must still carry an org_id`).toBeDefined();
+      expect(col!.is_nullable, `${t}.org_id must be NULLABLE (NULL = the deployment)`).toBe("YES");
     }
 
     const fks = (
@@ -389,7 +423,9 @@ describe.skipIf(!TEST_URL)("M15 tenancy invariants (integration)", () => {
           AND ccu.table_name = 'organizations'
       `)
     ).rows as { table_name: string }[];
-    for (const t of TENANT_TABLES) {
+    // The FK loop covers the deployment-scoped tables TOO: a nullable `org_id` must still name a
+    // real organization when it is not null. Nullability relaxes the NOT NULL, never the FK.
+    for (const t of [...TENANT_TABLES, ...DEPLOYMENT_SCOPED_TABLES]) {
       expect(fks.map((f) => f.table_name)).toContain(t);
     }
   });
