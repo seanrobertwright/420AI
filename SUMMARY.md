@@ -334,8 +334,12 @@ through the deferral-audit + scope conversation that produced M12/M13/M14. Full 
   that it has.
 - **M17 — Cross-platform collectors** is **IN PROGRESS** (promoted 2026-08-07;
   [`.agents/plans/m17-cross-platform-collectors.md`](./.agents/plans/m17-cross-platform-collectors.md)).
-  macOS + Linux (V1/M11 are Windows-first) + portable installers/auto-update. Slices: **17.0** Truth
-  — CI matrix + spike protocol · **17.1** Connector portability · **17.2** SPIKE — truth on real
+  macOS + Linux (V1/M11 are Windows-first) + portable installers/auto-update. Slices: ✅ **17.0**
+  Truth — CI matrix + spike protocol — DONE 2026-08-07 (PR #82): five-lane matrix green
+  (typecheck + 1034 unit tests + `cargo check` on linux x64/arm64, macOS intel/arm64, windows; the
+  680-skipped DB layer runs only on `repo-health.yml`/ubuntu — skipped ≠ passed), first finding
+  already banked (gitignored icons made the Tauri crate unbuildable off the authoring machine) ·
+  **17.1** Connector portability · **17.2** SPIKE — truth on real
   hardware · **17.3** Multi-target SEA build · **17.4** Service install (launchd + systemd) ·
   **17.5** Desktop shell portability · **17.6** Installers + updater feed + release lane ·
   **17.7** Cross-platform UAT + sign-off. Decisions **D-M17-1…6** are settled in the plan.
@@ -1246,6 +1250,9 @@ records` and `0 ÷ 4000` are opposite facts. An HTTP test asserts the literal st
       fixed none, and its headline finding would have been invisible had the spike repaired as it
       went). 17.0 and 17.1 are deliberately **hardware-free and sequenced first**, because the Mac
       and Linux boxes do not exist yet and the milestone must not idle on a setup task.
+      ✅ **17.0** DONE 2026-08-07 (PR #82) — `cross-platform.yml` five-lane matrix (linux
+      x64/arm64, macOS intel/arm64, windows) all green on typecheck + unit suite + `cargo check`;
+      17.2's measurement protocol written (`.agents/research/m17-slice2-spike-protocol.md`).
 - [ ] **M18–M20 remain committed scope, unsequenced** (§3, PRD §25). Each still needs its own
       deferral-audit + scope conversation before it is executable. (**M20** is Cloud-hosted SaaS,
       renumbered from M16 on 2026-08-02 by slice 16.0 — same scope, new number.)

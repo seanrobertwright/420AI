@@ -61,7 +61,7 @@ Ranked, from the reconnaissance sweep:
 | 6   | Updater feed carries only `windows-x86_64`                 | `docs/guide/operations.md:360-368`, `tauri.conf.json:42-45`  | An installed macOS/Linux build's `check()` finds no platform entry → auto-update silently never fires                 |
 | 7   | The entire service install is WinSW                        | `apps/collector/service/420ai-collector.xml`, `service/README.md` | No launchd/systemd equivalent exists; roll-by-size logging has **no** launchd counterpart                        |
 | 8   | No macOS notarization story exists repo-wide               | absent; policy at `docs/PRD.md:812-813`                      | "Parked" is survivable on Windows (SmartScreen warns once) but Gatekeeper **hard-blocks** an unnotarized download      |
-| 9   | CI has never executed on macOS or Windows                  | `pr-checks.yml:13`, `repo-health.yml:27`                     | No matrix; `.cargo/config.toml:14` confirms "CI (Linux) never builds this crate" — zero regression signal             |
+| 9   | ~~CI has never executed on macOS or Windows~~ **RETIRED by 17.0** | `.github/workflows/cross-platform.yml`                | Five-lane matrix now runs typecheck + vitest + `cargo check` on every PR — see "Measured by 17.0" below               |
 | 10  | Case-sensitive FS + un-normalized dedup keys               | `watcher/file-watcher.ts:71`                                 | ext4 is case-sensitive where Windows/APFS-default are not; no `toLowerCase()` normalization exists _(impact inferred)_ |
 
 **Second-order effect worth naming**, because it will look like a bug report from users:
@@ -70,6 +70,34 @@ fingerprint. Because `sources()` ignores `home` but reads `process.env.APPDATA` 
 fingerprint is **environment-dependent rather than argument-dependent** — so every macOS/Linux
 install trips the §10.4 capture-surface-change gate and marks Cursor `needs-approval` for no real
 reason. Fixing #1 and #2 fixes this; not fixing it makes it a support burden.
+
+### Measured by 17.0 (run 31178775260, PR #82, 2026-08-07) — measurement, not inference
+
+Five standard GitHub-hosted lanes, every push/PR to `main`. All cells below are read from the run:
+
+| Lane                          | typecheck (`tsc -b --force`) | `npx vitest run`             | `cargo check --locked` |
+| ----------------------------- | ---------------------------- | ---------------------------- | ---------------------- |
+| `ubuntu-latest` (linux-x64)   | ✅ 10 s                      | ✅ 1034 passed \| 680 skipped | ✅ 81 s                |
+| `ubuntu-24.04-arm`            | ✅ 10 s                      | ✅ 1034 passed \| 680 skipped | ✅ 76 s                |
+| `macos-15-intel`              | ✅ 16 s                      | ✅ 1034 passed \| 680 skipped | ✅ 209 s               |
+| `macos-latest` (arm64)        | ✅ 13 s                      | ✅ 1034 passed \| 680 skipped | ✅ 120 s               |
+| `windows-latest`              | ✅ 12 s                      | ✅ 1034 passed \| 680 skipped | ✅ 177 s               |
+
+**The 680 skipped are the Postgres-gated `*.int.test.ts` layer (61 files) — `skipped ≠ passed`.**
+These lanes have no DB; that layer is proven only by `repo-health.yml` on `ubuntu-latest`. Any
+reading of this table as "all platforms fully green" is a misreading.
+
+Two findings from the first (all-red) run, both worth more than the green table:
+
+1. **`apps/desktop/.gitignore` ignored `src-tauri/icons/` wholesale**, so every checkout but the
+   authoring machine was missing files `tauri_build` hard-requires — all five lanes failed
+   `cargo check` identically (Windows in the winres step on `icon.ico`; Linux/macOS in
+   `tauri::generate_context!` on `32x32.png`). Fixed in 17.0 (the five `tauri.conf.json` icons are
+   now tracked): this was CI-infrastructure, not product code, and with it broken the matrix could
+   measure nothing platform-specific.
+2. **The anticipated `keyring` red cell did NOT materialize** — `keyring v3.6.3` compiles clean on
+   all five lanes. Row 3 above is therefore a **runtime** concern only (the off-Windows mock
+   backend persists nothing); 17.5 still owns it, but no compile barrier exists.
 
 ---
 
