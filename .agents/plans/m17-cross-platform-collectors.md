@@ -77,7 +77,7 @@ reason. Fixing #1 and #2 fixes this; not fixing it makes it a support burden.
 
 | #        | Slice                                    | Size | Confidence | Content                                                                                                                                                                                                                                                                                                              |
 | -------- | ---------------------------------------- | ---- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **17.0** | Truth: CI matrix + spike protocol        | M    | 90%        | Expand both workflows to `{ubuntu-latest, macos-13 (Intel), macos-latest (ARM), windows-latest}`; build the Rust/Tauri crate in CI for the first time. Write 17.2's measurement protocol so it runs the day hardware lands. Output is a **table of what is green where**, replacing every inference above with a measurement. **No product code change.** |
+| **17.0** | Truth: CI matrix + spike protocol        | M    | 90%        | Add a `cross-platform.yml` matrix over `{ubuntu-latest, ubuntu-24.04-arm, macos-15-intel, macos-latest (ARM), windows-latest}`; build the Rust/Tauri crate in CI for the first time. Write 17.2's measurement protocol so it runs the day hardware lands. Output is a **table of what is green where**, replacing every inference above with a measurement. **No product code change.** See `.agents/plans/m17-slice0-cross-platform-ci-matrix.md`. |
 | **17.1** | Connector portability                    | S–M  | 90%        | Fix #1 (`APPDATA`) and #2 (INC-2026-01) plus the approval-fingerprint knock-on. Audit every `watchGlobs(home)`/`sources(home)` implementation against the `connector.ts` contract. Windows-verifiable today; no hardware needed.                                                                                        |
 | **17.2** | **SPIKE** — truth on real hardware       | M    | _n/a_      | Clean-room runs on Intel Mac, Linux x86_64 and Linux arm64, mirroring 16.0's timed deploy. **Measures; fixes nothing** (D-M17-5). Re-scores 17.3–17.6 before any of them is planned.                                                                                                                                   |
 | **17.3** | Multi-target SEA build                   | M    | 65% →      | Un-pin `build-sea.mjs`'s triple. SEA copies `process.execPath`, so it is **build-on-target, not cross-compilable** — this slice depends structurally on 17.0's matrix existing.                                                                                                                                        |
@@ -189,9 +189,19 @@ approval-fingerprint knock-on; nothing else is fixed before the spike.
 4. **The maintainer builds and verifies alone**, on hardware chosen to be convenient. Same shape as
    M16 Risk 2. Mitigation: CI runs the matrix on hardware nobody chose, and 17.7's UAT lanes are
    written per-platform so a skipped lane is visible as a skipped lane.
-5. **`macos-13` (Intel) runner deprecation.** GitHub retires older macOS images on a rolling
-   schedule; an Intel lane can disappear mid-milestone. Mitigation: 17.0 pins image labels
-   explicitly and 17.7 re-checks them at sign-off.
+5. **macOS runner-image churn.** GitHub retires macOS images on a rolling schedule, and this already
+   bit the plan once: `macos-13` was named here at promotion time and **no longer exists** — verified
+   2026-08-07 against `actions/runner-images`, which now lists Intel as `macos-15-intel` /
+   `macos-26-intel` and marks the macOS 14 images deprecated. Mitigation: 17.0 pins labels
+   explicitly, and 17.7 re-verifies every label against `actions/runner-images` at sign-off rather
+   than trusting this document.
+
+**Correction folded in from 17.0 planning (2026-08-07), because it strengthens D-M17-3:**
+`ubuntu-24.04-arm` is a **standard** GitHub-hosted runner, and standard runners are free and
+unlimited on public repositories — so `linux-arm64` gets **native, free CI** rather than the
+cross-compile-and-hope treatment this plan assumed. The Intel macOS labels (`macos-15-intel`) are
+standard too, so D-M17-4's "free ARM Mac runners" premise holds for the Intel half as well. Only the
+`-large` / `-xlarge` variants are the paid larger-runner tier; **no lane may use them.**
 
 ---
 
