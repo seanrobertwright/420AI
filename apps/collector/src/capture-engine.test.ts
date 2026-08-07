@@ -638,11 +638,20 @@ describe("runCaptureEngine onDegraded (M16 16.7 — an unreachable archive)", ()
 
   it(
     "keeps the engine RUNNING past the threshold, and re-stamps sparsely",
-    { timeout: 20_000 },
+    { timeout: 40_000 },
     async () => {
       // Stop on the WALL CLOCK rather than on a report count, so the engine's own liveness is what
       // ends the test.
-      const { seen, failures } = await runUntilDegraded(999, { timeoutMs: 6_000 });
+      //
+      // THE BOUND IS DICTATED BY THE QUEUE'S BACKOFF, NOT BY TASTE — it was 6 s and went red on CI
+      // while passing locally, which is the signature of a bound with no margin rather than a bug.
+      // `markFailed` backs an item off `1000 * 2^attempts` ms, so consecutive failed drains land at
+      // t ≈ 0, 1 s, 3 s, 7 s, 15 s (the loop's own `retryMs` is irrelevant — in between, the claim
+      // finds nothing due and returns "ok"). The two assertions below need the 3rd failure
+      // (`ARCHIVE_UNREACHABLE_MIN_FAILURES`, t ≈ 3 s) AND a 4th (`failures > 3`, t ≈ 7 s), so 6 s
+      // left under a second of slack for engine boot, sqlite open and watcher start on a cold
+      // runner. 20 s clears the 4th failure by 13 s and still ends well inside the test timeout.
+      const { seen, failures } = await runUntilDegraded(999, { timeoutMs: 20_000 });
       // It reported, so the threshold was crossed…
       expect(seen.length).toBeGreaterThanOrEqual(1);
       // …and the engine was STILL RUNNING when the external abort arrived, which is the whole

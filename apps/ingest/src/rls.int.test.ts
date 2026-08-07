@@ -463,8 +463,22 @@ describe.skipIf(!TEST_URL || !APP_URL)("M15 15.3 RLS through the HTTP surface", 
         sql`select org_id as "orgId" from alert_firings where delivery_attempted_at is not null`,
       );
       expect(stamped.rows.length).toBe(delivered.length);
-      // …and only org A's firings were touched, never org B's.
-      expect(stamped.rows.every((r) => r.orgId === orgA)).toBe(true);
+      // …and no OTHER TENANT's firings were touched.
+      //
+      // M16 16.7 WIDENED WHAT "no other tenant" MEANS, and this assertion had to widen with it.
+      // The delivery pass now covers TWO scopes, so a stamped row is either org A's or the
+      // DEPLOYMENT's (`org_id IS NULL`) — a single row shared by the whole installation, which
+      // every org can see by design. `every(r => r.orgId === orgA)` therefore became wrong the
+      // moment a deployment condition was derivable.
+      //
+      // IT FAILED ONLY ON CI, AND THAT IS THE INTERESTING PART. Whether a deployment firing exists
+      // depends on `pricing_catalogs` / `ingest_auth_failures` — deployment-global tables with no
+      // `org_id`, which OTHER tests in the same run write to. So this assertion's truth depended on
+      // database state left by unrelated files: green against a local DB, red against CI's fresh
+      // one. The org-B half is the part that was ever really being asserted, so it is now stated
+      // directly rather than implied by an equality that also happened to exclude the deployment.
+      expect(stamped.rows.every((r) => r.orgId === orgA || r.orgId === null)).toBe(true);
+      expect(stamped.rows.some((r) => r.orgId === orgB)).toBe(false);
     } finally {
       await deliveryApp.close();
     }
