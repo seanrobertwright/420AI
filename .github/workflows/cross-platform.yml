@@ -33,6 +33,9 @@ jobs:
   matrix:
     name: ${{ matrix.label }}
     runs-on: ${{ matrix.os }}
+    # Longest measured lane is ~9 min cold (macos-x64); the GitHub default is 360,
+    # which would let a wedged cargo network fetch idle a lane for 6 hours.
+    timeout-minutes: 45
     strategy:
       # Load-bearing, not stylistic: the deliverable is the FULL table of what
       # is green where. With the default fail-fast, one red lane cancels the
