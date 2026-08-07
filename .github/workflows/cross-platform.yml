@@ -1,0 +1,90 @@
+name: cross-platform
+
+# M17 17.0 — the measurement instrument for cross-platform claims. Before this
+# workflow, the suite had NEVER run on macOS or on Windows-in-CI, and the
+# Rust/Tauri crate had never been built on ANY platform in CI: every
+# cross-platform claim was an inference. Each lane runs the repo-root typecheck,
+# the vitest suite (the Postgres-gated *.int.test.ts layer self-skips — the DB
+# layer is proven ONLY by repo-health.yml on ubuntu-latest; skipped ≠ passed),
+# and a `cargo check` of the Tauri crate against a 0-byte stub sidecar (the real
+# per-platform sidecar is slice 17.3).
+#
+# Deliberately a NEW workflow rather than an edit to pr-checks/repo-health:
+# those are working gates (repo-health is the required check for main), and a
+# Postgres `services:` container is Linux-runner-only, so the DB layer
+# structurally cannot join this matrix.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# Cancel superseded runs on the same ref to save CI minutes.
+concurrency:
+  group: cross-platform-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least privilege: checkout + compile + test only — never writes to the repo.
+permissions:
+  contents: read
+
+jobs:
+  matrix:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Load-bearing, not stylistic: the deliverable is the FULL table of what
+      # is green where. With the default fail-fast, one red lane cancels the
+      # other four and we learn one fact instead of five.
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, label: linux-x64 }
+          - { os: ubuntu-24.04-arm, label: linux-arm64 }
+          - { os: macos-15-intel, label: macos-x64 }
+          - { os: macos-latest, label: macos-arm64 }
+          - { os: windows-latest, label: windows-x64 }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      # --force is deliberate: an incremental `tsc -b` trusts .tsbuildinfo and
+      # can exit 0 over broken source (M16 finding, CLAUDE.md). A fresh checkout
+      # has no .tsbuildinfo so this is a no-op today — it is here so that if
+      # caching is ever added, the lane cannot silently become a false green.
+      - name: Typecheck (root, forced)
+        run: npm run typecheck -- --force
+
+      - name: Test (unit layer; DB layer self-skips off-Linux by design)
+        run: npx vitest run
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+
+      # Ubuntu 24.04 ships webkit2gtk-4.1 (not 4.0) — list from the Tauri v2
+      # prerequisites page, verified 2026-08-07.
+      - name: Install Tauri Linux system dependencies
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+      # tauri_build::build() checks externalBin EXISTENCE in the build script,
+      # so even `cargo check` fails without a sidecar file (17.0 spike S3/S3b).
+      - name: Write stub sidecar (real one is slice 17.3)
+        run: node scripts/sidecar-stub.mjs
+
+      - name: cargo check (Tauri crate)
+        working-directory: apps/desktop/src-tauri
+        run: cargo check --locked
