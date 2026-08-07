@@ -104,7 +104,12 @@ for a 24-week research period**. It built only what makes that period's evidence
 [`.agents/supplemental docs/research-analysis-plan.md`](./.agents/supplemental%20docs/research-analysis-plan.md)
 §7 — sliced **16.0–16.7**. See
 [`.agents/plans/m16-dogfood-instrumentation.md`](./.agents/plans/m16-dogfood-instrumentation.md).
-**No milestone is currently ACTIVE; M17–M20 remain committed and unsequenced.**
+**M17 (Cross-platform collectors)** is the **ACTIVE** milestone — promoted 2026-08-07 by the
+deferral audit + scope conversation, on the same criterion and the first answer that is not someone
+the maintainer can watch over the shoulder: **anyone running this on hardware he does not own**.
+That makes **verification, not implementation**, the binding constraint. Sliced **17.0–17.7**. See
+[`.agents/plans/m17-cross-platform-collectors.md`](./.agents/plans/m17-cross-platform-collectors.md).
+**M18–M20 remain committed and unsequenced.**
 
 > **Renumbered 2026-08-02 (slice 16.0).** **Cloud-hosted SaaS was `M16`; it is now `M20`**, back in
 > the unsequenced bucket with its scope unchanged (and still inheriting D-15.10-1's multi-org
@@ -327,8 +332,38 @@ through the deferral-audit + scope conversation that produced M12/M13/M14. Full 
   moved, not dropped. The honest reading of M16 is therefore: **the instrumentation is built and
   verified; it has not yet been run for four weeks.** Do not later re-read this line as a claim
   that it has.
-- **M17 — Cross-platform collectors.** macOS + Linux (V1/M11 are Windows-first) + portable signed
-  installers/auto-update. _Most parallelizable — best candidate to run alongside another milestone._
+- **M17 — Cross-platform collectors** is **IN PROGRESS** (promoted 2026-08-07;
+  [`.agents/plans/m17-cross-platform-collectors.md`](./.agents/plans/m17-cross-platform-collectors.md)).
+  macOS + Linux (V1/M11 are Windows-first) + portable installers/auto-update. Slices: **17.0** Truth
+  — CI matrix + spike protocol · **17.1** Connector portability · **17.2** SPIKE — truth on real
+  hardware · **17.3** Multi-target SEA build · **17.4** Service install (launchd + systemd) ·
+  **17.5** Desktop shell portability · **17.6** Installers + updater feed + release lane ·
+  **17.7** Cross-platform UAT + sign-off. Decisions **D-M17-1…6** are settled in the plan.
+  **Planned off a reconnaissance sweep, which changed the milestone's shape.** The collector's TS
+  core is **already portable** and must not be re-litigated: the watcher **polls** rather than using
+  `fs.watch` (`watcher/file-watcher.ts:9-12`, a Windows-motivated decision that happens to make every
+  classic cross-platform watcher hazard — inotify limits, Linux recursive-watch, FSEvents coalescing
+  — a non-event), `node:sqlite` is the only storage engine with **zero** native deps
+  (`apps/collector/package.json:9-11` declares exactly one runtime dependency), redaction already
+  matches `/home/` and `/Users/` (`redaction.ts:146`), and the **full suite has been passing on
+  `ubuntu-latest` all along** — Linux is an unadvertised target more than a new one. Breakage is
+  **concentrated in three clusters**, not spread thin: the Cursor connector (`cursor-store.ts:56`
+  reads `APPDATA`, so `join("")` yields a **relative** path off-Windows; plus INC-2026-01 still live
+  at `cursor.ts:331`, where `sources: () =>` discards the `home` its contract passes — which also
+  makes the §10.4 capture-surface fingerprint environment-dependent rather than argument-dependent),
+  the Rust `keyring` compiled `windows-native`-only (`src-tauri/Cargo.toml:31` — off-Windows a mock
+  that **persists nothing**, invisible until the second launch), and the whole
+  packaging/service/distribution layer (one hardcoded SEA triple, `targets: ["nsis"]`, WinSW-only
+  service, an updater feed with a single `windows-x86_64` key, and **CI that is 100% `ubuntu-latest`
+  with no matrix that has never once built the Rust crate**). **D-M17-2 keeps code signing PARKED**
+  (12.8 unchanged) and records the tension rather than resolving it: unsigned is survivable on
+  Windows only because Tauri's minisign updater key is decoupled from any CA cert
+  (`updater.ts:12`), and that decoupling **does not hold on macOS**, where Gatekeeper hard-blocks an
+  unnotarized download — so 17.2 **measures** what actually happens before 17.6 is planned.
+  **D-M17-4** ships Apple Silicon as a universal binary verified **only** by free public-repo
+  `macos-latest` runners, labelled "CI-verified, not hardware-verified" everywhere it is offered —
+  naming the gap is what keeps it from being another skipped layer reporting green.
+  _Most parallelizable — best candidate to run alongside another milestone._
 - **M18 — Advanced intelligence & automation.** Semantic/vector search, scheduled _analysis_,
   in-tool context-rule enforcement, trend/anomaly detection, subscription cost amortization.
   _Deepens data already captured; benefits from M14's larger corpus._
@@ -855,8 +890,9 @@ enforced`, the sibling of `skipped ≠ passed`. Closes the Spike-6 hole: a cross
 - [x] **M16 Dogfood instrumentation & data trust — DONE `2026-08-07`** (all eight slices, 16.0–16.7;
       16.7 was the last). Closed with the _four consecutive weekly scorecards_ box deliberately
       unticked — see **D-M16-2** in §0: it is a measurement criterion gated by the calendar, and the
-      measurement/testing strategy is sequenced after all milestones ship. **NEXT: no milestone is
-      ACTIVE; M17–M20 remain committed and unsequenced**, each still needing its own deferral-audit +
+      measurement/testing strategy is sequenced after all milestones ship. **NEXT: M17
+      (cross-platform collectors) is ACTIVE; M18–M20 remain committed and unsequenced**, each still
+      needing its own deferral-audit +
       scope conversation before it is executable. (Promoted + redefined 2026-08-02 by
       the deferral-audit + scope conversation that produced M12/M13/M14/M15, on the same criterion —
       _who the next milestone is for_ — with a different answer: **Sean alone, for a 24-week research
@@ -1197,7 +1233,20 @@ records` and `0 ÷ 4000` are opposite facts. An HTTP test asserts the literal st
     integration test, not the compiler, that caught the 500. Treat a clean incremental `tsc -b` as
     untrustworthy after any run that reported errors.
 
-- [ ] **M17–M20 remain committed scope, unsequenced** (§3, PRD §25). Each still needs its own
+- [ ] **M17 Cross-platform collectors — IN PROGRESS** (promoted 2026-08-07 by the deferral-audit +
+      scope conversation, on the same criterion — _who the next milestone is for_ — with the first
+      answer that is not someone the maintainer can watch over the shoulder: **anyone running this on
+      hardware he does not own**, which makes **verification, not implementation**, the binding
+      constraint). Eight slices **17.0–17.7**; decisions **D-M17-1…6** are settled in
+      [`.agents/plans/m17-cross-platform-collectors.md`](./.agents/plans/m17-cross-platform-collectors.md).
+      Targets are `darwin-x86_64` (Intel Mac), `linux-x86_64` and `linux-arm64`, **all
+      hardware-verified**, plus a universal macOS bundle whose ARM half is CI-verified only and
+      labelled as such (D-M17-4). **17.2 is a SPIKE that measures and does not fix** (D-M17-5,
+      inherited from D-16.0-2, which earned it — 16.0's clean-room deploy raised five incidents,
+      fixed none, and its headline finding would have been invisible had the spike repaired as it
+      went). 17.0 and 17.1 are deliberately **hardware-free and sequenced first**, because the Mac
+      and Linux boxes do not exist yet and the milestone must not idle on a setup task.
+- [ ] **M18–M20 remain committed scope, unsequenced** (§3, PRD §25). Each still needs its own
       deferral-audit + scope conversation before it is executable. (**M20** is Cloud-hosted SaaS,
       renumbered from M16 on 2026-08-02 by slice 16.0 — same scope, new number.)
 
